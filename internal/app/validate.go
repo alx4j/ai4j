@@ -48,18 +48,12 @@ type doctorCommandService interface {
 }
 
 type v1CommandService interface {
-	PlanInstall(context.Context, cli.PlanInstallRequest) (cli.Response, error)
 	Install(context.Context, cli.InstallRequest, CommandIO) (cli.Response, error)
-	PlanUpdate(context.Context, cli.PlanUpdateRequest) (cli.Response, error)
 	Update(context.Context, cli.UpdateRequest, CommandIO) (cli.Response, error)
-	PlanSync(context.Context, cli.PlanSyncRequest) (cli.Response, error)
 	Sync(context.Context, cli.SyncRequest, CommandIO) (cli.Response, error)
-	PlanRollback(context.Context, cli.PlanRollbackRequest) (cli.Response, error)
 	Rollback(context.Context, cli.RollbackRequest, CommandIO) (cli.Response, error)
-	PlanUninstall(context.Context, cli.PlanUninstallRequest) (cli.Response, error)
 	Uninstall(context.Context, cli.UninstallRequest, CommandIO) (cli.Response, error)
 	History(context.Context, cli.HistoryRequest) (cli.Response, error)
-	PlanHistoryPurge(context.Context, cli.PlanHistoryPurgeRequest) (cli.Response, error)
 	HistoryPurge(context.Context, cli.HistoryPurgeRequest, CommandIO) (cli.Response, error)
 }
 
@@ -181,40 +175,16 @@ func (s productionCommandService) Doctor(ctx context.Context, request cli.Doctor
 	return s.doctor.Doctor(ctx, request, commandIO)
 }
 
-func (s productionCommandService) PlanInstall(ctx context.Context, request cli.PlanInstallRequest) (cli.Response, error) {
-	return s.v1.PlanInstall(ctx, request)
-}
-
-func (s productionCommandService) PlanUpdate(ctx context.Context, request cli.PlanUpdateRequest) (cli.Response, error) {
-	return s.v1.PlanUpdate(ctx, request)
-}
-
-func (s productionCommandService) PlanSync(ctx context.Context, request cli.PlanSyncRequest) (cli.Response, error) {
-	return s.v1.PlanSync(ctx, request)
-}
-
 func (s productionCommandService) Sync(ctx context.Context, request cli.SyncRequest, commandIO CommandIO) (cli.Response, error) {
 	return s.v1.Sync(ctx, request, commandIO)
-}
-
-func (s productionCommandService) PlanRollback(ctx context.Context, request cli.PlanRollbackRequest) (cli.Response, error) {
-	return s.v1.PlanRollback(ctx, request)
 }
 
 func (s productionCommandService) Rollback(ctx context.Context, request cli.RollbackRequest, commandIO CommandIO) (cli.Response, error) {
 	return s.v1.Rollback(ctx, request, commandIO)
 }
 
-func (s productionCommandService) PlanUninstall(ctx context.Context, request cli.PlanUninstallRequest) (cli.Response, error) {
-	return s.v1.PlanUninstall(ctx, request)
-}
-
 func (s productionCommandService) History(ctx context.Context, request cli.HistoryRequest) (cli.Response, error) {
 	return s.v1.History(ctx, request)
-}
-
-func (s productionCommandService) PlanHistoryPurge(ctx context.Context, request cli.PlanHistoryPurgeRequest) (cli.Response, error) {
-	return s.v1.PlanHistoryPurge(ctx, request)
 }
 
 func (s productionCommandService) HistoryPurge(ctx context.Context, request cli.HistoryPurgeRequest, commandIO CommandIO) (cli.Response, error) {
@@ -240,41 +210,9 @@ func newCommandHandler(service commandService) CommandHandler {
 				return cli.Response{}, fmt.Errorf("build command service is unavailable")
 			}
 			return buildResponse(builder.Build(context.Background(), command))
-		case cli.PlanInstallRequest:
-			if command.V1() {
-				if v1, ok := service.(v1CommandService); ok {
-					return v1.PlanInstall(context.Background(), command)
-				}
-			}
-			report := service.Validate(context.Background(), command.Source())
-			if len(report.Problems) != 0 {
-				return planInstallResponse(report, nil)
-			}
-			conflicts, problem := service.InspectPlanInstall(context.Background())
-			if problem != nil {
-				report.Problems = []result.Problem{*problem}
-				report.Failure = validation.FailureEnvironment
-				return planInstallResponse(report, nil)
-			}
-			return planInstallResponse(report, conflicts)
-		case cli.PlanUpdateRequest:
-			if command.V1() {
-				if v1, ok := service.(v1CommandService); ok {
-					return v1.PlanUpdate(context.Background(), command)
-				}
-			}
-			return planUpdateResponse(context.Background(), service)
-		case cli.PlanSyncRequest:
-			if v1, ok := service.(v1CommandService); ok {
-				return v1.PlanSync(context.Background(), command)
-			}
 		case cli.SyncRequest:
 			if v1, ok := service.(v1CommandService); ok {
 				return v1.Sync(context.Background(), command, commandIO)
-			}
-		case cli.PlanRollbackRequest:
-			if v1, ok := service.(v1CommandService); ok {
-				return v1.PlanRollback(context.Background(), command)
 			}
 		case cli.RollbackRequest:
 			if v1, ok := service.(v1CommandService); ok {
@@ -284,26 +222,28 @@ func newCommandHandler(service commandService) CommandHandler {
 			if v1, ok := service.(v1CommandService); ok {
 				return v1.History(context.Background(), command)
 			}
-		case cli.PlanHistoryPurgeRequest:
-			if v1, ok := service.(v1CommandService); ok {
-				return v1.PlanHistoryPurge(context.Background(), command)
-			}
 		case cli.HistoryPurgeRequest:
 			if v1, ok := service.(v1CommandService); ok {
 				return v1.HistoryPurge(context.Background(), command, commandIO)
 			}
-		case cli.PlanUninstallRequest:
-			if command.V1() {
-				if v1, ok := service.(v1CommandService); ok {
-					return v1.PlanUninstall(context.Background(), command)
-				}
-			}
-			return planUninstallResponse(context.Background(), service)
 		case cli.InstallRequest:
 			if command.V1() {
 				if v1, ok := service.(v1CommandService); ok {
 					return v1.Install(context.Background(), command, commandIO)
 				}
+			}
+			if command.DryRun() {
+				report := service.Validate(context.Background(), command.Source())
+				if len(report.Problems) != 0 {
+					return planInstallResponse(report, nil)
+				}
+				conflicts, problem := service.InspectPlanInstall(context.Background())
+				if problem != nil {
+					report.Problems = []result.Problem{*problem}
+					report.Failure = validation.FailureEnvironment
+					return planInstallResponse(report, nil)
+				}
+				return planInstallResponse(report, conflicts)
 			}
 			return service.Install(context.Background(), command, commandIO)
 		case cli.UpdateRequest:
@@ -311,6 +251,9 @@ func newCommandHandler(service commandService) CommandHandler {
 				if v1, ok := service.(v1CommandService); ok {
 					return v1.Update(context.Background(), command, commandIO)
 				}
+			}
+			if command.DryRun() {
+				return planUpdateResponse(context.Background(), service)
 			}
 			return service.Update(context.Background(), command, commandIO)
 		case cli.ListRequest:
@@ -324,6 +267,9 @@ func newCommandHandler(service commandService) CommandHandler {
 				if v1, ok := service.(v1CommandService); ok {
 					return v1.Uninstall(context.Background(), command, commandIO)
 				}
+			}
+			if command.DryRun() {
+				return planUninstallResponse(context.Background(), service)
 			}
 			return service.Uninstall(context.Background(), command, commandIO)
 		case cli.StatusRequest:

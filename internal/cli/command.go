@@ -4,35 +4,28 @@ package cli
 type Command string
 
 const (
-	CommandInit             Command = "init"
-	CommandValidate         Command = "validate"
-	CommandBuild            Command = "build"
-	CommandPlanInstall      Command = "plan.install"
-	CommandInstall          Command = "install"
-	CommandPlanUpdate       Command = "plan.update"
-	CommandUpdate           Command = "update"
-	CommandPlanSync         Command = "plan.sync"
-	CommandSync             Command = "sync"
-	CommandList             Command = "list"
-	CommandStatus           Command = "status"
-	CommandDoctor           Command = "doctor"
-	CommandPlanRollback     Command = "plan.rollback"
-	CommandRollback         Command = "rollback"
-	CommandPlanUninstall    Command = "plan.uninstall"
-	CommandUninstall        Command = "uninstall"
-	CommandHistory          Command = "history"
-	CommandPlanHistoryPurge Command = "plan.history.purge"
-	CommandHistoryPurge     Command = "history.purge"
-	CommandVersion          Command = "version"
+	CommandInit         Command = "init"
+	CommandValidate     Command = "validate"
+	CommandBuild        Command = "build"
+	CommandInstall      Command = "install"
+	CommandUpdate       Command = "update"
+	CommandSync         Command = "sync"
+	CommandList         Command = "list"
+	CommandStatus       Command = "status"
+	CommandDoctor       Command = "doctor"
+	CommandRollback     Command = "rollback"
+	CommandUninstall    Command = "uninstall"
+	CommandHistory      Command = "history"
+	CommandHistoryPurge Command = "history.purge"
+	CommandVersion      Command = "version"
 )
 
 func (c Command) String() string { return string(c) }
 
 func (c Command) Valid() bool {
 	switch c {
-	case CommandInit, CommandValidate, CommandBuild, CommandPlanInstall, CommandInstall, CommandPlanUpdate, CommandUpdate,
-		CommandPlanSync, CommandSync, CommandList, CommandStatus, CommandDoctor, CommandPlanRollback, CommandRollback,
-		CommandPlanUninstall, CommandUninstall, CommandHistory, CommandPlanHistoryPurge, CommandHistoryPurge, CommandVersion:
+	case CommandInit, CommandValidate, CommandBuild, CommandInstall, CommandUpdate, CommandSync, CommandList, CommandStatus,
+		CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge, CommandVersion:
 		return true
 	default:
 		return false
@@ -41,9 +34,8 @@ func (c Command) Valid() bool {
 
 func Commands() []Command {
 	return []Command{
-		CommandInit, CommandValidate, CommandBuild, CommandPlanInstall, CommandInstall, CommandPlanUpdate, CommandUpdate,
-		CommandPlanSync, CommandSync, CommandList, CommandStatus, CommandDoctor, CommandPlanRollback, CommandRollback,
-		CommandPlanUninstall, CommandUninstall, CommandHistory, CommandPlanHistoryPurge, CommandHistoryPurge, CommandVersion,
+		CommandInit, CommandValidate, CommandBuild, CommandInstall, CommandUpdate, CommandSync, CommandList, CommandStatus,
+		CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge, CommandVersion,
 	}
 }
 

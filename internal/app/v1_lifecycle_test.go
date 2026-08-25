@@ -73,6 +73,93 @@ func TestV1ClaudeUserLifecycleRetainsRollbackHistoryAndTombstone(t *testing.T) {
 	}
 }
 
+func TestV1DryRunsReturnPlansWithoutLockingPromptingOrMutation(t *testing.T) {
+	harness := newV1Harness(t)
+	acquireCalls := 0
+	harness.service.base.acquire = func(context.Context) (func() error, error) {
+		acquireCalls++
+		return func() error { return nil }, nil
+	}
+
+	assertDryRun := func(command cli.Command, response cli.Response, err error, prompt *bytes.Buffer, nativeCalls int) {
+		t.Helper()
+		if err != nil || response.Command() != command || response.Result().Mutation() != result.MutationNotStarted {
+			t.Fatalf("%s dry run = %#v, %v", command, response, err)
+		}
+		if _, ok := response.Data().(cli.PlanData); !ok {
+			t.Fatalf("%s dry-run data = %T, want cli.PlanData", command, response.Data())
+		}
+		if acquireCalls != 0 || prompt.Len() != 0 || len(harness.native.commands) != nativeCalls {
+			t.Fatalf("%s dry run locked, prompted, or invoked native commands", command)
+		}
+	}
+
+	prompt := new(bytes.Buffer)
+	commandIO := CommandIO{Input: strings.NewReader("yes\n"), Output: prompt, Interactive: true}
+	installDryRun := parseV1[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run")
+	response, err := harness.service.Install(context.Background(), installDryRun, commandIO)
+	assertDryRun(cli.CommandInstall, response, err, prompt, 0)
+	if records, loadErr := harness.store.LoadAll(); loadErr != nil || len(records) != 0 {
+		t.Fatalf("install dry run changed state: %#v, %v", records, loadErr)
+	}
+
+	install := parseV1[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	if _, err = harness.service.Install(context.Background(), install, CommandIO{}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := harness.store.LoadAll()
+	if err != nil || len(records) != 1 {
+		t.Fatalf("installed records = %#v, %v", records, err)
+	}
+	record := records[0]
+	history, err := harness.store.LoadHistory(record.InstallationID)
+	if err != nil || len(history) == 0 {
+		t.Fatalf("installed history = %#v, %v", history, err)
+	}
+	acquireCalls = 0
+	nativeCalls := len(harness.native.commands)
+	harness.validator.update = true
+
+	tests := []struct {
+		command cli.Command
+		run     func(CommandIO) (cli.Response, error)
+	}{
+		{cli.CommandUpdate, func(io CommandIO) (cli.Response, error) {
+			request := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--dry-run")
+			return harness.service.Update(context.Background(), request, io)
+		}},
+		{cli.CommandSync, func(io CommandIO) (cli.Response, error) {
+			request := parseV1[cli.SyncRequest](t, "sync", "--installation", record.InstallationID, "--asset", "minimal", "--dry-run")
+			return harness.service.Sync(context.Background(), request, io)
+		}},
+		{cli.CommandRollback, func(io CommandIO) (cli.Response, error) {
+			request := parseV1[cli.RollbackRequest](t, "rollback", "--installation", record.InstallationID, "--dry-run")
+			return harness.service.Rollback(context.Background(), request, io)
+		}},
+		{cli.CommandUninstall, func(io CommandIO) (cli.Response, error) {
+			request := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--dry-run")
+			return harness.service.Uninstall(context.Background(), request, io)
+		}},
+		{cli.CommandHistoryPurge, func(io CommandIO) (cli.Response, error) {
+			request := parseV1[cli.HistoryPurgeRequest](t, "history", "purge", "--installation", record.InstallationID, "--operation", history[0].OperationID, "--dry-run")
+			return harness.service.HistoryPurge(context.Background(), request, io)
+		}},
+	}
+	for _, test := range tests {
+		prompt.Reset()
+		response, err = test.run(commandIO)
+		assertDryRun(test.command, response, err, prompt, nativeCalls)
+	}
+
+	current, present, err := harness.store.LoadByID(record.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present || current.LastOperation != record.LastOperation || !slices.Equal(current.History, record.History) {
+		t.Fatalf("dry runs changed installation state: before=%#v after=%#v", record, current)
+	}
+}
+
 func TestV1WindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) {
 	harness := newV1Harness(t)
 	dataRoot := filepath.Join(t.TempDir(), "AI4J")
@@ -84,9 +171,9 @@ func TestV1WindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) {
 	harness.service.base.state = store
 	harness.service.base.build = buildinfo.New(buildinfo.Inputs{Version: "v1.0.0", TargetOS: "windows", TargetArch: "amd64"})
 
-	plan := parseV1[cli.PlanInstallRequest](t, "plan", "install", "--target", "claude", "--scope", "user", "--bundle", "default")
-	if response, err := harness.service.PlanInstall(context.Background(), plan); err != nil || response.Result().ExitCode() != result.ExitSuccess {
-		t.Fatalf("plan install = %#v, %v", response.Result(), err)
+	dryRun := parseV1[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run")
+	if response, err := harness.service.Install(context.Background(), dryRun, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("install dry run = %#v, %v", response.Result(), err)
 	}
 	install := parseV1[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 	if response, err := harness.service.Install(context.Background(), install, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {

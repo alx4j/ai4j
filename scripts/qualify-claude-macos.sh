@@ -71,7 +71,7 @@ run_project_journey() {
   local marketplace_id
 
   git clone --quiet --no-hardlinks "$repo_root" "$project_root"
-  run_ai4j "$prefix-plan.json" plan install \
+  run_ai4j "$prefix-plan.json" install --dry-run \
     --repo alx4j/ai4j --ref "$qualification_source_ref" \
     --target claude --scope "$scope" --project "$project_root" --bundle default
   run_ai4j "$prefix-install.json" install \
@@ -166,7 +166,7 @@ run_ai4j validate.json validate \
   --repo alx4j/ai4j --ref "$qualification_source_ref" --target claude
 jq -e '.data.validation.valid == true' "$evidence_root/validate.json" >/dev/null
 
-run_ai4j user-plan.json plan install \
+run_ai4j user-plan.json install --dry-run \
   --repo alx4j/ai4j --ref "$qualification_source_ref" \
   --target claude --scope user --bundle default
 run_ai4j user-install.json install \

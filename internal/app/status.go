@@ -300,7 +300,7 @@ func inspectFileDrift(path, expectedChecksum string) cli.DriftState {
 
 func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem) {
 	if record.Source.Mode == "development_source" {
-		return result.UpdateUnknown, statusProblem("update_check_unavailable", "use plan update to compare the current local development checkout")
+		return result.UpdateUnknown, statusProblem("update_check_unavailable", "use update --dry-run to compare the current local development checkout")
 	}
 	if record.Source.RefKind == cli.RefCommit.String() {
 		return result.UpdatePinned, nil

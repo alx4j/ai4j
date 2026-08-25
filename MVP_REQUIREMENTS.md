@@ -242,15 +242,15 @@ The CLI must warn that validated instructions can influence AI behavior and inst
 
 ### MVP-FR-08 — No implicit execution
 
-AI4J must not execute repository-provided or installed scripts, binaries, hooks, or MCP commands during validate, plan, install, update, status, uninstall, or version operations.
+AI4J must not execute repository-provided or installed scripts, binaries, hooks, or MCP commands during validate, install, update, status, uninstall, or version operations, including `--dry-run` previews.
 
 Claude management commands are permitted only when the supported command is known not to start toolkit content. Otherwise the operation is unsupported.
 
 ### MVP-FR-09 — Planning and approval
 
-`ai4j plan install`, `ai4j plan update`, and `ai4j plan uninstall` must show the intended source, exact commit, actions, active content, warnings, conflicts, and expected result without persistent changes.
+`ai4j install --dry-run`, `ai4j update --dry-run`, and `ai4j uninstall --dry-run` must show the intended source, exact commit, actions, active content, warnings, conflicts, and expected result without persistent changes.
 
-A modifying command must recompute its plan after taking the installation lock. A non-empty plan requires approval. Interactive use prompts; JSON or non-interactive use requires `--yes`. `--yes` approves the plan but never bypasses validation or conflicts.
+`--dry-run` returns that plan without prompting or making a persistent change. A normal modifying command must recompute and display its plan after taking the installation lock, then request approval before mutation. Interactive use prompts; JSON or non-interactive use requires `--yes`. `--yes` approves the plan but never bypasses validation or conflicts.
 
 `--expected-commit` must prevent mutation when the reviewed and recomputed commits differ.
 
@@ -367,22 +367,22 @@ JSON mode and non-interactive use require `--yes` for a non-empty plan. Conflict
 ```text
 ai4j validate [--repo <github-reference>] [--ref <git-reference>] [--json]
 
-ai4j plan install [--repo <github-reference>] [--ref <git-reference>] [--json]
+ai4j install --dry-run [--repo <github-reference>] [--ref <git-reference>] [--json]
 ai4j install [--repo <github-reference>] [--ref <git-reference>]
               [--expected-commit <full-hash>] [--yes] [--json]
 
-ai4j plan update [--json]
+ai4j update --dry-run [--json]
 ai4j update [--expected-commit <full-hash>] [--yes] [--json]
 
 ai4j status [--check-updates] [--json]
 
-ai4j plan uninstall [--json]
+ai4j uninstall --dry-run [--json]
 ai4j uninstall [--yes] [--json]
 
 ai4j version [--json]
 ```
 
-The MVP has no target, scope, asset-selection, force, generic dry-run, SSH, or credential flags.
+`--dry-run` is valid only for install, update, and uninstall and is mutually exclusive with `--yes` and `--expected-commit`. The MVP has no target, scope, asset-selection, force, SSH, or credential flags.
 
 ### 8.2 JSON output
 

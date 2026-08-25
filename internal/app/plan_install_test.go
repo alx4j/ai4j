@@ -18,7 +18,7 @@ import (
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
-func TestPlanInstallRunsValidationAndReturnsRunnableReadOnlyPlan(t *testing.T) {
+func TestInstallDryRunRunsValidationAndReturnsRunnableReadOnlyPlan(t *testing.T) {
 	t.Parallel()
 
 	source := testPlanSource(t)
@@ -34,7 +34,7 @@ func TestPlanInstallRunsValidationAndReturnsRunnableReadOnlyPlan(t *testing.T) {
 		Source: source, Content: []cli.ContentItem{content}, Rules: []byte("rules"), RulesChecksum: strings.Repeat("f", 64), Warnings: []result.Warning{warning},
 	}}
 	service.report.Content = append(service.report.Content, testPlanRules(t))
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "install", "--json"})
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "install", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPlanInstallRunsValidationAndReturnsRunnableReadOnlyPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if service.calls != 1 || response.Command() != cli.CommandPlanInstall || response.Result().ExitCode() != result.ExitSuccess {
+	if service.calls != 1 || response.Command() != cli.CommandInstall || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("plan response = calls:%d command:%q exit:%d", service.calls, response.Command(), response.Result().ExitCode())
 	}
 	data, ok := response.Data().(cli.PlanData)
@@ -86,12 +86,12 @@ func TestPlanInstallRunsValidationAndReturnsRunnableReadOnlyPlan(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.Command != "plan.install" || document.Changed || len(document.Data.Actions) != 8 || len(document.Data.Conflicts) != 0 || document.Data.Source.Commit.OID != strings.Repeat("a", 40) {
+	if document.Command != "install" || document.Changed || len(document.Data.Actions) != 8 || len(document.Data.Conflicts) != 0 || document.Data.Source.Commit.OID != strings.Repeat("a", 40) {
 		t.Fatalf("rendered plan = %#v", document)
 	}
 }
 
-func TestPlanInstallValidationFailureDoesNotProduceActions(t *testing.T) {
+func TestInstallDryRunValidationFailureDoesNotProduceActions(t *testing.T) {
 	t.Parallel()
 
 	problem, err := result.NewProblem("invalid_toolkit", "toolkit validation failed", nil)
@@ -101,7 +101,7 @@ func TestPlanInstallValidationFailureDoesNotProduceActions(t *testing.T) {
 	service := &planValidationStub{report: validation.Report{
 		Problems: []result.Problem{problem}, Failure: validation.FailureValidation,
 	}}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "install"})
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "install", "--dry-run"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPlanInstallValidationFailureDoesNotProduceActions(t *testing.T) {
 	}
 }
 
-func TestPlanInstallReturnsTypedConflictWithoutSuppressingDisclosure(t *testing.T) {
+func TestInstallDryRunReturnsTypedConflictWithoutSuppressingDisclosure(t *testing.T) {
 	t.Parallel()
 
 	conflict, err := cli.NewConflict("plugin_identity_conflict", "ai4j-default@ai4j", "the Claude plugin identity already exists")
@@ -128,7 +128,7 @@ func TestPlanInstallReturnsTypedConflictWithoutSuppressingDisclosure(t *testing.
 		report:    validation.Report{Source: testPlanSource(t), Content: []cli.ContentItem{testPlanRules(t)}, Rules: []byte("rules"), RulesChecksum: strings.Repeat("f", 64)},
 		conflicts: []cli.Conflict{conflict},
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "install"})
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "install", "--dry-run"})
 	if err != nil {
 		t.Fatal(err)
 	}

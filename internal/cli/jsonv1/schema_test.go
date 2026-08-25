@@ -77,7 +77,7 @@ func TestListResponseValidatesAgainstPublishedSchema(t *testing.T) {
 func TestLaterWaveUnsupportedResponsesValidateAgainstPublishedSchemas(t *testing.T) {
 	t.Parallel()
 	schemas := compileSchemas(t)
-	commands := []cli.Command{cli.CommandPlanSync, cli.CommandSync, cli.CommandDoctor, cli.CommandPlanRollback, cli.CommandRollback, cli.CommandHistory, cli.CommandPlanHistoryPurge, cli.CommandHistoryPurge}
+	commands := []cli.Command{cli.CommandSync, cli.CommandDoctor, cli.CommandRollback, cli.CommandHistory, cli.CommandHistoryPurge}
 	for _, command := range commands {
 		response, err := cli.NewResponse(command, failedResult(t, result.FailureEnvironment), nil, cli.UnavailableData{})
 		if err != nil {
@@ -362,7 +362,7 @@ func TestSchemaCompatibilityAndClosedEnums(t *testing.T) {
 	}
 
 	planEncoded, _ := jsonv1.Marshal(commandFixtures(t)[1].response)
-	planSchema := compileSchemas(t)["plan.install.json"]
+	planSchema := compileSchemas(t)["install.json"]
 	mutations := []struct {
 		name   string
 		mutate func(map[string]any)
@@ -635,7 +635,7 @@ func TestShuffledCollectionsProduceByteIdenticalJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewPlanData() error = %v", err)
 		}
-		response, err := cli.NewResponse(cli.CommandPlanInstall, commandResult, nil, data)
+		response, err := cli.NewResponse(cli.CommandInstall, commandResult, nil, data)
 		if err != nil {
 			t.Fatalf("NewResponse() error = %v", err)
 		}
@@ -651,7 +651,7 @@ func TestShuffledCollectionsProduceByteIdenticalJSON(t *testing.T) {
 	if !bytes.Equal(forward, reverse) {
 		t.Fatalf("shuffled inputs changed JSON\nforward: %s\nreverse: %s", forward, reverse)
 	}
-	validateJSON(t, compileSchemas(t)["plan.install.json"], forward)
+	validateJSON(t, compileSchemas(t)["install.json"], forward)
 }
 
 func TestResponseRejectsCommandDataMismatchAndUnsafeUsage(t *testing.T) {
@@ -659,7 +659,7 @@ func TestResponseRejectsCommandDataMismatchAndUnsafeUsage(t *testing.T) {
 
 	fixtures := commandFixtures(t)
 	plan := fixtures[1].response.Data().(cli.PlanData)
-	if _, err := cli.NewResponse(cli.CommandPlanUpdate, fixtures[1].response.Result(), nil, plan); err == nil {
+	if _, err := cli.NewResponse(cli.CommandUpdate, fixtures[1].response.Result(), nil, plan); err == nil {
 		t.Fatal("command/data mismatch was accepted")
 	}
 	secret := strings.Repeat("SECRET_CANARY_", 100_000)
@@ -1101,10 +1101,10 @@ func commandFixtures(t *testing.T) []fixture {
 		commandResult result.Result
 		data          cli.Data
 	}{
-		{cli.CommandValidate, readResult, validateData}, {cli.CommandPlanInstall, readResult, planInstall},
-		{cli.CommandInstall, committed, installData}, {cli.CommandPlanUpdate, readResult, planUpdate},
+		{cli.CommandValidate, readResult, validateData}, {cli.CommandInstall, readResult, planInstall},
+		{cli.CommandInstall, committed, installData}, {cli.CommandUpdate, readResult, planUpdate},
 		{cli.CommandUpdate, committed, updateData}, {cli.CommandStatus, statusResult, statusData},
-		{cli.CommandPlanUninstall, readResult, planUninstall}, {cli.CommandUninstall, committed, uninstallData},
+		{cli.CommandUninstall, readResult, planUninstall}, {cli.CommandUninstall, committed, uninstallData},
 		{cli.CommandVersion, readResult, versionData},
 	}
 	fixtures := make([]fixture, len(values))
@@ -1288,7 +1288,7 @@ func compileSchemas(t *testing.T) map[string]*jsonschema.Schema {
 		}
 	}
 	compiled := map[string]*jsonschema.Schema{}
-	for _, name := range []string{"common.json", "usage.json", "init.json", "validate.json", "build.json", "plan.install.json", "install.json", "plan.update.json", "update.json", "plan.sync.json", "sync.json", "list.json", "status.json", "doctor.json", "plan.rollback.json", "rollback.json", "plan.uninstall.json", "uninstall.json", "history.json", "plan.history.purge.json", "history.purge.json", "version.json"} {
+	for _, name := range []string{"common.json", "usage.json", "init.json", "validate.json", "build.json", "install.json", "update.json", "sync.json", "list.json", "status.json", "doctor.json", "rollback.json", "uninstall.json", "history.json", "history.purge.json", "version.json"} {
 		schema, compileErr := compiler.Compile(schemaBase + name)
 		if compileErr != nil {
 			t.Fatalf("Compile(%s) error = %v", name, compileErr)

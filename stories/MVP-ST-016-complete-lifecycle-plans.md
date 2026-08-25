@@ -12,7 +12,7 @@ As an AI4J user, I want complete read-only lifecycle previews so I can review so
 
 ## MVP scope
 
-- Implement `plan install`, `plan update`, and `plan uninstall` using the common human and JSON plan model.
+- Implement `install --dry-run`, `update --dry-run`, and `uninstall --dry-run` using the common human and JSON plan model.
 - Reuse exact-commit package validation and active-content disclosure.
 - Inspect only AI4J-owned files and Claude's documented read-only plugin/marketplace commands.
 - Classify update as pinned, unchanged, fast-forward available, or rewritten.
