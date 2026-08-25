@@ -64,18 +64,18 @@ func TestParserAcceptsCompleteV1GrammarForLaterWaves(t *testing.T) {
 		{cli.CommandInstall, []string{"ai4j", "install", "--repo", "alx4j/ai4j", "--target", "claude", "--scope", "user", "--all", "--dry-run"}, false},
 		{cli.CommandInstall, []string{"ai4j", "install", "--source", ".", "--target", "codex", "--scope", "project-local", "--project", ".", "--asset", "review-skill", "--expected-source-digest", digest, "--allow-dirty", "--yes"}, true},
 		{cli.CommandInstall, []string{"ai4j", "install", "--installation", "installation-001", "--allow-dirty", "--yes"}, false},
-		{cli.CommandUpdate, []string{"ai4j", "update", "--installation", "installation-001", "--repo", "alx4j/ai4j", "--conflict-policy", "keep", "--dry-run"}, false},
-		{cli.CommandUpdate, []string{"ai4j", "update", "--installation", "installation-001", "--expected-source-digest", digest, "--conflict-policy", "replace-owned", "--yes"}, false},
-		{cli.CommandSync, []string{"ai4j", "sync", "--installation", "installation-001", "--bundle", "default", "--conflict-policy", "fail", "--dry-run"}, false},
-		{cli.CommandSync, []string{"ai4j", "sync", "--installation", "installation-001", "--all", "--expected-source-digest", digest, "--yes"}, false},
-		{cli.CommandDoctor, []string{"ai4j", "doctor", "--installation", "installation-001", "--test-mcp", "server-id", "--yes"}, false},
-		{cli.CommandRollback, []string{"ai4j", "rollback", "--installation", "installation-001", "--operation", "operation-001", "--conflict-policy", "fail", "--dry-run"}, false},
-		{cli.CommandRollback, []string{"ai4j", "rollback", "--installation", "installation-001", "--conflict-policy", "interactive", "--yes"}, false},
-		{cli.CommandUninstall, []string{"ai4j", "uninstall", "--installation", "installation-001", "--conflict-policy", "keep", "--dry-run"}, false},
-		{cli.CommandUninstall, []string{"ai4j", "uninstall", "--installation", "installation-001", "--conflict-policy", "replace-owned", "--yes"}, false},
-		{cli.CommandHistory, []string{"ai4j", "history", "--installation", "installation-001"}, false},
-		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "--installation", "installation-001", "--expired", "--dry-run"}, false},
-		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "--installation", "installation-001", "--operation", "operation-001", "--yes", "--json"}, false},
+		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--repo", "alx4j/ai4j", "--conflict-policy", "keep", "--dry-run"}, false},
+		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--expected-source-digest", digest, "--conflict-policy", "replace-owned", "--yes"}, false},
+		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--bundle", "default", "--conflict-policy", "fail", "--dry-run"}, false},
+		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--all", "--expected-source-digest", digest, "--yes"}, false},
+		{cli.CommandDoctor, []string{"ai4j", "doctor", "installation-001", "--test-mcp", "server-id", "--yes"}, false},
+		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--operation", "operation-001", "--conflict-policy", "fail", "--dry-run"}, false},
+		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--yes"}, false},
+		{cli.CommandUninstall, []string{"ai4j", "uninstall", "installation-001", "--conflict-policy", "keep", "--dry-run"}, false},
+		{cli.CommandUninstall, []string{"ai4j", "uninstall", "installation-001", "--conflict-policy", "replace-owned", "--yes"}, false},
+		{cli.CommandHistory, []string{"ai4j", "history", "installation-001"}, false},
+		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "installation-001", "--expired", "--dry-run"}, false},
+		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "installation-001", "--operation", "operation-001", "--yes", "--json"}, false},
 	}
 	for _, test := range tests {
 		request, err := parser.Parse(test.argv)
@@ -102,13 +102,13 @@ func TestParserRejectsV1MutualExclusions(t *testing.T) {
 		{"ai4j", "install", "--installation", "installation-001", "--target", "claude", "--yes"},
 		{"ai4j", "install", "--source", ".", "--target", "claude", "--scope", "user", "--all", "--expected-commit", commitOID},
 		{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--expected-source-digest", digest},
-		{"ai4j", "sync", "--installation", "installation-001", "--all", "--asset", "skill-id"},
-		{"ai4j", "rollback", "--installation", "installation-001", "--conflict-policy", "interactive", "--dry-run"},
-		{"ai4j", "rollback", "--installation", "installation-001", "--conflict-policy", "interactive", "--json"},
+		{"ai4j", "sync", "installation-001", "--all", "--asset", "skill-id"},
+		{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--dry-run"},
+		{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--json"},
 		{"ai4j", "install", "--dry-run", "--yes"},
 		{"ai4j", "update", "--dry-run", "--expected-commit", commitOID},
-		{"ai4j", "sync", "--installation", "installation-001", "--dry-run", "--expected-source-digest", digest},
-		{"ai4j", "history", "purge", "--installation", "installation-001", "--expired", "--all", "--yes"},
+		{"ai4j", "sync", "installation-001", "--dry-run", "--expected-source-digest", digest},
+		{"ai4j", "history", "purge", "installation-001", "--expired", "--all", "--yes"},
 	}
 	for _, argv := range tests {
 		if _, err := parser.Parse(argv); err == nil {
@@ -184,10 +184,10 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 	}{
 		{[]string{"ai4j", "install", "--dry-run"}, func(request cli.Request) bool { return request.(cli.InstallRequest).DryRun() }},
 		{[]string{"ai4j", "update", "--dry-run"}, func(request cli.Request) bool { return request.(cli.UpdateRequest).DryRun() }},
-		{[]string{"ai4j", "sync", "--installation", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.SyncRequest).DryRun() }},
-		{[]string{"ai4j", "rollback", "--installation", "installation-001", "--dry-run"}, func(request cli.Request) bool { return request.(cli.RollbackRequest).DryRun() }},
+		{[]string{"ai4j", "sync", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.SyncRequest).DryRun() }},
+		{[]string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) bool { return request.(cli.RollbackRequest).DryRun() }},
 		{[]string{"ai4j", "uninstall", "--dry-run"}, func(request cli.Request) bool { return request.(cli.UninstallRequest).DryRun() }},
-		{[]string{"ai4j", "history", "purge", "--installation", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.HistoryPurgeRequest).DryRun() }},
+		{[]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.HistoryPurgeRequest).DryRun() }},
 	}
 	for _, test := range tests {
 		request, err := parser.Parse(test.argv)
@@ -196,6 +196,79 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 		}
 		if !test.dryRun(request) {
 			t.Fatalf("Parse(%q) did not preserve --dry-run", test.argv)
+		}
+	}
+}
+
+func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	tests := []struct {
+		argv []string
+		id   func(cli.Request) string
+	}{
+		{[]string{"ai4j", "update", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UpdateRequest).InstallationID().String() }},
+		{[]string{"ai4j", "sync", "installation-001", "--all", "--dry-run"}, func(request cli.Request) string { return request.(cli.SyncRequest).InstallationID().String() }},
+		{[]string{"ai4j", "doctor", "installation-001"}, func(request cli.Request) string { return request.(cli.DoctorRequest).InstallationID().String() }},
+		{[]string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.RollbackRequest).InstallationID().String() }},
+		{[]string{"ai4j", "uninstall", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UninstallRequest).InstallationID().String() }},
+		{[]string{"ai4j", "history", "installation-001"}, func(request cli.Request) string { return request.(cli.HistoryRequest).InstallationID().String() }},
+		{[]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) string { return request.(cli.HistoryPurgeRequest).InstallationID().String() }},
+	}
+	for _, test := range tests {
+		request, err := parser.Parse(test.argv)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", test.argv, err)
+		}
+		if got := test.id(request); got != "installation-001" {
+			t.Fatalf("Parse(%q) installation = %q", test.argv, got)
+		}
+	}
+}
+
+func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	tests := []struct {
+		argv   []string
+		issue  cli.UsageIssue
+		option string
+	}{
+		{[]string{"ai4j", "update", "INVALID!"}, cli.UsageInvalidOptionValue, "installation"},
+		{[]string{"ai4j", "sync", "--installation", "installation-001", "--all"}, cli.UsageInapplicableOption, "installation"},
+		{[]string{"ai4j", "doctor", "--json", "installation-001"}, cli.UsageUnexpectedArgument, ""},
+		{[]string{"ai4j", "rollback", "installation-001", "installation-002"}, cli.UsageUnexpectedArgument, ""},
+		{[]string{"ai4j", "history", "purge", "--all", "installation-001"}, cli.UsageUnexpectedArgument, ""},
+	}
+	for _, test := range tests {
+		_, err := parser.Parse(test.argv)
+		var usage *cli.UsageError
+		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
+			t.Fatalf("Parse(%q) = %v, want %s for %q", test.argv, err, test.issue, test.option)
+		}
+	}
+}
+
+func TestParserRequiresInstallationArgumentForV1Lifecycle(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	tests := [][]string{
+		{"ai4j", "update", "--repo", "alx4j/ai4j"},
+		{"ai4j", "sync", "--all"},
+		{"ai4j", "doctor"},
+		{"ai4j", "rollback"},
+		{"ai4j", "uninstall", "--conflict-policy", "fail"},
+		{"ai4j", "history"},
+		{"ai4j", "history", "purge", "--all"},
+	}
+	for _, argv := range tests {
+		_, err := parser.Parse(argv)
+		var usage *cli.UsageError
+		if !errors.As(err, &usage) || usage.Issue() != cli.UsageMissingOptionValue || usage.Option() != "installation" {
+			t.Fatalf("Parse(%q) = %v, want missing installation", argv, err)
 		}
 	}
 }
@@ -375,15 +448,15 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 	}{
 		{name: "validate", command: []string{"validate"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "target", value: "claude"}, {name: "allow-dirty", boolean: true}, {name: "json", boolean: true}}},
 		{name: "install", command: []string{"install"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "installation", value: "installation-001"}, {name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "project", value: "."}, {name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "update", command: []string{"update"}, options: []option{{name: "installation", value: "installation-001"}, {name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "sync", command: []string{"sync"}, options: []option{{name: "installation", value: "installation-001"}, {name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "update", command: []string{"update", "installation-001"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "sync", command: []string{"sync", "installation-001"}, options: []option{{name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "list", command: []string{"list"}, options: []option{{name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "json", boolean: true}}},
 		{name: "status", command: []string{"status"}, options: []option{{name: "installation", value: "installation-001"}, {name: "check-updates", boolean: true}, {name: "json", boolean: true}}},
-		{name: "doctor", command: []string{"doctor"}, options: []option{{name: "installation", value: "installation-001"}, {name: "test-mcp", value: "server-id"}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "rollback", command: []string{"rollback"}, options: []option{{name: "installation", value: "installation-001"}, {name: "operation", value: "operation-001"}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "uninstall", command: []string{"uninstall"}, options: []option{{name: "installation", value: "installation-001"}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "history", command: []string{"history"}, options: []option{{name: "installation", value: "installation-001"}, {name: "json", boolean: true}}},
-		{name: "history purge", command: []string{"history", "purge"}, options: []option{{name: "installation", value: "installation-001"}, {name: "operation", value: "operation-001"}, {name: "expired", boolean: true}, {name: "all", boolean: true}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "doctor", command: []string{"doctor", "installation-001"}, options: []option{{name: "test-mcp", value: "server-id"}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "rollback", command: []string{"rollback", "installation-001"}, options: []option{{name: "operation", value: "operation-001"}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "uninstall", command: []string{"uninstall", "installation-001"}, options: []option{{name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "history", command: []string{"history", "installation-001"}, options: []option{{name: "json", boolean: true}}},
+		{name: "history purge", command: []string{"history", "purge", "installation-001"}, options: []option{{name: "operation", value: "operation-001"}, {name: "expired", boolean: true}, {name: "all", boolean: true}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "version", command: []string{"version"}, options: []option{{name: "json", boolean: true}}},
 	}
 	parser := cli.NewParser("darwin")

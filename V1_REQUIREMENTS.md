@@ -669,7 +669,7 @@ It must not start a script, binary, hook, or MCP server.
 An MCP process-startup check must require an explicit server selection:
 
 ```text
-ai4j doctor --installation <id> --test-mcp <server-id>
+ai4j doctor <id> --test-mcp <server-id>
 ```
 
 The adapter must prefer a supported native target diagnostic when it provides the needed startup evidence without broadening execution. Otherwise, before direct execution, the CLI must show the exact executable, argument list, documented launch context and placeholder substitutions, referenced environment-variable names, ownership, and a side-effect warning. JSON or non-interactive execution requires `--yes`.
@@ -777,49 +777,51 @@ ai4j install [--repo <github-reference>] [--ref <git-reference>] [--source <path
               [--yes] [--json]
 ai4j install --installation <archived-id> [--allow-dirty] [--yes] [--json]
 
-ai4j update --dry-run --installation <id>
-                       [--repo <github-reference>] [--ref <git-reference>]
-                       [--allow-dirty]
-                       [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j update --installation <id>
-             [--repo <github-reference>] [--ref <git-reference>]
-             [--allow-dirty]
-             [--expected-commit <full-hash> | --expected-source-digest <sha256>]
-             [--conflict-policy <fail|keep|replace-owned|interactive>]
-             [--yes] [--json]
+ai4j update <id> --dry-run
+                 [--repo <github-reference>] [--ref <git-reference>]
+                 [--allow-dirty]
+                 [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j update <id>
+                 [--repo <github-reference>] [--ref <git-reference>]
+                 [--allow-dirty]
+                 [--expected-commit <full-hash> | --expected-source-digest <sha256>]
+                 [--conflict-policy <fail|keep|replace-owned|interactive>]
+                 [--yes] [--json]
 
-ai4j sync --dry-run --installation <id>
-                     <selection> [--allow-dirty]
-                     [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j sync --installation <id>
-           <selection> [--allow-dirty]
-           [--expected-source-digest <sha256>]
-           [--conflict-policy <fail|keep|replace-owned|interactive>]
-           [--yes] [--json]
-
-ai4j list [--target <claude|codex>] [--scope <scope>] [--json]
-ai4j status --installation <id> [--check-updates] [--json]
-ai4j doctor --installation <id> [--test-mcp <server-id>] [--yes] [--json]
-
-ai4j rollback --dry-run --installation <id> [--operation <operation-id>]
-                         [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j rollback --installation <id> [--operation <operation-id>]
+ai4j sync <id> --dry-run
+               <selection> [--allow-dirty]
+               [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j sync <id>
+               <selection> [--allow-dirty]
+               [--expected-source-digest <sha256>]
                [--conflict-policy <fail|keep|replace-owned|interactive>]
                [--yes] [--json]
 
-ai4j uninstall --dry-run --installation <id>
-                          [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j uninstall --installation <id>
-                [--conflict-policy <fail|keep|replace-owned|interactive>]
-                [--yes] [--json]
+ai4j list [--target <claude|codex>] [--scope <scope>] [--json]
+ai4j status --installation <id> [--check-updates] [--json]
+ai4j doctor <id> [--test-mcp <server-id>] [--yes] [--json]
 
-ai4j history --installation <id> [--json]
-ai4j history purge --dry-run --installation <id>
-                              (--operation <operation-id> | --expired | --all) [--json]
-ai4j history purge --installation <id>
-                    (--operation <operation-id> | --expired | --all) [--yes] [--json]
+ai4j rollback <id> --dry-run [--operation <operation-id>]
+                           [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j rollback <id> [--operation <operation-id>]
+                   [--conflict-policy <fail|keep|replace-owned|interactive>]
+                   [--yes] [--json]
+
+ai4j uninstall <id> --dry-run
+                            [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j uninstall <id>
+                            [--conflict-policy <fail|keep|replace-owned|interactive>]
+                            [--yes] [--json]
+
+ai4j history <id> [--json]
+ai4j history purge <id> --dry-run
+                               (--operation <operation-id> | --expired | --all) [--json]
+ai4j history purge <id>
+                               (--operation <operation-id> | --expired | --all) [--yes] [--json]
 ai4j version [--json]
 ```
+
+For update, sync, doctor, rollback, uninstall, history, and history purge, `<id>` is the installation ID and must immediately follow the command or `history purge` subcommand. `--installation` is not accepted by those commands. Status retains `--installation` because selecting one installation is optional, and install retains it only for archived reactivation.
 
 `<selection>` means either `--all` alone or one or more repeatable `--asset <id>` and/or `--bundle <id>` options. For a new-source command, omitting `--repo` and `--source` selects the built-in GitHub repository, and `--ref` alone applies to it. `--source` is mutually exclusive with `--repo` and `--ref`. `--allow-dirty` and `--expected-source-digest` are valid only for local source; `--expected-commit` is GitHub-only. Install's `--installation` is valid only for an archived ID and is mutually exclusive with every new-install source, target, scope, project, selection, and expected-revision option. With `--installation`, `--allow-dirty` is valid only for a `development_source` tombstone and has the exact-digest semantics defined by V1-FR-08.
 

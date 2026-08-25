@@ -36,23 +36,23 @@ func TestV1ClaudeUserLifecycleRetainsRollbackHistoryAndTombstone(t *testing.T) {
 	installationID := records[0].InstallationID
 
 	harness.validator.update = true
-	update := parseV1[cli.UpdateRequest](t, "update", "--installation", installationID, "--yes")
+	update := parseV1[cli.UpdateRequest](t, "update", installationID, "--yes")
 	response, err = harness.service.Update(context.Background(), update, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("update = %#v, %v", response.Result(), err)
 	}
-	sync := parseV1[cli.SyncRequest](t, "sync", "--installation", installationID, "--asset", "minimal", "--yes")
+	sync := parseV1[cli.SyncRequest](t, "sync", installationID, "--asset", "minimal", "--yes")
 	response, err = harness.service.Sync(context.Background(), sync, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("sync = %#v, %v", response.Result(), err)
 	}
-	history := parseV1[cli.HistoryRequest](t, "history", "--installation", installationID)
+	history := parseV1[cli.HistoryRequest](t, "history", installationID)
 	response, err = harness.service.History(context.Background(), history)
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || len(response.Data().(cli.HistoryData).Entries()) != 3 {
 		t.Fatalf("history after sync = %#v, %v", response, err)
 	}
 
-	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", installationID, "--yes")
+	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", installationID, "--yes")
 	response, err = harness.service.Uninstall(context.Background(), uninstall, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("uninstall = %#v, %v", response.Result(), err)
@@ -62,7 +62,7 @@ func TestV1ClaudeUserLifecycleRetainsRollbackHistoryAndTombstone(t *testing.T) {
 		t.Fatalf("archived tombstone = %#v, %t, %v", record, present, err)
 	}
 
-	rollback := parseV1[cli.RollbackRequest](t, "rollback", "--installation", installationID, "--yes")
+	rollback := parseV1[cli.RollbackRequest](t, "rollback", installationID, "--yes")
 	response, err = harness.service.Rollback(context.Background(), rollback, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("rollback uninstall = %#v, %v", response.Result(), err)
@@ -125,23 +125,23 @@ func TestV1DryRunsReturnPlansWithoutLockingPromptingOrMutation(t *testing.T) {
 		run     func(CommandIO) (cli.Response, error)
 	}{
 		{cli.CommandUpdate, func(io CommandIO) (cli.Response, error) {
-			request := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--dry-run")
+			request := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--dry-run")
 			return harness.service.Update(context.Background(), request, io)
 		}},
 		{cli.CommandSync, func(io CommandIO) (cli.Response, error) {
-			request := parseV1[cli.SyncRequest](t, "sync", "--installation", record.InstallationID, "--asset", "minimal", "--dry-run")
+			request := parseV1[cli.SyncRequest](t, "sync", record.InstallationID, "--asset", "minimal", "--dry-run")
 			return harness.service.Sync(context.Background(), request, io)
 		}},
 		{cli.CommandRollback, func(io CommandIO) (cli.Response, error) {
-			request := parseV1[cli.RollbackRequest](t, "rollback", "--installation", record.InstallationID, "--dry-run")
+			request := parseV1[cli.RollbackRequest](t, "rollback", record.InstallationID, "--dry-run")
 			return harness.service.Rollback(context.Background(), request, io)
 		}},
 		{cli.CommandUninstall, func(io CommandIO) (cli.Response, error) {
-			request := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--dry-run")
+			request := parseV1[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--dry-run")
 			return harness.service.Uninstall(context.Background(), request, io)
 		}},
 		{cli.CommandHistoryPurge, func(io CommandIO) (cli.Response, error) {
-			request := parseV1[cli.HistoryPurgeRequest](t, "history", "purge", "--installation", record.InstallationID, "--operation", history[0].OperationID, "--dry-run")
+			request := parseV1[cli.HistoryPurgeRequest](t, "history", "purge", record.InstallationID, "--operation", history[0].OperationID, "--dry-run")
 			return harness.service.HistoryPurge(context.Background(), request, io)
 		}},
 	}
@@ -189,11 +189,11 @@ func TestV1WindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) {
 	}
 
 	harness.validator.update = true
-	update := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--yes")
+	update := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--yes")
 	if response, err := harness.service.Update(context.Background(), update, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("update = %#v, %v", response.Result(), err)
 	}
-	sync := parseV1[cli.SyncRequest](t, "sync", "--installation", record.InstallationID, "--asset", "minimal", "--yes")
+	sync := parseV1[cli.SyncRequest](t, "sync", record.InstallationID, "--asset", "minimal", "--yes")
 	if response, err := harness.service.Sync(context.Background(), sync, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("sync = %#v, %v", response.Result(), err)
 	}
@@ -206,15 +206,15 @@ func TestV1WindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) {
 	if response, err := status.List(context.Background(), listRequest); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("list = %#v, %v", response.Result(), err)
 	}
-	history := parseV1[cli.HistoryRequest](t, "history", "--installation", record.InstallationID)
+	history := parseV1[cli.HistoryRequest](t, "history", record.InstallationID)
 	if response, err := harness.service.History(context.Background(), history); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("history = %#v, %v", response.Result(), err)
 	}
-	rollback := parseV1[cli.RollbackRequest](t, "rollback", "--installation", record.InstallationID, "--yes")
+	rollback := parseV1[cli.RollbackRequest](t, "rollback", record.InstallationID, "--yes")
 	if response, err := harness.service.Rollback(context.Background(), rollback, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("rollback = %#v, %v", response.Result(), err)
 	}
-	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--yes")
+	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--yes")
 	if response, err := harness.service.Uninstall(context.Background(), uninstall, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("uninstall = %#v, %v", response.Result(), err)
 	}
@@ -262,7 +262,7 @@ func TestV1ClaudeProjectLocalJourneyKeepsRulesGitLocallyExcluded(t *testing.T) {
 			t.Fatalf("scoped command %q directory=%q", command, harness.native.directories[index])
 		}
 	}
-	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--yes")
+	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--yes")
 	response, err = harness.service.Uninstall(context.Background(), uninstall, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-local uninstall = %#v, %v", response.Result(), err)
@@ -327,7 +327,7 @@ func TestV1ClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testing.T) {
 	}
 
 	harness.validator.update = true
-	update := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--yes")
+	update := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--yes")
 	if response, err = harness.service.Update(context.Background(), update, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-shared update = %#v, %v", response.Result(), err)
 	}
@@ -355,7 +355,7 @@ func TestV1ClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testing.T) {
 		t.Fatalf("project-shared declaration/current-user status = %#v", native)
 	}
 	harness.native.marketplaces[record.MarketplaceID] = true
-	rollback := parseV1[cli.RollbackRequest](t, "rollback", "--installation", record.InstallationID, "--yes")
+	rollback := parseV1[cli.RollbackRequest](t, "rollback", record.InstallationID, "--yes")
 	if response, err = harness.service.Rollback(context.Background(), rollback, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-shared rollback = %#v, %v", response.Result(), err)
 	}
@@ -363,7 +363,7 @@ func TestV1ClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testing.T) {
 	if !bytes.Contains(settings, []byte(strings.Repeat("a", 40))) || bytes.Contains(settings, []byte(strings.Repeat("b", 40))) {
 		t.Fatalf("project-shared rollback did not restore exact commit: %s", settings)
 	}
-	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--yes")
+	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--yes")
 	if response, err = harness.service.Uninstall(context.Background(), uninstall, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-shared uninstall = %#v, %v", response.Result(), err)
 	}
@@ -371,7 +371,7 @@ func TestV1ClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testing.T) {
 	if err != nil || !bytes.Equal(settings, original) {
 		t.Fatalf("project-shared structural inverse = %s, want %s, %v", settings, original, err)
 	}
-	rollback = parseV1[cli.RollbackRequest](t, "rollback", "--installation", record.InstallationID, "--yes")
+	rollback = parseV1[cli.RollbackRequest](t, "rollback", record.InstallationID, "--yes")
 	if response, err = harness.service.Rollback(context.Background(), rollback, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-shared uninstall rollback = %#v, %v", response.Result(), err)
 	}
@@ -379,7 +379,7 @@ func TestV1ClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testing.T) {
 	if !bytes.Contains(settings, []byte(strings.Repeat("a", 40))) {
 		t.Fatalf("project-shared uninstall rollback did not restore declaration: %s", settings)
 	}
-	uninstall = parseV1[cli.UninstallRequest](t, "uninstall", "--installation", record.InstallationID, "--yes")
+	uninstall = parseV1[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--yes")
 	if response, err = harness.service.Uninstall(context.Background(), uninstall, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("second project-shared uninstall = %#v, %v", response.Result(), err)
 	}
@@ -454,12 +454,12 @@ func TestV1HistoryPurgeDoesNotTouchActiveTargetAndRemovesFinalArchivedTombstone(
 	}
 	records, _ := harness.store.LoadAll()
 	id := records[0].InstallationID
-	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", "--installation", id, "--yes")
+	uninstall := parseV1[cli.UninstallRequest](t, "uninstall", id, "--yes")
 	if response, err := harness.service.Uninstall(context.Background(), uninstall, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("uninstall = %#v, %v", response.Result(), err)
 	}
 	commandCount := len(harness.native.commands)
-	purge := parseV1[cli.HistoryPurgeRequest](t, "history", "purge", "--installation", id, "--all", "--yes")
+	purge := parseV1[cli.HistoryPurgeRequest](t, "history", "purge", id, "--all", "--yes")
 	response, err := harness.service.HistoryPurge(context.Background(), purge, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || len(harness.native.commands) != commandCount {
 		t.Fatalf("purge = %#v, commands=%d/%d, %v", response.Result(), len(harness.native.commands), commandCount, err)
@@ -492,12 +492,12 @@ func TestV1IndependentInstallationsAndOwnedConflictPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness.validator.update = true
-	fail := parseV1[cli.UpdateRequest](t, "update", "--installation", firstRecord.InstallationID, "--yes")
+	fail := parseV1[cli.UpdateRequest](t, "update", firstRecord.InstallationID, "--yes")
 	response, err := harness.service.Update(context.Background(), fail, CommandIO{})
 	if err != nil || response.Result().Failure() != result.FailureConflict {
 		t.Fatalf("default conflict policy = %#v, %v", response.Result(), err)
 	}
-	keep := parseV1[cli.UpdateRequest](t, "update", "--installation", firstRecord.InstallationID, "--conflict-policy", "keep", "--yes")
+	keep := parseV1[cli.UpdateRequest](t, "update", firstRecord.InstallationID, "--conflict-policy", "keep", "--yes")
 	response, err = harness.service.Update(context.Background(), keep, CommandIO{})
 	if err != nil || response.Result().Status() != result.StatusDegraded || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("keep policy = %#v, %v", response.Result(), err)
@@ -505,7 +505,7 @@ func TestV1IndependentInstallationsAndOwnedConflictPolicies(t *testing.T) {
 	if contents, err := os.ReadFile(rulesPath); err != nil || string(contents) != "USER MODIFICATION\n" {
 		t.Fatalf("kept rules = %q, %v", contents, err)
 	}
-	replace := parseV1[cli.SyncRequest](t, "sync", "--installation", firstRecord.InstallationID, "--all", "--conflict-policy", "replace-owned", "--yes")
+	replace := parseV1[cli.SyncRequest](t, "sync", firstRecord.InstallationID, "--all", "--conflict-policy", "replace-owned", "--yes")
 	response, err = harness.service.Sync(context.Background(), replace, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("replace-owned policy = %#v, %v", response.Result(), err)
@@ -524,7 +524,7 @@ func TestV1UpdateMigratesExplicitGitHubSourceWithoutChangingInstallationIdentity
 	records, _ := harness.store.LoadAll()
 	id := records[0].InstallationID
 	commit := strings.Repeat("a", 40)
-	update := parseV1[cli.UpdateRequest](t, "update", "--installation", id, "--repo", "example/toolkit", "--ref", "main", "--expected-commit", commit, "--yes")
+	update := parseV1[cli.UpdateRequest](t, "update", id, "--repo", "example/toolkit", "--ref", "main", "--expected-commit", commit, "--yes")
 	response, err := harness.service.Update(context.Background(), update, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("source migration = %#v, %v", response.Result(), err)
@@ -557,7 +557,7 @@ func TestV1LocalDevelopmentInstallUpdateAndSyncUseImmutableBackingBundle(t *test
 	}
 	firstBundle := record.Source.BundleDigest
 	harness.validator.localDigest = strings.Repeat("f", 64)
-	update := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--allow-dirty", "--expected-source-digest", harness.validator.localDigest, "--yes")
+	update := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--allow-dirty", "--expected-source-digest", harness.validator.localDigest, "--yes")
 	response, err = harness.service.Update(context.Background(), update, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("local update = %#v, %v", response.Result(), err)
@@ -566,7 +566,7 @@ func TestV1LocalDevelopmentInstallUpdateAndSyncUseImmutableBackingBundle(t *test
 	if record.Source.BundleDigest == firstBundle || record.Source.SourceDigest != harness.validator.localDigest || len(record.History) != 2 {
 		t.Fatalf("updated local state = %#v", record)
 	}
-	sync := parseV1[cli.SyncRequest](t, "sync", "--installation", record.InstallationID, "--asset", "minimal", "--allow-dirty", "--expected-source-digest", harness.validator.localDigest, "--yes")
+	sync := parseV1[cli.SyncRequest](t, "sync", record.InstallationID, "--asset", "minimal", "--allow-dirty", "--expected-source-digest", harness.validator.localDigest, "--yes")
 	response, err = harness.service.Sync(context.Background(), sync, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("local sync = %#v, %v", response.Result(), err)
@@ -614,7 +614,7 @@ func TestV1AutomaticallyReconcilesUnambiguousInterruptedOperations(t *testing.T)
 			}
 			record, _, _ := harness.store.Load()
 			harness.validator.update = true
-			request := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--yes")
+			request := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--yes")
 			execution, _, stop := harness.service.prepareUpdate(context.Background(), request.InstallationID(), request.Source(), cli.ConflictFail)
 			if stop {
 				t.Fatal("update preparation stopped")
@@ -643,7 +643,7 @@ func TestV1AutomaticRecoveryKeepsAmbiguousStateFailClosed(t *testing.T) {
 	}
 	record, _, _ := harness.store.Load()
 	harness.validator.update = true
-	request := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--yes")
+	request := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--yes")
 	execution, _, stop := harness.service.prepareUpdate(context.Background(), request.InstallationID(), request.Source(), cli.ConflictFail)
 	if stop {
 		t.Fatal("update preparation stopped")
@@ -669,7 +669,7 @@ func TestV1AutomaticRecoveryRejectsMissingJournalAfterTargetMutation(t *testing.
 	}
 	record, _, _ := harness.store.Load()
 	harness.validator.update = true
-	request := parseV1[cli.UpdateRequest](t, "update", "--installation", record.InstallationID, "--yes")
+	request := parseV1[cli.UpdateRequest](t, "update", record.InstallationID, "--yes")
 	execution, _, stop := harness.service.prepareUpdate(context.Background(), request.InstallationID(), request.Source(), cli.ConflictFail)
 	if stop {
 		t.Fatal("update preparation stopped")

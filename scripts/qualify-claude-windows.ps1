@@ -151,7 +151,7 @@ function Invoke-ProjectJourney {
     Assert-NativeSuccess "clone $Scope project"
 
     $plan = Invoke-AI4J -EvidenceName "$prefix-plan.json" -Arguments @(
-        'plan', 'install', '--repo', 'alx4j/ai4j', '--ref', $script:QualificationSourceRef,
+        'install', '--dry-run', '--repo', 'alx4j/ai4j', '--ref', $script:QualificationSourceRef,
         '--target', 'claude', '--scope', $Scope, '--project', $projectRoot, '--bundle', 'default'
     )
     $install = Invoke-AI4J -EvidenceName "$prefix-install.json" -Arguments @(
@@ -192,8 +192,8 @@ function Invoke-ProjectJourney {
         }
     }
 
-    Invoke-AI4J -EvidenceName "$prefix-doctor.json" -Arguments @('doctor', '--installation', $script:ActiveInstallation) | Out-Null
-    Invoke-AI4J -EvidenceName "$prefix-uninstall.json" -Arguments @('uninstall', '--installation', $script:ActiveInstallation, '--yes') | Out-Null
+    Invoke-AI4J -EvidenceName "$prefix-doctor.json" -Arguments @('doctor', $script:ActiveInstallation) | Out-Null
+    Invoke-AI4J -EvidenceName "$prefix-uninstall.json" -Arguments @('uninstall', $script:ActiveInstallation, '--yes') | Out-Null
     $script:ActiveInstallation = $null
     $gitStatus = (& git -C $projectRoot status --short --untracked-files=all 2>&1) -join [Environment]::NewLine
     Assert-NativeSuccess "$Scope post-uninstall Git status"
@@ -276,7 +276,7 @@ try {
     }
 
     $plan = Invoke-AI4J -EvidenceName 'user-plan.json' -Arguments @(
-        'plan', 'install', '--repo', 'alx4j/ai4j', '--ref', $script:QualificationSourceRef,
+        'install', '--dry-run', '--repo', 'alx4j/ai4j', '--ref', $script:QualificationSourceRef,
         '--target', 'claude', '--scope', 'user', '--bundle', 'default'
     )
     $install = Invoke-AI4J -EvidenceName 'user-install.json' -Arguments @(
@@ -301,8 +301,8 @@ try {
     Invoke-AI4J -EvidenceName 'user-status-after-refresh.json' -Arguments @('status', '--installation', $script:ActiveInstallation) | Out-Null
 
     $env:AI4J_TOKEN = 'qualification-presence-only'
-    Invoke-AI4J -EvidenceName 'user-doctor.json' -Arguments @('doctor', '--installation', $script:ActiveInstallation) | Out-Null
-    $previewLines = & $script:AI4J doctor --installation $script:ActiveInstallation --test-mcp claude-tools --json 2>&1
+    Invoke-AI4J -EvidenceName 'user-doctor.json' -Arguments @('doctor', $script:ActiveInstallation) | Out-Null
+    $previewLines = & $script:AI4J doctor $script:ActiveInstallation --test-mcp claude-tools --json 2>&1
     $previewExit = $LASTEXITCODE
     $previewText = ($previewLines -join [Environment]::NewLine)
     Write-Evidence -Name 'user-mcp-preview.json' -Text $previewText
@@ -311,13 +311,13 @@ try {
         throw 'MCP startup preview did not require explicit approval'
     }
     $startup = Invoke-AI4J -EvidenceName 'user-mcp-startup.json' -Arguments @(
-        'doctor', '--installation', $script:ActiveInstallation, '--test-mcp', 'claude-tools', '--yes'
+        'doctor', $script:ActiveInstallation, '--test-mcp', 'claude-tools', '--yes'
     )
     if ($startup.data.startupCheck.result -ne 'timed_out' -and $startup.data.startupCheck.result -ne 'exited') {
         throw 'MCP startup check returned an unexpected result'
     }
 
-    Invoke-AI4J -EvidenceName 'user-uninstall.json' -Arguments @('uninstall', '--installation', $script:ActiveInstallation, '--yes') | Out-Null
+    Invoke-AI4J -EvidenceName 'user-uninstall.json' -Arguments @('uninstall', $script:ActiveInstallation, '--yes') | Out-Null
     $script:ActiveInstallation = $null
     $postMarketplaceList = Invoke-ClaudeJSON -EvidenceName 'user-post-uninstall-marketplace-list.json' -Arguments @('plugin', 'marketplace', 'list', '--json') -WorkingDirectory $script:RepoRoot
     $postMarketplaceJSON = ConvertTo-Json -InputObject $postMarketplaceList -Depth 100 -Compress
@@ -337,7 +337,7 @@ try {
 }
 finally {
     if (-not [string]::IsNullOrWhiteSpace($script:ActiveInstallation) -and (Test-Path -LiteralPath $script:AI4J)) {
-        & $script:AI4J uninstall --installation $script:ActiveInstallation --yes --json *> $null
+        & $script:AI4J uninstall $script:ActiveInstallation --yes --json *> $null
     }
     if (Test-Path -LiteralPath $script:WorkRoot) {
         Remove-Item -LiteralPath $script:WorkRoot -Recurse -Force

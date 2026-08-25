@@ -28,7 +28,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 	runner := &doctorRunnerStub{paths: map[string]string{"git": "/usr/bin/git", "claude": "/usr/bin/claude"}}
 	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store, home: harness.home}, harness.validator, runner)
 
-	staticRequest := parseV1[cli.DoctorRequest](t, "doctor", "--installation", record.InstallationID, "--json")
+	staticRequest := parseV1[cli.DoctorRequest](t, "doctor", record.InstallationID, "--json")
 	staticResponse, err := service.Doctor(context.Background(), staticRequest, CommandIO{})
 	if err != nil || staticResponse.Result().ExitCode() != result.ExitSuccess || runner.calls != 0 {
 		t.Fatalf("static doctor = %#v, calls=%d, err=%v", staticResponse.Result(), runner.calls, err)
@@ -38,7 +38,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 		t.Fatalf("static doctor data = %#v", staticData)
 	}
 
-	previewRequest := parseV1[cli.DoctorRequest](t, "doctor", "--installation", record.InstallationID, "--test-mcp", "claude-tools", "--json")
+	previewRequest := parseV1[cli.DoctorRequest](t, "doctor", record.InstallationID, "--test-mcp", "claude-tools", "--json")
 	preview, err := service.Doctor(context.Background(), previewRequest, CommandIO{})
 	if err != nil || preview.Result().Failure() != result.FailureApproval || preview.Result().Mutation() != result.MutationNotStarted || runner.calls != 0 {
 		t.Fatalf("startup preview = %#v, calls=%d, err=%v", preview.Result(), runner.calls, err)
@@ -50,7 +50,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 
 	runner.result = validation.ProcessResult{Started: true, TimedOut: true}
 	runner.err = context.DeadlineExceeded
-	approvedRequest := parseV1[cli.DoctorRequest](t, "doctor", "--installation", record.InstallationID, "--test-mcp", "claude-tools", "--yes", "--json")
+	approvedRequest := parseV1[cli.DoctorRequest](t, "doctor", record.InstallationID, "--test-mcp", "claude-tools", "--yes", "--json")
 	checked, err := service.Doctor(context.Background(), approvedRequest, CommandIO{})
 	if err != nil || checked.Result().ExitCode() != result.ExitSuccess || checked.Result().Mutation() != result.MutationNotStarted || runner.calls != 1 {
 		t.Fatalf("startup check = %#v, calls=%d, err=%v", checked.Result(), runner.calls, err)
@@ -68,7 +68,7 @@ func TestDoctorRejectsUnknownMCPBeforeExecution(t *testing.T) {
 	record, _, _ := harness.store.Load()
 	runner := &doctorRunnerStub{paths: map[string]string{"git": "/usr/bin/git", "claude": "/usr/bin/claude"}}
 	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store, home: harness.home}, harness.validator, runner)
-	request := parseV1[cli.DoctorRequest](t, "doctor", "--installation", record.InstallationID, "--test-mcp", "missing", "--yes", "--json")
+	request := parseV1[cli.DoctorRequest](t, "doctor", record.InstallationID, "--test-mcp", "missing", "--yes", "--json")
 	response, err := service.Doctor(context.Background(), request, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitValidation || runner.calls != 0 || response.Result().Errors()[0].Code() != "mcp_not_found" {
 		t.Fatalf("unknown MCP = %#v, calls=%d, err=%v", response.Result(), runner.calls, err)

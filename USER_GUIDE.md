@@ -205,16 +205,18 @@ Planning is read-only:
 
 ```sh
 ai4j install --dry-run
-ai4j update --dry-run --installation <installation-id>
-ai4j sync --dry-run --installation <installation-id> --bundle default
-ai4j rollback --dry-run --installation <installation-id>
-ai4j uninstall --dry-run --installation <installation-id>
-ai4j history purge --dry-run --installation <installation-id> --expired
+ai4j update <installation-id> --dry-run
+ai4j sync <installation-id> --dry-run --bundle default
+ai4j rollback <installation-id> --dry-run
+ai4j uninstall <installation-id> --dry-run
+ai4j history purge <installation-id> --dry-run --expired
 ```
 
 A dry run returns the command's complete plan without installing, updating, removing, enabling, or executing content. Use it when you want a separate read-only review before running the command.
 
 `install --dry-run` accepts `--repo` and `--ref`, or the mutually exclusive `--source`. Update, sync, rollback, and uninstall use the selected installation's retained source and ownership information. `--dry-run` never mutates target state or retained history, never prompts, and cannot be combined with `--yes`, `--expected-commit`, or `--expected-source-digest`.
+
+For update, sync, doctor, rollback, uninstall, and history commands, put the installation ID immediately after the command, as shown above. `history purge` takes it immediately after `purge`. Status keeps the optional `--installation <id>` selector because plain `ai4j status` is also valid.
 
 ## Install
 
@@ -323,7 +325,7 @@ This may access GitHub. The update result can be `available`, `up_to_date`, `pin
 Run static checks without starting any toolkit script, hook, binary, or MCP server:
 
 ```sh
-ai4j doctor --installation <installation-id>
+ai4j doctor <installation-id>
 ```
 
 The report covers the host profile, Git and target executables, state/history/journal integrity, owned-file drift, observable native state, the retained package artifact, MCP declarations, MCP executable availability, and whether referenced environment-variable names are present. Secret values are never displayed.
@@ -331,13 +333,13 @@ The report covers the host profile, Git and target executables, state/history/jo
 To test one MCP process explicitly, first preview the exact executable, argument array, working directory, ownership, referenced variable names, and side-effect warning:
 
 ```sh
-ai4j doctor --installation <installation-id> --test-mcp <server-id>
+ai4j doctor <installation-id> --test-mcp <server-id>
 ```
 
 Then approve the same check:
 
 ```sh
-ai4j doctor --installation <installation-id> --test-mcp <server-id> --yes
+ai4j doctor <installation-id> --test-mcp <server-id> --yes
 ```
 
 The command invokes the executable directly without a shell, passes only the documented baseline environment plus the selected server's referenced variables, bounds captured output, and terminates the process tree after five seconds. A `timed_out` result means the process started and was stopped at that boundary; it does not prove that the server is healthy in Claude or that it had no side effects. The process runs with your current user permissions and is not sandboxed.
@@ -349,13 +351,13 @@ Without source flags, AI4J updates only the branch recorded during installation.
 Review one installation's update first:
 
 ```sh
-ai4j update --dry-run --installation <installation-id>
+ai4j update <installation-id> --dry-run
 ```
 
 The plan classifies active content as added, removed, changed, or unchanged. Apply the reviewed exact commit with:
 
 ```sh
-ai4j update --installation <installation-id> \
+ai4j update <installation-id> \
   --expected-commit <full-commit-hash> --yes
 ```
 
@@ -372,8 +374,8 @@ Repeating an update when the branch has not moved returns `no_change`.
 To migrate an existing GitHub installation explicitly, plan with `--repo` and/or `--ref`, then apply with the exact commit shown in that plan. The toolkit and installation IDs are preserved:
 
 ```sh
-ai4j update --dry-run --installation <installation-id> --repo owner/new-repository --ref main
-ai4j update --installation <installation-id> --repo owner/new-repository --ref main \
+ai4j update <installation-id> --dry-run --repo owner/new-repository --ref main
+ai4j update <installation-id> --repo owner/new-repository --ref main \
   --expected-commit <full-commit-hash> --yes
 ```
 
@@ -384,11 +386,11 @@ For a local development installation, `update` reads the stored checkout. Use `-
 For GitHub installations, `sync` keeps the stored exact source commit and changes only the requested selection. For local development installations, it snapshots the stored checkout and can disclose a simultaneous source-digest change:
 
 ```sh
-ai4j sync --dry-run --installation <installation-id> --asset review-checklist
-ai4j sync --installation <installation-id> --asset review-checklist --yes
+ai4j sync <installation-id> --dry-run --asset review-checklist
+ai4j sync <installation-id> --asset review-checklist --yes
 
-ai4j sync --dry-run --installation <local-installation-id> --asset review-checklist --allow-dirty
-ai4j sync --installation <local-installation-id> --asset review-checklist --allow-dirty \
+ai4j sync <local-installation-id> --dry-run --asset review-checklist --allow-dirty
+ai4j sync <local-installation-id> --asset review-checklist --allow-dirty \
   --expected-source-digest <sha256> --yes
 ```
 
@@ -409,24 +411,24 @@ The default conflict policy is `fail`. Update, sync, rollback, and uninstall als
 List retained structural rollback points without displaying their opaque content:
 
 ```sh
-ai4j history --installation <installation-id>
+ai4j history <installation-id>
 ```
 
 Rollback uses the latest point by default, or an explicitly selected operation:
 
 ```sh
-ai4j rollback --dry-run --installation <installation-id>
-ai4j rollback --installation <installation-id> --yes
+ai4j rollback <installation-id> --dry-run
+ai4j rollback <installation-id> --yes
 
-ai4j rollback --dry-run --installation <installation-id> --operation <operation-id>
-ai4j rollback --installation <installation-id> --operation <operation-id> --yes
+ai4j rollback <installation-id> --dry-run --operation <operation-id>
+ai4j rollback <installation-id> --operation <operation-id> --yes
 ```
 
 Purge one point, expired points, or all points only after reviewing the purge plan:
 
 ```sh
-ai4j history purge --dry-run --installation <installation-id> --expired
-ai4j history purge --installation <installation-id> --expired --yes
+ai4j history purge <installation-id> --dry-run --expired
+ai4j history purge <installation-id> --expired --yes
 ```
 
 History purge never changes current Claude or AI4J-owned target content. Purging the final point of an archived installation also removes its tombstone, as disclosed by the plan.
@@ -436,8 +438,8 @@ History purge never changes current Claude or AI4J-owned target content. Purging
 Review removal before applying it:
 
 ```sh
-ai4j uninstall --dry-run --installation <installation-id>
-ai4j uninstall --installation <installation-id> --yes
+ai4j uninstall <installation-id> --dry-run
+ai4j uninstall <installation-id> --yes
 ```
 
 Uninstall:
