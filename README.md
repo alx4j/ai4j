@@ -64,21 +64,6 @@ ai4j version
 
 The formula installs the public release and verifies its SHA-256 checksum.
 
-### Manual installation on macOS
-
-Download `ai4j`, `ai4j.sha256`, and `ai4j.version.json` from the same
-[GitHub release](https://github.com/alx4j/ai4j/releases). Then verify and install
-the executable:
-
-```sh
-shasum -a 256 -c ai4j.sha256
-chmod 0755 ai4j
-mkdir -p "$HOME/.local/bin"
-mv ai4j "$HOME/.local/bin/ai4j"
-export PATH="$HOME/.local/bin:$PATH"
-ai4j version
-```
-
 ### Manual installation on Windows
 
 Download `ai4j.exe`, `ai4j.exe.sha256`, and `ai4j.exe.version.json` from the
@@ -286,59 +271,3 @@ unsupported environments, source failures, validation failures, conflicts,
 compensated failures, recovery requirements, and internal failures. See the
 [full user guide](USER_GUIDE.md#json-output-and-automation) for the complete
 table.
-
-## Safety model
-
-AI4J is deliberately conservative around installation state:
-
-- Plans are read-only and disclose the exact source and active content.
-- `--expected-commit` and `--expected-source-digest` bind apply to review.
-- Toolkit scripts, binaries, hooks, and MCP servers are not started implicitly.
-- AI4J changes or removes only resources it can attribute to an installation.
-- Existing drift and ambiguous ownership stop mutation by default.
-- Modifying operations are locked, journaled, verified, and recoverable.
-- Private state and rollback data use host-native access restrictions.
-- Disk capacity is checked before bounded staging and retained-data writes.
-
-`ai4j doctor` is static by default. The optional `--test-mcp <server-id>` form
-does start the selected process with your current user permissions after an
-explicit warning and approval. It is a bounded startup check, not a sandbox or
-a full health guarantee.
-
-If a command reports `recovery_required`, stop modifying operations and run:
-
-```sh
-ai4j status --json
-```
-
-Retain that output and inspect the reported state before changing files
-manually. Do not delete recovery markers merely to bypass the protection.
-
-## Current limits
-
-AI4J v1 intentionally does not provide:
-
-- Automated Codex installation, enablement, update, or uninstall
-- Linux, Intel macOS, Windows on ARM, or Rosetta support
-- Stored GitHub credentials or OAuth
-- Offline GitHub operation or a persistent source cache
-- Release signing, Apple notarization, Windows Authenticode, SBOMs, or
-  provenance attestations
-
-Unsupported combinations fail explicitly instead of degrading silently.
-
-## Documentation
-
-- [Full user guide](USER_GUIDE.md)
-- [Compatibility and qualification evidence](COMPATIBILITY.md)
-- [v1 requirements](V1_REQUIREMENTS.md)
-- [v1 implementation plan](V1_IMPLEMENTATION_PLAN.md)
-- [MVP requirements](MVP_REQUIREMENTS.md)
-- [Backlog](BACKLOG.md)
-
-## Contributing
-
-Development happens through pull requests. Create a branch from `main`, keep
-the change focused, and open a PR. The protected branch requires the Linux
-quality and reproducibility checks, Darwin ARM64 race tests, and Windows x64
-contracts to pass before merge.
