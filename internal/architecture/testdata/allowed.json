@@ -1,0 +1,8 @@
+{
+  "github.com/alx4j/ai4j/internal/domain": ["fmt"],
+  "github.com/alx4j/ai4j/internal/lifecycle": ["github.com/alx4j/ai4j/internal/domain"],
+  "github.com/alx4j/ai4j/internal/registry": [
+    "github.com/alx4j/ai4j/internal/domain",
+    "github.com/alx4j/ai4j/internal/lifecycle"
+  ]
+}

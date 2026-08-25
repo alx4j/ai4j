@@ -1,0 +1,1387 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/common.json",
+  "title": "AI4J schema v1 common definitions",
+  "$comment": "Schema-version-1 objects intentionally accept additive optional fields. Consumers must ignore unrecognized object fields. Closed-enum values and required-field semantics change only with a new schema version.",
+  "$defs": {
+    "command": {
+      "type": "string",
+      "enum": [
+        "init",
+        "validate",
+        "build",
+        "plan.install",
+        "install",
+        "plan.update",
+        "update",
+        "plan.sync",
+        "sync",
+        "list",
+        "status",
+        "doctor",
+        "plan.rollback",
+        "rollback",
+        "plan.uninstall",
+        "uninstall",
+        "history",
+        "plan.history.purge",
+        "history.purge",
+        "version"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "no_change", "degraded", "cancelled", "error"]
+    },
+    "operationId": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        {"type": "null"}
+      ]
+    },
+    "diagnosticContext": {
+      "type": "object",
+      "required": ["field", "value"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["code", "message", "context"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "context": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/diagnosticContext"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "baseEnvelope": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "command",
+        "status",
+        "changed",
+        "operationId",
+        "exitCode",
+        "data",
+        "warnings",
+        "errors"
+      ],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "command": {
+          "oneOf": [
+            {"$ref": "#/$defs/command"},
+            {"type": "null"}
+          ]
+        },
+        "status": {"$ref": "#/$defs/status"},
+        "changed": {"type": "boolean"},
+        "operationId": {"$ref": "#/$defs/operationId"},
+        "exitCode": {
+          "type": "integer",
+          "enum": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        },
+        "data": {},
+        "warnings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/diagnostic"}
+        },
+        "errors": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/diagnostic"}
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {"enum": ["ok", "no_change"]}
+            }
+          },
+          "then": {
+            "properties": {
+              "exitCode": {"const": 0},
+              "errors": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "degraded"}
+            }
+          },
+          "then": {
+            "properties": {
+              "changed": {"const": false},
+              "exitCode": {"const": 0},
+              "warnings": {"minItems": 1},
+              "errors": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"enum": ["cancelled", "error"]}
+            }
+          },
+          "then": {
+            "properties": {
+              "errors": {"minItems": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "no_change"}
+            }
+          },
+          "then": {
+            "properties": {
+              "changed": {"const": false}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "cancelled"}
+            }
+          },
+          "then": {
+            "properties": {
+              "changed": {"const": false},
+              "exitCode": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {"const": "error"}
+            }
+          },
+          "then": {
+            "properties": {
+              "exitCode": {"enum": [2, 3, 4, 5, 6, 7, 8, 9]}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "repositoryIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 151,
+      "pattern": "^github\\.com/[a-z0-9]([a-z0-9-]{0,38})/[a-z0-9]([a-z0-9._-]{0,99})$",
+      "not": {"pattern": "\\.git$"}
+    },
+    "sha1Oid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "not": {"const": "0000000000000000000000000000000000000000"}
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}
+    },
+    "commitIdentity": {
+      "type": "object",
+      "required": ["repository", "objectFormat", "oid"],
+      "properties": {
+        "repository": {"$ref": "#/$defs/repositoryIdentity"},
+        "objectFormat": {"const": "sha1"},
+        "oid": {"$ref": "#/$defs/sha1Oid"}
+      },
+      "additionalProperties": true
+    },
+    "sourceCommit": {
+      "$comment": "The validated Go Source contract guarantees this commit belongs to source.repository before projection, so v1 does not duplicate the repository field.",
+      "type": "object",
+      "required": ["objectFormat", "oid"],
+      "properties": {
+        "objectFormat": {"const": "sha1"},
+        "oid": {"$ref": "#/$defs/sha1Oid"}
+      },
+      "additionalProperties": true
+    },
+    "sourceTree": {
+      "$comment": "The root tree is deliberately separate from the repository commit identity.",
+      "type": "object",
+      "required": ["objectFormat", "oid"],
+      "properties": {
+        "objectFormat": {"const": "sha1"},
+        "oid": {"$ref": "#/$defs/sha1Oid"}
+      },
+      "additionalProperties": true
+    },
+    "sourceRenderedDigest": {
+      "$comment": "The rendered package digest is deliberately separate from Git object identities.",
+      "type": "object",
+      "required": ["algorithm", "digest"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "digest": {"$ref": "#/$defs/sha256Digest"}
+      },
+      "additionalProperties": true
+    },
+    "sourceBuildCommit": {
+      "$comment": "The AI4J CLI build commit is deliberately separate from the toolkit repository commit.",
+      "type": "object",
+      "required": ["objectFormat", "oid"],
+      "properties": {
+        "objectFormat": {"const": "sha1"},
+        "oid": {"$ref": "#/$defs/sha1Oid"}
+      },
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "sourceMode", "sourceSelection", "repository", "requestedRef", "resolvedRefKind",
+        "resolvedRefName", "trackingPolicy", "commit", "rootTree", "checkout", "sourceDigest",
+        "dirty", "renderedDigest", "cliBuildCommit"
+      ],
+      "properties": {
+        "sourceMode": {"type": "string", "enum": ["github", "development_source"]},
+        "sourceSelection": {
+          "type": "string",
+          "enum": ["built_in_default", "explicit"]
+        },
+        "repository": {"oneOf": [{"$ref": "#/$defs/repositoryIdentity"}, {"type": "null"}]},
+        "requestedRef": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+            },
+            {"type": "null"}
+          ]
+        },
+        "resolvedRefKind": {
+          "oneOf": [{"type": "string", "enum": ["default_branch", "branch", "tag", "commit"]}, {"type": "null"}]
+        },
+        "resolvedRefName": {
+          "oneOf": [{"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"}, {"type": "null"}]
+        },
+        "trackingPolicy": {
+          "oneOf": [{"type": "string", "enum": ["track_fast_forward", "pinned"]}, {"type": "null"}]
+        },
+        "commit": {"oneOf": [{"$ref": "#/$defs/sourceCommit"}, {"type": "null"}]},
+        "rootTree": {"oneOf": [{"$ref": "#/$defs/sourceTree"}, {"type": "null"}]},
+        "checkout": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "sourceDigest": {"oneOf": [{"$ref": "#/$defs/sourceRenderedDigest"}, {"type": "null"}]},
+        "dirty": {"type": "boolean"},
+        "renderedDigest": {"$ref": "#/$defs/sourceRenderedDigest"},
+        "cliBuildCommit": {"$ref": "#/$defs/sourceBuildCommit"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"sourceMode": {"const": "github"}}},
+          "then": {"properties": {"repository": {"$ref": "#/$defs/repositoryIdentity"}, "resolvedRefKind": {"type": "string"}, "resolvedRefName": {"type": "string"}, "trackingPolicy": {"type": "string"}, "commit": {"$ref": "#/$defs/sourceCommit"}, "rootTree": {"$ref": "#/$defs/sourceTree"}, "checkout": {"type": "null"}, "sourceDigest": {"type": "null"}, "dirty": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"sourceMode": {"const": "development_source"}}},
+          "then": {"properties": {"sourceSelection": {"const": "explicit"}, "repository": {"type": "null"}, "requestedRef": {"type": "null"}, "resolvedRefKind": {"type": "null"}, "resolvedRefName": {"type": "null"}, "trackingPolicy": {"type": "null"}, "commit": {"type": "null"}, "rootTree": {"type": "null"}, "checkout": {"type": "string"}, "sourceDigest": {"$ref": "#/$defs/sourceRenderedDigest"}}}
+        },
+        {
+          "if": {
+            "required": ["resolvedRefKind"],
+            "properties": {"resolvedRefKind": {"const": "default_branch"}}
+          },
+          "then": {"properties": {"requestedRef": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "required": ["resolvedRefKind"],
+            "properties": {"resolvedRefKind": {"enum": ["branch", "tag", "commit"]}}
+          },
+          "then": {
+            "properties": {
+              "requestedRef": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resolvedRefKind"],
+            "properties": {"resolvedRefKind": {"enum": ["default_branch", "branch"]}}
+          },
+          "then": {"properties": {"trackingPolicy": {"const": "track_fast_forward"}}}
+        },
+        {
+          "if": {
+            "required": ["resolvedRefKind"],
+            "properties": {"resolvedRefKind": {"enum": ["tag", "commit"]}}
+          },
+          "then": {"properties": {"trackingPolicy": {"const": "pinned"}}}
+        },
+        {
+          "if": {
+            "required": ["resolvedRefKind"],
+            "properties": {"resolvedRefKind": {"const": "commit"}}
+          },
+          "then": {"properties": {"resolvedRefName": {"$ref": "#/$defs/sha1Oid"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "validationSummary": {
+      "type": "object",
+      "required": ["valid", "errorCount", "warningCount"],
+      "properties": {
+        "valid": {"type": "boolean"},
+        "errorCount": {"type": "integer", "minimum": 0},
+        "warningCount": {"type": "integer", "minimum": 0}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"valid": {"const": true}}},
+          "then": {"properties": {"errorCount": {"const": 0}}}
+        },
+        {
+          "if": {"properties": {"valid": {"const": false}}},
+          "then": {"properties": {"errorCount": {"minimum": 1}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "checksum": {
+      "type": "object",
+      "required": ["algorithm", "digest"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "digest": {"$ref": "#/$defs/sha256Digest"}
+      },
+      "additionalProperties": true
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "ownership",
+        "dependency",
+        "command",
+        "args",
+        "cwd",
+        "supportedPlaceholders",
+        "environment"
+      ],
+      "properties": {
+        "ownership": {
+          "type": "string",
+          "enum": ["toolkit_owned", "host_resolved"]
+        },
+        "dependency": {
+          "type": "string",
+          "enum": ["required", "optional"]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "args": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string",
+            "maxLength": 4096,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+          }
+        },
+        "cwd": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+            },
+            {"type": "null"}
+          ]
+        },
+        "supportedPlaceholders": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_PROJECT_DIR}"]
+          }
+        },
+        "environment": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "activeContent": {
+      "type": "object",
+      "required": ["componentType", "identifier", "sourcePath", "checksum", "change", "execution"],
+      "properties": {
+        "componentType": {
+          "type": "string",
+            "enum": ["skill", "agent", "shared_instruction", "script", "binary", "mcp", "prompt_template", "reference", "support", "hook", "extension"]
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+        },
+        "sourcePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "checksum": {"$ref": "#/$defs/checksum"},
+        "change": {
+          "type": "string",
+          "enum": ["unchanged", "added", "changed", "removed"]
+        },
+        "execution": {
+          "oneOf": [
+            {"$ref": "#/$defs/execution"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["componentType"],
+            "properties": {"componentType": {"enum": ["skill", "agent", "shared_instruction", "prompt_template", "reference", "support", "hook", "extension"]}}
+          },
+          "then": {"properties": {"execution": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "required": ["componentType"],
+            "properties": {"componentType": {"enum": ["script", "binary", "mcp"]}}
+          },
+          "then": {"properties": {"execution": {"$ref": "#/$defs/execution"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["install", "update", "sync", "rollback", "uninstall", "history_purge"]
+    },
+    "updateDisposition": {
+      "type": "string",
+      "enum": [
+        "not_checked",
+        "not_installed",
+        "up_to_date",
+        "available",
+        "pinned",
+        "ref_rewritten",
+        "unknown"
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "required": ["state", "checksum"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["absent", "present", "matches_checksum"]
+        },
+        "checksum": {
+          "oneOf": [
+            {"$ref": "#/$defs/checksum"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["state"],
+            "properties": {"state": {"const": "matches_checksum"}}
+          },
+          "then": {"properties": {"checksum": {"$ref": "#/$defs/checksum"}}}
+        },
+        {
+          "if": {
+            "required": ["state"],
+            "properties": {"state": {"enum": ["absent", "present"]}}
+          },
+          "then": {"properties": {"checksum": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "sequence",
+        "owner",
+        "kind",
+        "resource",
+        "expectedPrecondition",
+        "proposedPostcondition",
+        "recoveryRequirement"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1},
+        "owner": {
+          "type": "string",
+          "enum": ["ai4j", "claude"]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "validate_source",
+            "prepare_recovery",
+            "write_catalog",
+            "remove_catalog",
+            "register_marketplace",
+            "refresh_marketplace",
+            "remove_marketplace",
+            "install_plugin",
+            "update_plugin",
+            "enable_plugin",
+            "disable_plugin",
+            "uninstall_plugin",
+            "write_rules",
+            "remove_rules",
+            "commit_state",
+            "remove_state",
+            "cleanup"
+          ]
+        },
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "expectedPrecondition": {"$ref": "#/$defs/condition"},
+        "proposedPostcondition": {"$ref": "#/$defs/condition"},
+        "recoveryRequirement": {
+          "type": "string",
+          "enum": ["none", "structural_inverse", "full_preimage", "native_artifact", "exact_handle"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "stateSummary": {
+      "type": "object",
+      "required": ["installation", "native", "ownedState"],
+      "properties": {
+        "installation": {
+          "type": "string",
+          "enum": ["absent", "present"]
+        },
+        "native": {
+          "type": "string",
+          "enum": ["absent", "present"]
+        },
+        "ownedState": {
+          "type": "string",
+          "enum": ["absent", "present"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "operationResult": {
+      "type": "object",
+      "required": ["phase", "outcome", "mutation", "durableChange"],
+      "properties": {
+        "phase": {
+          "type": "string",
+          "enum": [
+            "none",
+            "prepared",
+            "applying",
+            "reconciled",
+            "compensating",
+            "committed_cleanup_pending",
+            "rolled_back_cleanup_pending",
+            "complete",
+            "complete_rolled_back"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["none", "pending", "committed", "rolled_back"]
+        },
+        "mutation": {
+          "type": "string",
+          "enum": ["not_started", "started"]
+        },
+        "durableChange": {
+          "type": "string",
+          "enum": ["none", "committed_no_diff", "committed_diff"]
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"phase": {"const": "none"}}}, "then": {"properties": {"outcome": {"const": "none"}, "mutation": {"const": "not_started"}, "durableChange": {"const": "none"}}}},
+        {"if": {"properties": {"phase": {"const": "prepared"}}}, "then": {"properties": {"outcome": {"const": "pending"}, "mutation": {"const": "not_started"}, "durableChange": {"const": "none"}}}},
+        {"if": {"properties": {"phase": {"enum": ["applying", "reconciled", "compensating"]}}}, "then": {"properties": {"outcome": {"const": "pending"}, "mutation": {"const": "started"}, "durableChange": {"const": "none"}}}},
+        {"if": {"properties": {"phase": {"enum": ["committed_cleanup_pending", "complete"]}}}, "then": {"properties": {"outcome": {"const": "committed"}, "mutation": {"const": "started"}, "durableChange": {"enum": ["committed_no_diff", "committed_diff"]}}}},
+        {"if": {"properties": {"phase": {"enum": ["rolled_back_cleanup_pending", "complete_rolled_back"]}}}, "then": {"properties": {"outcome": {"const": "rolled_back"}, "durableChange": {"const": "none"}}}}
+      ],
+      "additionalProperties": true
+    },
+    "conflict": {
+      "type": "object",
+      "required": ["code", "resource", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        }
+      },
+      "additionalProperties": true
+    },
+    "recordedSource": {
+      "type": "object",
+      "required": ["sourceMode", "sourceSelection", "repository", "requestedRef", "resolvedRefKind", "commit", "checkout", "sourceDigest", "dirty"],
+      "properties": {
+        "sourceMode": {"type": "string", "enum": ["github", "development_source"]},
+        "sourceSelection": {"type": "string", "enum": ["built_in_default", "explicit"]},
+        "repository": {"oneOf": [{"$ref": "#/$defs/repositoryIdentity"}, {"type": "null"}]},
+        "requestedRef": {
+          "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+            {"type": "null"}
+          ]
+        },
+        "resolvedRefKind": {"oneOf": [{"type": "string", "enum": ["default_branch", "branch", "tag", "commit"]}, {"type": "null"}]},
+        "commit": {"oneOf": [{"$ref": "#/$defs/sourceCommit"}, {"type": "null"}]},
+        "checkout": {"oneOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "sourceDigest": {"oneOf": [{"$ref": "#/$defs/sourceRenderedDigest"}, {"type": "null"}]},
+        "dirty": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"sourceMode": {"const": "github"}}},
+          "then": {"properties": {"repository": {"$ref": "#/$defs/repositoryIdentity"}, "resolvedRefKind": {"type": "string"}, "commit": {"$ref": "#/$defs/sourceCommit"}, "checkout": {"type": "null"}, "sourceDigest": {"type": "null"}, "dirty": {"const": false}}}
+        },
+        {
+          "if": {"properties": {"sourceMode": {"const": "development_source"}}},
+          "then": {"properties": {"sourceSelection": {"const": "explicit"}, "repository": {"type": "null"}, "requestedRef": {"type": "null"}, "resolvedRefKind": {"type": "null"}, "commit": {"type": "null"}, "checkout": {"type": "string"}, "sourceDigest": {"$ref": "#/$defs/sourceRenderedDigest"}}}
+        },
+        {
+          "if": {"properties": {"sourceMode": {"const": "github"}, "resolvedRefKind": {"const": "default_branch"}}},
+          "then": {"properties": {"requestedRef": {"type": "null"}}},
+          "else": {"properties": {"requestedRef": {"type": "string"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "installationRecord": {
+      "type": "object",
+      "required": [
+        "installationId",
+        "toolkitId",
+        "nativePluginId",
+        "toolkitVersion",
+        "cliVersion"
+      ],
+      "properties": {
+        "installationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "toolkitId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9-]{1,62}$"
+        },
+        "nativePluginId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "source": {"$ref": "#/$defs/recordedSource"},
+        "toolkitVersion": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+        "cliVersion": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"}
+      },
+      "additionalProperties": true
+    },
+    "nativeState": {
+      "type": "object",
+      "required": [
+        "registration",
+        "installation",
+        "enablement",
+        "activation",
+        "reload",
+        "nextSession",
+        "policy",
+        "version"
+      ],
+      "properties": {
+        "registration": {
+          "type": "string",
+          "enum": ["registered", "not_registered", "unknown", "not_observable"]
+        },
+        "installation": {
+          "type": "string",
+          "enum": ["installed", "not_installed", "unknown", "not_observable"]
+        },
+        "enablement": {
+          "type": "string",
+          "enum": ["enabled", "disabled", "unknown", "not_observable"]
+        },
+        "activation": {
+          "type": "string",
+          "enum": ["active", "inactive", "unknown", "not_observable"]
+        },
+        "reload": {
+          "type": "string",
+          "enum": ["not_required", "required", "unknown", "not_observable"]
+        },
+        "nextSession": {
+          "type": "string",
+          "enum": ["required", "not_required", "unknown", "not_observable"]
+        },
+        "policy": {
+          "type": "string",
+          "enum": ["allowed", "policy_blocked", "unknown", "not_observable"]
+        },
+        "version": {"$ref": "#/$defs/nativeVersion"}
+      },
+      "additionalProperties": true
+    },
+    "nativeVersion": {
+      "$comment": "For observation=observed, constructor projection supplies the authoritative expected and observed values; equality means a match and inequality means a mismatch.",
+      "type": "object",
+      "required": ["expected", "observed", "observation"],
+      "properties": {
+        "expected": {
+          "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+            {"type": "null"}
+          ]
+        },
+        "observed": {
+          "oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+            {"type": "null"}
+          ]
+        },
+        "observation": {
+          "type": "string",
+          "enum": ["observed", "not_applicable", "unknown", "not_observable"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"observation": {"const": "observed"}}},
+          "then": {"properties": {"expected": {"type": "string", "minLength": 1, "maxLength": 128}, "observed": {"type": "string", "minLength": 1, "maxLength": 128}}}
+        },
+        {
+          "if": {"properties": {"observation": {"const": "not_applicable"}}},
+          "then": {"properties": {"expected": {"type": "null"}, "observed": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"observation": {"enum": ["unknown", "not_observable"]}}},
+          "then": {"properties": {"expected": {"type": "string", "minLength": 1, "maxLength": 128}, "observed": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "drift": {
+      "type": "object",
+      "required": ["resource", "state"],
+      "properties": {
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "state": {
+          "type": "string",
+          "enum": ["unchanged", "modified", "missing", "conflicting"]
+        }
+      },
+      "additionalProperties": true
+    },
+    "recoveryState": {
+      "type": "object",
+      "required": ["state", "phase"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["none", "incomplete_journal", "cleanup_required", "unsupported_schema", "unknown"]
+        },
+        "phase": {
+          "oneOf": [
+            {"$ref": "#/$defs/operationResult/properties/phase"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["state"],
+            "properties": {"state": {"const": "incomplete_journal"}}
+          },
+          "then": {"properties": {"phase": {"enum": [null, "prepared", "applying", "reconciled", "compensating"]}}}
+        },
+        {
+          "if": {
+            "required": ["state"],
+            "properties": {"state": {"const": "cleanup_required"}}
+          },
+          "then": {"properties": {"phase": {"enum": ["committed_cleanup_pending", "rolled_back_cleanup_pending"]}}}
+        },
+        {
+          "if": {
+            "required": ["state"],
+            "properties": {"state": {"enum": ["none", "unsupported_schema", "unknown"]}}
+          },
+          "then": {"properties": {"phase": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "readOnlyEnvelope": {
+      "allOf": [
+        {"$ref": "#/$defs/baseEnvelope"},
+        {"properties": {"changed": {"const": false}, "exitCode": {"not": {"const": 7}}}}
+      ]
+    },
+    "validateEnvelopeSemantics": {
+      "allOf": [
+        {"if": {"properties": {"data": {"type": "object", "properties": {"validation": {"properties": {"valid": {"const": true}}}}}}}, "then": {"properties": {"status": {"enum": ["ok", "no_change", "degraded"]}, "exitCode": {"const": 0}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"validation": {"properties": {"valid": {"const": false}}}}}}}, "then": {"properties": {"status": {"const": "error"}, "exitCode": {"const": 5}}}}
+      ]
+    },
+    "updateDispositionEnvelopeSemantics": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {"updateDisposition": {"const": "pinned"}}
+              }
+            }
+          },
+          "then": {"properties": {"status": {"const": "no_change"}, "changed": {"const": false}, "exitCode": {"const": 0}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {"updateDisposition": {"const": "unknown"}}
+              }
+            }
+          },
+          "then": {"properties": {"status": {"const": "error"}, "changed": {"const": false}, "exitCode": {"const": 4}}}
+        }
+      ]
+    },
+    "planEnvelopeSemantics": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "required": ["conflicts"],
+                "properties": {"conflicts": {"minItems": 1}}
+              }
+            }
+          },
+          "then": {"properties": {"status": {"const": "error"}, "exitCode": {"const": 6}}}
+        },
+        {
+          "if": {
+            "properties": {"data": {"type": "object"}, "status": {"const": "error"}, "exitCode": {"const": 6}}
+          },
+          "then": {"properties": {"data": {"properties": {"conflicts": {"minItems": 1}}}}}
+        }
+      ]
+    },
+    "statusEnvelopeSemantics": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {"recoveryState": {"properties": {"state": {"enum": ["incomplete_journal", "cleanup_required", "unsupported_schema", "unknown"]}}}}
+              }
+            }
+          },
+          "then": {"properties": {"status": {"const": "error"}, "exitCode": {"const": 8}}}
+        },
+        {
+          "if": {"properties": {"data": {"type": "object"}, "status": {"const": "error"}, "exitCode": {"const": 8}}},
+          "then": {"properties": {"data": {"properties": {"recoveryState": {"properties": {"state": {"not": {"const": "none"}}}}}}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {"updateDisposition": {"const": "unknown"}}
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {"const": "error"},
+              "exitCode": {"const": 4},
+              "data": {"properties": {"recoveryState": {"properties": {"state": {"const": "none"}}}}}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"data": {"type": "object"}, "status": {"const": "error"}, "exitCode": {"const": 4}}},
+          "then": {"properties": {"data": {"properties": {"updateDisposition": {"const": "unknown"}}}}}
+        }
+      ]
+    },
+    "mutationEnvelopeSemantics": {
+      "allOf": [
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"durableChange": {"const": "committed_diff"}}}}}}}, "then": {"properties": {"changed": {"const": true}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"durableChange": {"enum": ["none", "committed_no_diff"]}}}}}}}, "then": {"properties": {"changed": {"const": false}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"phase": {"const": "complete"}}}}}}}, "then": {"properties": {"status": {"enum": ["ok", "degraded"]}, "exitCode": {"const": 0}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"phase": {"enum": ["prepared", "applying", "reconciled", "compensating", "committed_cleanup_pending", "rolled_back_cleanup_pending"]}}}}}}}, "then": {"properties": {"status": {"const": "error"}, "exitCode": {"const": 8}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"phase": {"const": "complete_rolled_back"}, "mutation": {"const": "started"}}}}}}}, "then": {"properties": {"status": {"const": "error"}, "exitCode": {"const": 7}, "changed": {"const": false}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"phase": {"const": "complete_rolled_back"}, "mutation": {"const": "not_started"}}}}}}}, "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "exitCode": {"enum": [1, 2, 3, 4, 5, 6, 8, 9]}, "changed": {"const": false}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"operationResult": {"properties": {"phase": {"const": "none"}}}}}}}, "then": {"properties": {"exitCode": {"not": {"const": 7}}, "changed": {"const": false}}}},
+        {"if": {"properties": {"data": {"type": "object", "properties": {"updateDisposition": {"const": "unknown"}}}}}, "then": {"properties": {"data": {"properties": {"operationResult": {"properties": {"phase": {"const": "none"}, "outcome": {"const": "none"}, "mutation": {"const": "not_started"}, "durableChange": {"const": "none"}}}}}, "status": {"const": "error"}, "changed": {"const": false}, "exitCode": {"const": 4}}}}
+      ]
+    },
+    "validateData": {
+      "type": "object",
+      "required": ["source", "validation", "activeContent"],
+      "properties": {
+        "source": {"$ref": "#/$defs/source"},
+        "validation": {"$ref": "#/$defs/validationSummary"},
+        "activeContent": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/activeContent"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "buildArtifact": {
+      "type": "object",
+      "required": ["path", "checksum", "sizeBytes"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "checksum": {"$ref": "#/$defs/checksum"},
+        "sizeBytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "buildData": {
+      "type": "object",
+      "required": ["source", "target", "host", "outputRoot", "reproducible", "validation", "artifacts", "selection", "activeContent"],
+      "properties": {
+        "source": {"$ref": "#/$defs/source"},
+        "target": {"type": "string", "enum": ["claude", "codex"]},
+        "host": {"type": "string", "enum": ["darwin-arm64", "windows-amd64"]},
+        "outputRoot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "reproducible": {"type": "boolean"},
+        "validation": {"$ref": "#/$defs/validationSummary"},
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/buildArtifact"}
+        },
+        "selection": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "required": ["asset", "variant", "reason", "requestedBy"],
+            "properties": {
+              "asset": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+              "variant": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+              "reason": {"type": "string", "enum": ["all", "explicit", "bundle", "dependency", "native_unit"]},
+              "requestedBy": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "activeContent": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/activeContent"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "initData": {
+      "type": "object",
+      "required": ["targets", "outputRoot", "validation", "reproducible", "artifacts"],
+      "properties": {
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["claude", "codex"]}
+        },
+        "outputRoot": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+        },
+        "validation": {"$ref": "#/$defs/validationSummary"},
+        "reproducible": {"const": true},
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4096,
+          "items": {"$ref": "#/$defs/buildArtifact"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "planData": {
+      "type": "object",
+      "required": [
+        "operation",
+        "source",
+        "installationId",
+        "actions",
+        "activeContent",
+        "conflicts",
+        "expectedFinalState",
+        "updateDisposition"
+      ],
+      "properties": {
+        "operation": {"$ref": "#/$defs/operation"},
+        "source": {"$ref": "#/$defs/source"},
+        "installationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "actions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/action"}
+        },
+        "activeContent": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/activeContent"}
+        },
+        "conflicts": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/conflict"}
+        },
+        "expectedFinalState": {"$ref": "#/$defs/stateSummary"},
+        "updateDisposition": {"$ref": "#/$defs/updateDisposition"}
+      },
+      "additionalProperties": true
+    },
+    "mutationData": {
+      "type": "object",
+      "required": [
+        "operation",
+        "operationResult",
+        "installationId",
+        "appliedActions",
+        "finalState",
+        "updateDisposition"
+      ],
+      "properties": {
+        "operation": {"$ref": "#/$defs/operation"},
+        "operationResult": {"$ref": "#/$defs/operationResult"},
+        "installationId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            {"type": "null"}
+          ]
+        },
+        "appliedActions": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/action"}
+        },
+        "finalState": {"$ref": "#/$defs/stateSummary"},
+        "updateDisposition": {"$ref": "#/$defs/updateDisposition"}
+      },
+      "additionalProperties": true
+    },
+    "listData": {
+      "type": "object",
+      "required": ["installations", "migration"],
+      "properties": {
+        "migration": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["fromVersion", "toVersion", "changes"],
+              "properties": {
+                "fromVersion": {"type": "integer", "minimum": 1},
+                "toVersion": {"type": "integer", "minimum": 2},
+                "changes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"}}
+              },
+              "additionalProperties": true
+            },
+            {"type": "null"}
+          ]
+        },
+        "installations": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "required": ["installationId", "toolkitId", "target", "scope", "scopeRoot", "lifecycle", "source", "all", "assets", "bundles", "resolved", "health", "historyCount", "lastOperationId"],
+            "properties": {
+              "installationId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+              "toolkitId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+              "target": {"type": "string", "enum": ["claude", "codex"]},
+              "scope": {"type": "string", "enum": ["user", "project-local", "project-shared"]},
+              "scopeRoot": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+              "lifecycle": {"type": "string", "enum": ["active", "archived"]},
+              "source": {"$ref": "#/$defs/recordedSource"},
+              "all": {"type": "boolean"},
+              "assets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
+              "bundles": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
+              "resolved": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
+              "health": {"type": "string", "enum": ["healthy", "drifted", "unknown", "recovery_required"]},
+              "historyCount": {"type": "integer", "minimum": 0, "maximum": 1024},
+              "lastOperationId": {"oneOf": [{"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"}, {"type": "null"}]}
+            },
+            "allOf": [
+              {"if": {"properties": {"all": {"const": true}}}, "then": {"properties": {"assets": {"maxItems": 0}, "bundles": {"maxItems": 0}}}},
+              {"if": {"properties": {"all": {"const": false}}}, "then": {"anyOf": [{"properties": {"assets": {"minItems": 1}}}, {"properties": {"bundles": {"minItems": 1}}}]}}
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "statusData": {
+      "type": "object",
+      "required": ["installation", "nativeState", "drift", "recoveryState", "updateDisposition"],
+      "properties": {
+        "installation": {
+          "oneOf": [
+            {"$ref": "#/$defs/installationRecord"},
+            {"type": "null"}
+          ]
+        },
+        "nativeState": {"$ref": "#/$defs/nativeState"},
+        "drift": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/drift"}
+        },
+        "recoveryState": {"$ref": "#/$defs/recoveryState"},
+        "updateDisposition": {"$ref": "#/$defs/updateDisposition"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"installation": {"type": "null"}}},
+          "then": {"properties": {"nativeState": {"properties": {"version": {"properties": {"expected": {"type": "null"}, "observed": {"type": "null"}, "observation": {"const": "not_applicable"}}}}}}}
+        },
+        {
+          "if": {"properties": {"installation": {"type": "null"}, "recoveryState": {"properties": {"state": {"const": "none"}}}}},
+          "then": {"properties": {"updateDisposition": {"const": "not_installed"}}}
+        },
+        {
+          "if": {"properties": {"installation": {"type": "object"}}},
+          "then": {"properties": {"updateDisposition": {"not": {"const": "not_installed"}}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "versionData": {
+      "type": "object",
+      "required": [
+        "product",
+        "executable",
+        "cliVersion",
+        "cliSource",
+        "goVersion",
+        "buildTime",
+        "target",
+        "defaultSource"
+      ],
+      "properties": {
+        "product": {"const": "AI4J"},
+        "executable": {"const": "ai4j"},
+        "cliVersion": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+        "cliSource": {"$ref": "#/$defs/commitIdentity"},
+        "goVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^go[0-9]+\\.[0-9]+(\\.[0-9]+)?([a-z0-9.-]+)?$"
+        },
+        "buildTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "target": {
+          "type": "object",
+          "required": ["os", "arch"],
+          "properties": {
+            "os": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z0-9_]+$"
+            },
+            "arch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32,
+              "pattern": "^[a-z0-9_]+$"
+            }
+          },
+          "additionalProperties": true
+        },
+        "defaultSource": {
+          "type": "object",
+          "required": ["repository", "reference", "refPolicy"],
+          "properties": {
+            "repository": {"$ref": "#/$defs/repositoryIdentity"},
+            "reference": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1024,
+                  "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+                },
+                {"type": "null"}
+              ]
+            },
+            "refPolicy": {
+              "type": "string",
+              "enum": ["repository_default_branch", "fixed_ref"]
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": ["refPolicy"],
+                "properties": {"refPolicy": {"const": "repository_default_branch"}}
+              },
+              "then": {"properties": {"reference": {"type": "null"}}}
+            },
+            {
+              "if": {
+                "required": ["refPolicy"],
+                "properties": {"refPolicy": {"const": "fixed_ref"}}
+              },
+              "then": {
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"
+                  }
+                }
+              }
+            }
+          ],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

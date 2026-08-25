@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/install.json",
+  "title": "AI4J schema v1 install response",
+  "$defs": {
+    "data": {
+      "allOf": [
+        {"$ref": "common.json#/$defs/mutationData"},
+        {"properties": {"operation": {"const": "install"}}}
+      ]
+    }
+  },
+  "allOf": [
+    {"$ref": "common.json#/$defs/baseEnvelope"},
+    {"$ref": "common.json#/$defs/mutationEnvelopeSemantics"},
+    {"$ref": "common.json#/$defs/updateDispositionEnvelopeSemantics"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "install"},
+        "data": {
+          "oneOf": [
+            {"$ref": "#/$defs/data"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["status"],
+            "properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}
+          },
+          "then": {"properties": {"data": {"$ref": "#/$defs/data"}}}
+        },
+        {
+          "if": {"required": ["data"], "properties": {"data": {"type": "null"}}},
+          "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "changed": {"const": false}, "exitCode": {"enum": [1, 2, 3, 4, 5, 6, 8, 9]}}}
+        }
+      ],
+      "additionalProperties": true
+    }
+  ]
+}

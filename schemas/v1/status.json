@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/status.json",
+  "title": "AI4J schema v1 status response",
+  "$defs": {
+    "data": {"$ref": "common.json#/$defs/statusData"}
+  },
+  "allOf": [
+    {"$ref": "common.json#/$defs/readOnlyEnvelope"},
+    {"$ref": "common.json#/$defs/statusEnvelopeSemantics"},
+    {"$ref": "common.json#/$defs/updateDispositionEnvelopeSemantics"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "status"},
+        "data": {
+          "oneOf": [
+            {"$ref": "#/$defs/data"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["status"],
+            "properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}
+          },
+          "then": {"properties": {"data": {"$ref": "#/$defs/data"}}}
+        },
+        {
+          "if": {"required": ["data"], "properties": {"data": {"type": "null"}}},
+          "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "exitCode": {"enum": [1, 2, 3, 5, 6, 9]}}}
+        }
+      ],
+      "additionalProperties": true
+    }
+  ]
+}

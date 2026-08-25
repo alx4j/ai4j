@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 2,
+  "toolkit": {
+    "id": "ai4j",
+    "declarationId": "ai4j",
+    "version": "1.0.0",
+    "displayName": "AI4J Default Toolkit",
+    "description": "Practical repository review guidance and target-native integrations.",
+    "compatibility": {
+      "minimumCli": "1.0.0"
+    }
+  },
+  "assets": [
+    {
+      "id": "repository-review",
+      "type": "skill",
+      "path": "plugins/ai4j-default/skills/repository-review",
+      "ownership": "package",
+      "dependencies": ["review-checklist", "check-diff"]
+    },
+    {
+      "id": "repository-reviewer",
+      "type": "agent",
+      "path": "plugins/ai4j-default/agents/repository-reviewer.md",
+      "ownership": "package"
+    },
+    {
+      "id": "ai4j-rules",
+      "type": "instruction",
+      "path": "toolkit/rules/ai4j.md",
+      "ownership": "configuration"
+    },
+    {
+      "id": "review-checklist",
+      "type": "reference",
+      "path": "plugins/ai4j-default/skills/repository-review/references/checklist.md",
+      "ownership": "package"
+    },
+    {
+      "id": "check-diff",
+      "type": "script",
+      "ownership": "package",
+      "variants": [
+        {
+          "id": "darwin-arm64",
+          "path": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.sh",
+          "targets": ["claude", "codex"],
+          "hosts": ["darwin-arm64"],
+          "executable": {
+            "command": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.sh",
+            "dependency": "optional"
+          }
+        },
+        {
+          "id": "windows-amd64",
+          "path": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.ps1",
+          "targets": ["claude", "codex"],
+          "hosts": ["windows-amd64"],
+          "executable": {
+            "command": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.ps1",
+            "dependency": "optional"
+          }
+        }
+      ]
+    },
+    {
+      "id": "claude-tools",
+      "type": "mcp",
+      "path": "plugins/ai4j-default/.mcp.json",
+      "ownership": "package",
+      "executable": {
+        "command": "claude",
+        "args": ["mcp", "serve"],
+        "dependency": "required",
+        "environment": ["AI4J_TOKEN"]
+      }
+    }
+  ],
+  "bundles": [
+    {
+      "id": "default",
+      "assets": ["repository-review", "repository-reviewer", "ai4j-rules", "claude-tools"]
+    }
+  ],
+  "targets": {
+    "claude": {
+      "packages": [
+        {
+          "id": "ai4j-default",
+          "path": "plugins/ai4j-default",
+          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff", "claude-tools"]
+        }
+      ]
+    },
+    "codex": {
+      "packages": [
+        {
+          "id": "ai4j-default",
+          "path": "plugins/ai4j-default",
+          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff", "claude-tools"]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/usage.json",
+  "title": "AI4J schema v1 usage-error response",
+  "allOf": [
+    {"$ref": "common.json#/$defs/baseEnvelope"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"type": "null"},
+        "status": {"const": "error"},
+        "changed": {"const": false},
+        "operationId": {"type": "null"},
+        "exitCode": {"const": 2},
+        "data": {"type": "null"},
+        "errors": {"type": "array", "minItems": 1}
+      },
+      "additionalProperties": true
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/init.json",
+  "title": "AI4J schema v1 init response",
+  "$defs": {
+    "data": {"$ref": "common.json#/$defs/initData"}
+  },
+  "allOf": [
+    {"$ref": "common.json#/$defs/baseEnvelope"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "init"},
+        "data": {
+          "oneOf": [
+            {"$ref": "#/$defs/data"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"required": ["data"], "properties": {"data": {"type": "object"}}},
+          "then": {"properties": {"status": {"const": "ok"}, "changed": {"const": true}, "exitCode": {"const": 0}}}
+        },
+        {
+          "if": {"required": ["data"], "properties": {"data": {"type": "null"}}},
+          "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "changed": {"const": false}, "exitCode": {"enum": [1, 2, 3, 4, 5, 6, 8, 9]}}}
+        }
+      ],
+      "additionalProperties": true
+    }
+  ]
+}

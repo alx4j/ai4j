@@ -1,0 +1,13 @@
+{
+  "name": "ai4j",
+  "owner": {
+    "name": "AI4J"
+  },
+  "plugins": [
+    {
+      "name": "ai4j-default",
+      "source": "./plugins/ai4j-default",
+      "description": "A small default toolkit for repository work with Claude Code"
+    }
+  ]
+}

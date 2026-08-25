@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/doctor.json",
+  "title": "AI4J schema v1 doctor response",
+  "allOf": [
+    {"$ref": "common.json#/$defs/readOnlyEnvelope"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "doctor"},
+        "data": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["installationId", "checks", "startupCheck"],
+              "properties": {
+                "installationId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+                "checks": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "status", "summary"],
+                    "properties": {
+                      "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,62}$"},
+                      "status": {"enum": ["ok", "warning", "error"]},
+                      "summary": {"type": "string", "minLength": 1, "maxLength": 512}
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "startupCheck": {
+                  "oneOf": [
+                    {"type": "null"},
+                    {
+                      "type": "object",
+                      "required": ["serverId", "executable", "arguments", "environment", "workingDirectory", "ownership", "result", "exitCode"],
+                      "properties": {
+                        "serverId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+                        "executable": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "arguments": {"type": "array", "maxItems": 256, "items": {"type": "string", "maxLength": 16384}},
+                        "environment": {"type": "array", "maxItems": 128, "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}},
+                        "workingDirectory": {"type": "string", "minLength": 1, "maxLength": 4096},
+                        "ownership": {"const": "package"},
+                        "result": {"enum": ["not_run", "started", "exited", "timed_out", "failed"]},
+                        "exitCode": {"type": ["integer", "null"]}
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  ]
+}

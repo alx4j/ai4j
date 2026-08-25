@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/version.json",
+  "title": "AI4J schema v1 version response",
+  "$defs": {
+    "data": {"$ref": "common.json#/$defs/versionData"}
+  },
+  "allOf": [
+    {"$ref": "common.json#/$defs/readOnlyEnvelope"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "version"},
+        "data": {
+          "oneOf": [
+            {"$ref": "#/$defs/data"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["status"],
+            "properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}
+          },
+          "then": {"properties": {"data": {"$ref": "#/$defs/data"}}}
+        },
+        {
+          "if": {"required": ["data"], "properties": {"data": {"type": "null"}}},
+          "then": {"properties": {"status": {"enum": ["cancelled", "error"]}}}
+        }
+      ],
+      "additionalProperties": true
+    }
+  ]
+}

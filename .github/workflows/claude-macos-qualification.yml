@@ -1,0 +1,79 @@
+name: Claude macOS qualification
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/claude-macos-qualification.yml
+      - cmd/**
+      - internal/**
+      - plugins/ai4j-default/**
+      - scripts/qualify-claude-macos.sh
+      - toolkit/**
+      - toolkit.json
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: off
+  CGO_ENABLED: 0
+  AI4J_CLAUDE_VERSION: 2.1.211
+
+jobs:
+  qualify:
+    name: Claude on macOS ARM64
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out the real commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Install the supported Claude Code version
+        shell: bash
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s "$AI4J_CLAUDE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "CLAUDE_CONFIG_DIR=$HOME/.claude-ai4j-qualification" >> "$GITHUB_ENV"
+          echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" >> "$GITHUB_ENV"
+          echo "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1" >> "$GITHUB_ENV"
+          echo "DISABLE_UPDATES=1" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.claude-ai4j-qualification"
+          PATH="$HOME/.local/bin:$PATH" claude --version
+
+      - name: Run the live Claude lifecycle
+        shell: bash
+        env:
+          AI4J_QUALIFICATION_REF: ${{ github.sha }}
+          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.ref_name }}
+          AI4J_QUALIFICATION_EVIDENCE: ${{ runner.temp }}/ai4j-qualification-evidence
+          AI4J_QUALIFICATION_GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/qualify-claude-macos.sh
+
+      - name: Retain qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: claude-macos-arm64-${{ github.run_id }}
+          path: ${{ runner.temp }}/ai4j-qualification-evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Confirm qualification did not modify tracked files
+        if: always()
+        run: git diff --exit-code -- .

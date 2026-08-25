@@ -1,0 +1,4 @@
+{
+  "example.test/one": ["example.test/two"],
+  "example.test/two": ["example.test/one"]
+}

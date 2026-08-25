@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/toolkit/v2.json",
+  "title": "AI4J toolkit manifest schema v2",
+  "type": "object",
+  "required": ["schemaVersion", "toolkit", "assets", "bundles", "targets"],
+  "properties": {
+    "schemaVersion": {"const": 2},
+    "toolkit": {"$ref": "#/$defs/toolkit"},
+    "assets": {"type": "array", "maxItems": 4096, "items": {"$ref": "#/$defs/asset"}},
+    "bundles": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/bundle"}},
+    "targets": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 2,
+      "properties": {
+        "claude": {"$ref": "#/$defs/target"},
+        "codex": {"$ref": "#/$defs/target"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+    "environmentName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^/\\\\][^\\x00-\\x1f\\x7f-\\x9f]*$",
+      "not": {"pattern": "(^|[/\\\\])\\.\\.([/\\\\]|$)"}
+    },
+    "toolkit": {
+      "type": "object",
+      "required": ["id", "version", "displayName", "compatibility"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "displayName": {"type": "string", "minLength": 1, "maxLength": 128},
+        "description": {"type": "string", "maxLength": 512},
+        "declarationId": {"$ref": "#/$defs/id"},
+        "compatibility": {
+          "type": "object",
+          "required": ["minimumCli"],
+          "properties": {"minimumCli": {"type": "string", "minLength": 1, "maxLength": 64}},
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "executable": {
+      "type": "object",
+      "required": ["command", "dependency"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "args": {"type": "array", "maxItems": 128, "items": {"type": "string", "maxLength": 4096}},
+        "dependency": {"type": "string", "enum": ["required", "optional"]},
+        "environment": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/environmentName"}}
+      },
+      "additionalProperties": false
+    },
+    "overlay": {
+      "type": "object",
+      "properties": {
+        "model": {"type": "string", "maxLength": 256},
+        "tools": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "environment": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/environmentName"}},
+        "hookEvents": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+      },
+      "additionalProperties": false
+    },
+    "variant": {
+      "type": "object",
+      "required": ["id", "path", "targets", "hosts"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/path"},
+        "targets": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "string", "enum": ["claude", "codex"]}},
+        "hosts": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "string", "enum": ["darwin-arm64", "windows-amd64"]}},
+        "executable": {"$ref": "#/$defs/executable"}
+      },
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "required": ["id", "type", "ownership"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "type": {"type": "string", "enum": ["skill", "agent", "instruction", "prompt", "reference", "support", "script", "binary", "mcp", "hook", "extension"]},
+        "path": {"$ref": "#/$defs/path"},
+        "ownership": {"type": "string", "enum": ["package", "configuration"]},
+        "dependencies": {"type": "array", "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "variants": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/variant"}},
+        "executable": {"$ref": "#/$defs/executable"},
+        "overlays": {
+          "type": "object",
+          "properties": {"claude": {"$ref": "#/$defs/overlay"}, "codex": {"$ref": "#/$defs/overlay"}},
+          "additionalProperties": false
+        }
+      },
+      "oneOf": [
+        {"required": ["path"], "not": {"required": ["variants"]}},
+        {"required": ["variants"], "not": {"required": ["path"]}}
+      ],
+      "allOf": [
+        {"if": {"properties": {"type": {"enum": ["script", "binary", "mcp"]}}, "required": ["path"]}, "then": {"required": ["executable"]}},
+        {"if": {"properties": {"type": {"enum": ["script", "binary", "mcp"]}}, "required": ["variants"]}, "then": {"not": {"required": ["executable"]}}},
+        {"if": {"properties": {"type": {"not": {"enum": ["script", "binary", "mcp"]}}}}, "then": {"not": {"required": ["executable"]}}}
+      ],
+      "additionalProperties": false
+    },
+    "bundle": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "assets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "bundles": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      },
+      "anyOf": [{"required": ["assets"]}, {"required": ["bundles"]}],
+      "additionalProperties": false
+    },
+    "nativePackage": {
+      "type": "object",
+      "required": ["id", "path", "assets"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "path": {"$ref": "#/$defs/path"},
+        "assets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
+      },
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "required": ["packages"],
+      "properties": {"packages": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/nativePackage"}}},
+      "additionalProperties": false
+    }
+  }
+}

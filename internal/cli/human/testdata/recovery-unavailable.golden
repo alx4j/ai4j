@@ -1,0 +1,27 @@
+AI4J
+command: status
+status: error
+changed: false
+exit-code: 8
+operation-id: none
+phase: none
+outcome: none
+mutation: not_started
+durable-change: none
+update-disposition: not_checked
+installation:
+  state: record-unavailable
+native:
+  registration: unknown
+  installation: unknown
+  enablement: unknown
+  activation: unknown
+  reload: unknown
+  next-session: unknown
+  policy: unknown
+  version-observation: not_applicable
+drift: 0
+recovery: unsupported_schema
+warnings: 0
+errors: 1
+  - operation_failed: the operation failed

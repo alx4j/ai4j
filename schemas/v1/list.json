@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/alx4j/ai4j/schemas/v1/list.json",
+  "title": "AI4J schema v1 list response",
+  "$defs": {
+    "data": {"$ref": "common.json#/$defs/listData"}
+  },
+  "allOf": [
+    {"$ref": "common.json#/$defs/readOnlyEnvelope"},
+    {
+      "type": "object",
+      "properties": {
+        "command": {"const": "list"},
+        "data": {"oneOf": [{"$ref": "#/$defs/data"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {"if": {"properties": {"status": {"const": "ok"}}}, "then": {"properties": {"data": {"$ref": "#/$defs/data"}}}},
+        {"if": {"properties": {"data": {"type": "null"}}}, "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "exitCode": {"enum": [1, 2, 3, 6, 8, 9]}}}}
+      ],
+      "additionalProperties": true
+    }
+  ]
+}

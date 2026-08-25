@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: off
+
+jobs:
+  quality:
+    name: Quality and reproducible build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Check out the real commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Record and assert the build environment
+        shell: bash
+        run: |
+          go version
+          go env GOOS GOARCH CGO_ENABLED GOTOOLCHAIN GOMOD GOWORK
+          test "$(go env GOVERSION)" = "go1.26.6"
+          test "$(go env GOOS)/$(go env GOARCH)" = "linux/amd64"
+          test "$(go env CGO_ENABLED)" = "0"
+
+      - name: Check Go formatting
+        run: go run -mod=readonly ./internal/repocheck/cmd/repocheck format
+
+      - name: Check module policy
+        run: go run -mod=readonly ./internal/repocheck/cmd/repocheck module
+
+      - name: Check module tidiness
+        run: go mod tidy -diff
+
+      - name: Verify downloaded modules
+        run: go mod verify
+
+      - name: Check the read-only module graph
+        run: go list -m -mod=readonly all
+
+      - name: Run unit tests
+        run: go test -mod=readonly ./...
+
+      - name: Run Go vet
+        run: go vet -mod=readonly ./...
+
+      - name: Check repository attribution
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            commit_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            before="${{ github.event.before }}"
+            if [[ "$before" =~ ^0+$ ]]; then
+              commit_range="HEAD"
+            else
+              commit_range="$before..${{ github.sha }}"
+            fi
+          fi
+          go run -mod=readonly ./internal/repocheck/cmd/repocheck authorship --range "$commit_range"
+
+      - name: Build the release profile
+        shell: bash
+        run: |
+          bash scripts/build-release.sh dist/ai4j
+          (cd dist && shasum -a 256 -c ai4j.sha256 && shasum -a 256 -c ai4j.exe.sha256)
+
+      - name: Verify reproducible output
+        run: bash scripts/verify-reproducible-build.sh
+
+      - name: Confirm checks did not modify tracked files
+        run: git diff --exit-code -- .
+
+  race:
+    name: Race tests on Darwin ARM64
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: 1
+    steps:
+      - name: Check out the real commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Record and assert the race environment
+        shell: bash
+        run: |
+          go version
+          go env GOOS GOARCH CGO_ENABLED GOTOOLCHAIN GOMOD GOWORK
+          test "$RUNNER_OS/$RUNNER_ARCH" = "macOS/ARM64"
+          test "$(go env GOVERSION)" = "go1.26.6"
+          test "$(go env GOOS)/$(go env GOARCH)" = "darwin/arm64"
+          test "$(go env CGO_ENABLED)" = "1"
+
+      - name: Run race tests
+        run: go test -mod=readonly -race -p=1 ./...
+
+  windows:
+    name: Windows AMD64 contracts
+    runs-on: windows-2025
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Check out the real commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Verify the Windows host contracts
+        shell: pwsh
+        run: |
+          if ((go env GOVERSION) -ne 'go1.26.6') { throw 'Unexpected Go toolchain' }
+          if ((go env GOOS) -ne 'windows' -or (go env GOARCH) -ne 'amd64') { throw 'Unexpected Windows target' }
+          go test -mod=readonly ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows tests failed' }
+          go vet -mod=readonly ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows vet failed' }
+          go build -mod=readonly -trimpath -o ai4j.exe ./cmd/ai4j
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+          $Version = .\ai4j.exe version --json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Windows executable smoke test failed' }
+          if ($Version.data.executable -ne 'ai4j.exe' -or $Version.data.target.os -ne 'windows' -or $Version.data.target.arch -ne 'amd64') {
+            throw 'Windows executable reported incorrect build identity'
+          }

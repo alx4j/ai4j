@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  GOTOOLCHAIN: local
+  GOWORK: off
+
+jobs:
+  release:
+    name: Build and publish release bundle
+    if: github.repository == 'alx4j/ai4j'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: 0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git rev-list -n 1 "$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+
+      - name: Install the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.6
+          check-latest: false
+          cache: false
+
+      - name: Run release gates
+        run: bash scripts/quality.sh
+
+      - name: Build the verified release bundle
+        run: bash scripts/build-release.sh dist/ai4j
+
+      - name: Verify the bundle
+        shell: bash
+        run: |
+          cd dist
+          shasum -a 256 -c ai4j.sha256
+          shasum -a 256 -c ai4j.exe.sha256
+          ./ai4j version --json > ai4j.runtime-version.json
+          grep -F "\"oid\":\"$GITHUB_SHA\"" ai4j.runtime-version.json
+          grep -F '"goVersion":"go1.26.6"' ai4j.runtime-version.json
+          grep -F '"target":{"os":"darwin","arch":"arm64"}' ai4j.runtime-version.json
+          grep -F "\"revision\": \"$GITHUB_SHA\"" ai4j.exe.version.json
+          grep -F '"goVersion": "go1.26.6"' ai4j.exe.version.json
+          grep -F '"targetOs": "windows"' ai4j.exe.version.json
+          grep -F '"targetArch": "amd64"' ai4j.exe.version.json
+
+      - name: Publish the verified bundle
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release delete "$GITHUB_REF_NAME" --yes
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/ai4j \
+            dist/ai4j.version.json \
+            dist/ai4j.sha256 \
+            dist/ai4j.exe \
+            dist/ai4j.exe.version.json \
+            dist/ai4j.exe.sha256 \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

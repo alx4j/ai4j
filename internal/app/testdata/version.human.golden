@@ -1,0 +1,25 @@
+AI4J
+command: version
+status: ok
+changed: false
+exit-code: 0
+operation-id: none
+phase: none
+outcome: none
+mutation: not_started
+durable-change: none
+update-disposition: not_checked
+version:
+  product: AI4J
+  executable: ai4j
+  cli-version: 0.0.0-dev
+  cli-source-repository: github.com/alx4j/ai4j
+  cli-source-commit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  go-version: go1.26.6
+  build-time: 2026-08-18T10:00:00Z
+  target: darwin/arm64
+  default-repository: github.com/alx4j/ai4j
+  default-ref-policy: repository_default_branch
+  default-reference: repository-default
+warnings: 0
+errors: 0
