@@ -87,8 +87,6 @@ func marshalUnavailable(response cli.Response) ([]byte, error) {
 		return json.Marshal(envelope[*ValidateData](response, nil))
 	case cli.CommandBuild:
 		return json.Marshal(envelope[*BuildData](response, nil))
-	case cli.CommandPlanInstall, cli.CommandPlanUpdate, cli.CommandPlanSync, cli.CommandPlanRollback, cli.CommandPlanUninstall, cli.CommandPlanHistoryPurge:
-		return json.Marshal(envelope[*PlanData](response, nil))
 	case cli.CommandInstall, cli.CommandUpdate, cli.CommandSync, cli.CommandRollback, cli.CommandUninstall, cli.CommandHistoryPurge:
 		return json.Marshal(envelope[*MutationData](response, nil))
 	case cli.CommandList:

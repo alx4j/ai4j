@@ -28,7 +28,7 @@ func TestSourceSelectorJoinsCLIOptionPresenceAndCanonicalHandoff(t *testing.T) {
 		hasRef     bool
 	}{
 		{name: "omitted", argv: []string{"ai4j", "validate"}, selection: domain.BuiltInDefaultSource(), transport: domain.HTTPSGitTransport(), repository: "github.com/alx4j/ai4j"},
-		{name: "reference only", argv: []string{"ai4j", "plan", "install", "--ref", "main"}, selection: domain.BuiltInDefaultSource(), transport: domain.HTTPSGitTransport(), repository: "github.com/alx4j/ai4j", reference: "main", hasRef: true},
+		{name: "reference only", argv: []string{"ai4j", "install", "--ref", "main", "--dry-run"}, selection: domain.BuiltInDefaultSource(), transport: domain.HTTPSGitTransport(), repository: "github.com/alx4j/ai4j", reference: "main", hasRef: true},
 		{name: "explicit https", argv: []string{"ai4j", "install", "--repo", "https://github.com/Example/Toolkit.git"}, selection: domain.ExplicitSource(), transport: domain.HTTPSGitTransport(), repository: "github.com/example/toolkit"},
 		{name: "explicit ssh", argv: []string{"ai4j", "validate", "--repo", "git@github.com:Example/Toolkit.git", "--ref", "v1"}, selection: domain.ExplicitSource(), transport: domain.SSHGitTransport(), repository: "github.com/example/toolkit", reference: "v1", hasRef: true},
 	}
@@ -146,8 +146,6 @@ func TestInvalidExplicitSourceAndReferenceStopBeforeProbe(t *testing.T) {
 func sourceOptions(request cli.Request) cli.SourceOptions {
 	switch value := request.(type) {
 	case cli.ValidateRequest:
-		return value.Source()
-	case cli.PlanInstallRequest:
 		return value.Source()
 	case cli.InstallRequest:
 		return value.Source()

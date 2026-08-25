@@ -60,31 +60,28 @@ func newV1LifecycleService(base *installer, validationService v1LifecycleValidat
 	return &v1LifecycleService{base: base, validation: validationService}
 }
 
-func (v *v1LifecycleService) PlanInstall(ctx context.Context, request cli.PlanInstallRequest) (cli.Response, error) {
-	project, hasProject := request.Project()
-	execution, response, stop := v.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), cli.ConflictFail)
-	if stop {
-		return response, nil
-	}
-	return v.planResponse(cli.CommandPlanInstall, execution)
-}
-
 func (v *v1LifecycleService) Install(ctx context.Context, request cli.InstallRequest, commandIO CommandIO) (cli.Response, error) {
 	project, hasProject := request.Project()
+	if request.DryRun() {
+		execution, response, stop := v.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), cli.ConflictFail)
+		if stop {
+			return response, nil
+		}
+		return v.planResponse(cli.CommandInstall, execution)
+	}
 	return v.apply(ctx, cli.CommandInstall, request.OutputMode(), request.Approved(), commandIO, cli.ConflictFail, func(policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 		return v.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), policy)
 	}, request.ExpectedCommit, request.ExpectedSourceDigest)
 }
 
-func (v *v1LifecycleService) PlanUpdate(ctx context.Context, request cli.PlanUpdateRequest) (cli.Response, error) {
-	execution, response, stop := v.prepareUpdate(ctx, request.InstallationID(), request.Source(), request.ConflictPolicy())
-	if stop {
-		return response, nil
-	}
-	return v.planResponse(cli.CommandPlanUpdate, execution)
-}
-
 func (v *v1LifecycleService) Update(ctx context.Context, request cli.UpdateRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop := v.prepareUpdate(ctx, request.InstallationID(), request.Source(), request.ConflictPolicy())
+		if stop {
+			return response, nil
+		}
+		return v.planResponse(cli.CommandUpdate, execution)
+	}
 	if request.Source().HasRepository() || request.Source().HasReference() {
 		if _, supplied := request.ExpectedCommit(); !supplied {
 			return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_required", "source or reference migration requires --expected-commit", result.UpdateNotChecked, nil)
@@ -95,43 +92,40 @@ func (v *v1LifecycleService) Update(ctx context.Context, request cli.UpdateReque
 	}, request.ExpectedCommit, request.ExpectedSourceDigest)
 }
 
-func (v *v1LifecycleService) PlanSync(ctx context.Context, request cli.PlanSyncRequest) (cli.Response, error) {
-	execution, response, stop := v.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), request.ConflictPolicy())
-	if stop {
-		return response, nil
-	}
-	return v.planResponse(cli.CommandPlanSync, execution)
-}
-
 func (v *v1LifecycleService) Sync(ctx context.Context, request cli.SyncRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop := v.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), request.ConflictPolicy())
+		if stop {
+			return response, nil
+		}
+		return v.planResponse(cli.CommandSync, execution)
+	}
 	return v.apply(ctx, cli.CommandSync, request.OutputMode(), request.Approved(), commandIO, request.ConflictPolicy(), func(policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 		return v.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), policy)
 	}, func() (domain.CommitOID, bool) { return domain.CommitOID{}, false }, request.ExpectedSourceDigest)
 }
 
-func (v *v1LifecycleService) PlanRollback(ctx context.Context, request cli.PlanRollbackRequest) (cli.Response, error) {
-	execution, response, stop := v.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), request.ConflictPolicy())
-	if stop {
-		return response, nil
-	}
-	return v.planResponse(cli.CommandPlanRollback, execution)
-}
-
 func (v *v1LifecycleService) Rollback(ctx context.Context, request cli.RollbackRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop := v.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), request.ConflictPolicy())
+		if stop {
+			return response, nil
+		}
+		return v.planResponse(cli.CommandRollback, execution)
+	}
 	return v.apply(ctx, cli.CommandRollback, request.OutputMode(), request.Approved(), commandIO, request.ConflictPolicy(), func(policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 		return v.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), policy)
 	}, func() (domain.CommitOID, bool) { return domain.CommitOID{}, false }, noExpectedDigest)
 }
 
-func (v *v1LifecycleService) PlanUninstall(ctx context.Context, request cli.PlanUninstallRequest) (cli.Response, error) {
-	execution, response, stop := v.prepareUninstall(ctx, request.InstallationID(), request.ConflictPolicy())
-	if stop {
-		return response, nil
-	}
-	return v.planResponse(cli.CommandPlanUninstall, execution)
-}
-
 func (v *v1LifecycleService) Uninstall(ctx context.Context, request cli.UninstallRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop := v.prepareUninstall(ctx, request.InstallationID(), request.ConflictPolicy())
+		if stop {
+			return response, nil
+		}
+		return v.planResponse(cli.CommandUninstall, execution)
+	}
 	return v.apply(ctx, cli.CommandUninstall, request.OutputMode(), request.Approved(), commandIO, request.ConflictPolicy(), func(policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 		return v.prepareUninstall(ctx, request.InstallationID(), policy)
 	}, func() (domain.CommitOID, bool) { return domain.CommitOID{}, false }, noExpectedDigest)
@@ -168,11 +162,10 @@ func (v *v1LifecycleService) History(_ context.Context, request cli.HistoryReque
 	return cli.NewResponse(cli.CommandHistory, commandResult, nil, data)
 }
 
-func (v *v1LifecycleService) PlanHistoryPurge(_ context.Context, request cli.PlanHistoryPurgeRequest) (cli.Response, error) {
-	return v.planHistoryPurge(request.InstallationID(), request.Selection(), request.OperationID())
-}
-
 func (v *v1LifecycleService) HistoryPurge(ctx context.Context, request cli.HistoryPurgeRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		return v.planHistoryPurge(request.InstallationID(), request.Selection(), request.OperationID())
+	}
 	release, err := v.base.acquire(ctx)
 	if err != nil {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureConflict, "mutation_locked", "another AI4J modifying command is running", result.UpdateNotChecked, nil)
@@ -268,7 +261,7 @@ func (v *v1LifecycleService) apply(ctx context.Context, command cli.Command, out
 	if digestSupplied && (execution.source.Source.Mode() != cli.SourceDevelopment || execution.source.Source.SourceDigest().String() != digest) {
 		return lifecycleFailure(command, result.FailureConflict, "expected_source_digest_mismatch", "local source digest does not match --expected-source-digest", execution.disposition, execution.source.Warnings)
 	}
-	plan, err := v.planResponse(commandForPlan(command), execution)
+	plan, err := v.planResponse(command, execution)
 	if err != nil {
 		return cli.Response{}, err
 	}
@@ -423,7 +416,7 @@ func (v *v1LifecycleService) prepareInstall(ctx context.Context, source cli.Sour
 	if reactivation {
 		record, present, err := v.base.state.LoadByID(installationID.String())
 		if err != nil || !present {
-			return v1Stop(cli.CommandPlanInstall, result.FailureConflict, "installation_not_found", "the selected archived installation does not exist")
+			return v1Stop(cli.CommandInstall, result.FailureConflict, "installation_not_found", "the selected archived installation does not exist")
 		}
 		before = cloneRecordPtr(&record)
 		if record.Source.Mode == "development_source" {
@@ -437,42 +430,42 @@ func (v *v1LifecycleService) prepareInstall(ctx context.Context, source cli.Sour
 		scopeRoot = record.ScopeRoot
 	} else {
 		if target != cli.BuildTargetClaude || !scope.Valid() {
-			return v1Stop(cli.CommandPlanInstall, result.FailureValidation, "unsupported_scope", "the requested target or scope is unsupported")
+			return v1Stop(cli.CommandInstall, result.FailureValidation, "unsupported_scope", "the requested target or scope is unsupported")
 		}
 		if scope == cli.ScopeProjectShared && source.HasCheckout() {
-			return v1Stop(cli.CommandPlanInstall, result.FailureValidation, "unsupported_scope", "local development sources cannot be installed at project-shared scope")
+			return v1Stop(cli.CommandInstall, result.FailureValidation, "unsupported_scope", "local development sources cannot be installed at project-shared scope")
 		}
 		if scope != cli.ScopeUser {
 			var err error
 			scopeRoot, err = v.resolveProjectRoot(ctx, project, hasProject)
 			if err != nil {
-				return v1Stop(cli.CommandPlanInstall, result.FailureEnvironment, "project_root_invalid", "a canonical Git project root could not be resolved")
+				return v1Stop(cli.CommandInstall, result.FailureEnvironment, "project_root_invalid", "a canonical Git project root could not be resolved")
 			}
 		}
 	}
 	report := v.validation.SelectLifecycle(ctx, source, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return v1SelectionStop(cli.CommandPlanInstall, report)
+		return v1SelectionStop(cli.CommandInstall, report)
 	}
 	if !reactivation {
 		installationID = installationIDFor(report, scope, scopeRoot)
 	}
 	desired, document, err := v.recordForSelection(report, selection, installationID, scope, scopeRoot)
 	if err != nil {
-		return v1Stop(cli.CommandPlanInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
+		return v1Stop(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
 	}
 	if err := v.inspectProjectLocal(ctx, desired); err != nil {
-		return v1Stop(cli.CommandPlanInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
+		return v1Stop(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
 	}
 	records, err := v.base.state.LoadAll()
 	if err != nil {
-		return v1Stop(cli.CommandPlanInstall, result.FailureConflict, "installation_state_invalid", "installation state could not be read")
+		return v1Stop(cli.CommandInstall, result.FailureConflict, "installation_state_invalid", "installation state could not be read")
 	}
 	if !reactivation {
 		for _, record := range records {
 			if record.Target == desired.Target && record.Scope == desired.Scope && filepath.Clean(record.ScopeRoot) == filepath.Clean(desired.ScopeRoot) && record.ToolkitID == desired.ToolkitID {
 				if record.Lifecycle == "archived" {
-					return v1Stop(cli.CommandPlanInstall, result.FailureConflict, "archived_installation_exists", "reactivate the archived installation by its installation ID")
+					return v1Stop(cli.CommandInstall, result.FailureConflict, "archived_installation_exists", "reactivate the archived installation by its installation ID")
 				}
 				before = cloneRecordPtr(&record)
 				desired.InstallationID = record.InstallationID
@@ -484,7 +477,7 @@ func (v *v1LifecycleService) prepareInstall(ctx context.Context, source cli.Sour
 	if desired.Scope == "project-shared" {
 		catalogBefore, catalogBytes, err = v.planProjectShared(&desired, before)
 		if err != nil {
-			return v1Stop(cli.CommandPlanInstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be changed safely")
+			return v1Stop(cli.CommandInstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be changed safely")
 		}
 	}
 	conflicts := v.installConflicts(ctx, desired)
@@ -503,34 +496,34 @@ func (v *v1LifecycleService) prepareInstall(ctx context.Context, source cli.Sour
 func (v *v1LifecycleService) prepareUpdate(ctx context.Context, installationID domain.InstallationID, requested cli.SourceOptions, policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 	record, present, err := v.base.state.LoadByID(installationID.String())
 	if err != nil || !present || record.Lifecycle != "active" {
-		return v1Stop(cli.CommandPlanUpdate, result.FailureConflict, "installation_not_active", "the selected installation is not active")
+		return v1Stop(cli.CommandUpdate, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
 	if record.Source.Mode == "development_source" {
 		if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() {
-			return v1Stop(cli.CommandPlanUpdate, result.FailureConflict, "source_mode_migration_unsupported", "GitHub and local source modes cannot be migrated in place")
+			return v1Stop(cli.CommandUpdate, result.FailureConflict, "source_mode_migration_unsupported", "GitHub and local source modes cannot be migrated in place")
 		}
 		options, optionErr := cli.NewDevelopmentSourceOptions(record.Source.Checkout, requested.AllowDirty())
 		if optionErr != nil {
-			return v1Stop(cli.CommandPlanUpdate, result.FailureSource, "source_invalid", "stored local source is invalid")
+			return v1Stop(cli.CommandUpdate, result.FailureSource, "source_invalid", "stored local source is invalid")
 		}
 		selection := selectionFromRecord(record)
 		report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 		if len(report.Problems) != 0 || !report.HasSource() {
-			return v1SelectionStop(cli.CommandPlanUpdate, report)
+			return v1SelectionStop(cli.CommandUpdate, report)
 		}
 		disposition := result.UpdateUpToDate
 		if report.Source.SourceDigest().String() != record.Source.SourceDigest {
 			disposition = result.UpdateAvailable
 		}
-		return v.prepareExisting(ctx, cli.CommandPlanUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
+		return v.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
 	}
 	if requested.AllowDirty() || requested.HasCheckout() {
-		return v1Stop(cli.CommandPlanUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a GitHub installation")
+		return v1Stop(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a GitHub installation")
 	}
 	installed, _ := domain.NewCommitOID(record.Source.Commit)
 	options, err := updateSourceOptions(record)
 	if err != nil {
-		return v1Stop(cli.CommandPlanUpdate, result.FailureInternal, "source_invalid", "stored source selection is invalid")
+		return v1Stop(cli.CommandUpdate, result.FailureInternal, "source_invalid", "stored source selection is invalid")
 	}
 	migration := requested.HasRepository() || requested.HasReference()
 	if migration {
@@ -545,21 +538,21 @@ func (v *v1LifecycleService) prepareUpdate(ctx context.Context, installationID d
 		}
 		options, err = cli.NewSourceOptions(repository, true, reference, hasReference)
 		if err != nil {
-			return v1Stop(cli.CommandPlanUpdate, result.FailureSource, "invalid_source", "requested source migration is invalid")
+			return v1Stop(cli.CommandUpdate, result.FailureSource, "invalid_source", "requested source migration is invalid")
 		}
 		selection := selectionFromRecord(record)
 		report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 		if len(report.Problems) != 0 || !report.HasSource() {
-			return v1SelectionStop(cli.CommandPlanUpdate, report)
+			return v1SelectionStop(cli.CommandUpdate, report)
 		}
 		if report.ToolkitID != record.ToolkitID {
-			return v1Stop(cli.CommandPlanUpdate, result.FailureConflict, "toolkit_identity_changed", "source migration must retain the toolkit identifier")
+			return v1Stop(cli.CommandUpdate, result.FailureConflict, "toolkit_identity_changed", "source migration must retain the toolkit identifier")
 		}
-		return v.prepareExisting(ctx, cli.CommandPlanUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdateAvailable)
+		return v.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdateAvailable)
 	}
 	update := v.validation.ValidateUpdate(ctx, options, installed)
 	if len(update.Report.Problems) != 0 {
-		return v1ReportStop(cli.CommandPlanUpdate, update.Report)
+		return v1ReportStop(cli.CommandUpdate, update.Report)
 	}
 	disposition := result.UpdateUnknown
 	switch {
@@ -568,37 +561,37 @@ func (v *v1LifecycleService) prepareUpdate(ctx context.Context, installationID d
 	case update.Disposition == gitsource.UpdateAvailable:
 		disposition = result.UpdateAvailable
 	case update.Disposition == gitsource.UpdateRefRewritten:
-		return v1Stop(cli.CommandPlanUpdate, result.FailureConflict, "ref_rewritten", "the tracked branch is not a fast-forward update")
+		return v1Stop(cli.CommandUpdate, result.FailureConflict, "ref_rewritten", "the tracked branch is not a fast-forward update")
 	default:
-		return v1Stop(cli.CommandPlanUpdate, result.FailureSource, "update_source_failed", "the stored source could not be checked")
+		return v1Stop(cli.CommandUpdate, result.FailureSource, "update_source_failed", "the stored source could not be checked")
 	}
 	selection := selectionFromRecord(record)
 	report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return v1SelectionStop(cli.CommandPlanUpdate, report)
+		return v1SelectionStop(cli.CommandUpdate, report)
 	}
-	return v.prepareExisting(ctx, cli.CommandPlanUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
+	return v.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
 }
 
 func (v *v1LifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.SelectionOptions, allowDirty bool, policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 	record, present, err := v.base.state.LoadByID(installationID.String())
 	if err != nil || !present || record.Lifecycle != "active" {
-		return v1Stop(cli.CommandPlanSync, result.FailureConflict, "installation_not_active", "the selected installation is not active")
+		return v1Stop(cli.CommandSync, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
 	options, err := exactSourceOptions(record)
 	if record.Source.Mode == "development_source" {
 		options, err = cli.NewDevelopmentSourceOptions(record.Source.Checkout, allowDirty)
 	} else if allowDirty {
-		return v1Stop(cli.CommandPlanSync, result.FailureConflict, "source_mode_mismatch", "--allow-dirty is valid only for local development sources")
+		return v1Stop(cli.CommandSync, result.FailureConflict, "source_mode_mismatch", "--allow-dirty is valid only for local development sources")
 	}
 	if err != nil {
-		return v1Stop(cli.CommandPlanSync, result.FailureInternal, "source_invalid", "stored source selection is invalid")
+		return v1Stop(cli.CommandSync, result.FailureInternal, "source_invalid", "stored source selection is invalid")
 	}
 	report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return v1SelectionStop(cli.CommandPlanSync, report)
+		return v1SelectionStop(cli.CommandSync, report)
 	}
-	return v.prepareExisting(ctx, cli.CommandPlanSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
+	return v.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
 }
 
 func (v *v1LifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, selection cli.SelectionOptions, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (v1Execution, cli.Response, bool) {
@@ -642,7 +635,7 @@ func (v *v1LifecycleService) prepareExisting(ctx context.Context, command cli.Co
 func (v *v1LifecycleService) prepareUninstall(ctx context.Context, installationID domain.InstallationID, policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 	record, present, err := v.base.state.LoadByID(installationID.String())
 	if err != nil || !present {
-		return v1Stop(cli.CommandPlanUninstall, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
+		return v1Stop(cli.CommandUninstall, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
 	}
 	final := mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
 	if record.Lifecycle == "archived" {
@@ -650,19 +643,19 @@ func (v *v1LifecycleService) prepareUninstall(ctx context.Context, installationI
 	}
 	options, err := exactSourceOptions(record)
 	if err != nil {
-		return v1Stop(cli.CommandPlanUninstall, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
+		return v1Stop(cli.CommandUninstall, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
 	}
 	selection := selectionFromRecord(record)
 	report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return v1SelectionStop(cli.CommandPlanUninstall, report)
+		return v1SelectionStop(cli.CommandUninstall, report)
 	}
 	desired := record
 	var catalogAfter []byte
 	if record.Scope == "project-shared" {
 		catalogAfter, err = v.planProjectSharedRemoval(record)
 		if err != nil {
-			return v1Stop(cli.CommandPlanUninstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be removed safely")
+			return v1Stop(cli.CommandUninstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be removed safely")
 		}
 	}
 	desired.Lifecycle = "archived"
@@ -680,22 +673,22 @@ func (v *v1LifecycleService) prepareUninstall(ctx context.Context, installationI
 func (v *v1LifecycleService) prepareRollback(ctx context.Context, installationID domain.InstallationID, operationID domain.OperationID, selected bool, policy cli.ConflictPolicy) (v1Execution, cli.Response, bool) {
 	record, present, err := v.base.state.LoadByID(installationID.String())
 	if err != nil || !present {
-		return v1Stop(cli.CommandPlanRollback, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
+		return v1Stop(cli.CommandRollback, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
 	}
 	entries, err := v.base.state.LoadHistory(record.InstallationID)
 	if err != nil || len(entries) == 0 {
-		return v1Stop(cli.CommandPlanRollback, result.FailureConflict, "rollback_unavailable", "no retained rollback point is available")
+		return v1Stop(cli.CommandRollback, result.FailureConflict, "rollback_unavailable", "no retained rollback point is available")
 	}
 	entry := entries[len(entries)-1]
 	if selected {
 		var found bool
 		entry, found, err = v.base.state.LoadHistoryEntry(record.InstallationID, operationID.String())
 		if err != nil || !found {
-			return v1Stop(cli.CommandPlanRollback, result.FailureConflict, "rollback_not_found", "the selected rollback point does not exist")
+			return v1Stop(cli.CommandRollback, result.FailureConflict, "rollback_not_found", "the selected rollback point does not exist")
 		}
 	}
 	if !entry.Restorable || entry.After == nil || !sameCurrentState(record, *entry.After) {
-		return v1Stop(cli.CommandPlanRollback, result.FailureConflict, "rollback_conflict", "current installation state no longer matches the rollback point")
+		return v1Stop(cli.CommandRollback, result.FailureConflict, "rollback_conflict", "current installation state no longer matches the rollback point")
 	}
 	desired := cloneRecord(record)
 	if entry.Before != nil {
@@ -711,7 +704,7 @@ func (v *v1LifecycleService) prepareRollback(ctx context.Context, installationID
 	options, _ := exactSourceOptions(desired)
 	report := v.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return v1SelectionStop(cli.CommandPlanRollback, report)
+		return v1SelectionStop(cli.CommandRollback, report)
 	}
 	conflicts := v.existingConflicts(ctx, record, record.Lifecycle == "active")
 	visible, degraded := applyConflictPolicy(conflicts, policy, true)
@@ -724,7 +717,7 @@ func (v *v1LifecycleService) prepareRollback(ctx context.Context, installationID
 	if record.Scope == "project-shared" {
 		catalogBefore, catalogAfter, err = v.planProjectSharedRollback(record, &desired, entry.CatalogBefore)
 		if err != nil {
-			return v1Stop(cli.CommandPlanRollback, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be rolled back safely")
+			return v1Stop(cli.CommandRollback, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be rolled back safely")
 		}
 	}
 	return v1Execution{operation: cli.OperationRollback, source: report, before: &record, desired: &desired, catalog: catalogAfter, catalogBefore: catalogBefore, rules: slices.Clone(entry.RulesBefore), artifact: slices.Clone(entry.NativeArtifactBefore), actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, rollback: &entry}, cli.Response{}, false
@@ -800,7 +793,7 @@ func localBundleDigest(source installstate.Source, selection cli.SelectionOption
 func (v *v1LifecycleService) planResponse(command cli.Command, execution v1Execution) (cli.Response, error) {
 	installation := recordInstallation(execution.before, execution.desired)
 	if installation == nil {
-		return cli.Response{}, errors.New("plan installation identity is unavailable")
+		return cli.Response{}, errors.New("planned installation identity is unavailable")
 	}
 	data, err := cli.NewPlanData(execution.operation, execution.source.Source, *installation, execution.actions, execution.content, execution.conflicts, execution.final, execution.disposition)
 	if err != nil {
@@ -1564,11 +1557,11 @@ func readOwnedOpaque(path string) ([]byte, error) {
 func (v *v1LifecycleService) planHistoryPurge(installationID domain.InstallationID, selection cli.HistoryPurgeSelection, operationID domain.OperationID) (cli.Response, error) {
 	record, present, err := v.base.state.LoadByID(installationID.String())
 	if err != nil || !present {
-		return v1ReadFailure(cli.CommandPlanHistoryPurge, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
+		return v1ReadFailure(cli.CommandHistoryPurge, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
 	}
 	entries, err := v.base.state.LoadHistory(record.InstallationID)
 	if err != nil {
-		return v1ReadFailure(cli.CommandPlanHistoryPurge, result.FailureRecovery, "history_invalid", "installation history could not be read")
+		return v1ReadFailure(cli.CommandHistoryPurge, result.FailureRecovery, "history_invalid", "installation history could not be read")
 	}
 	ids := selectedHistoryIDs(entries, selection, operationID, v.base.now())
 	presentCondition, _ := cli.NewCondition(cli.ConditionPresent, "")
@@ -1597,7 +1590,7 @@ func (v *v1LifecycleService) planHistoryPurge(installationID domain.Installation
 	if err != nil {
 		return cli.Response{}, err
 	}
-	return cli.NewResponse(cli.CommandPlanHistoryPurge, commandResult, nil, data)
+	return cli.NewResponse(cli.CommandHistoryPurge, commandResult, nil, data)
 }
 
 func selectedHistoryIDs(entries []installstate.HistoryEntry, selection cli.HistoryPurgeSelection, operationID domain.OperationID, now time.Time) []string {
@@ -1772,25 +1765,6 @@ func planAsCommand(response cli.Response, command cli.Command) (cli.Response, er
 		return response, nil
 	}
 	return cli.NewResponse(command, response.Result(), nil, response.Data())
-}
-
-func commandForPlan(command cli.Command) cli.Command {
-	switch command {
-	case cli.CommandInstall:
-		return cli.CommandPlanInstall
-	case cli.CommandUpdate:
-		return cli.CommandPlanUpdate
-	case cli.CommandSync:
-		return cli.CommandPlanSync
-	case cli.CommandRollback:
-		return cli.CommandPlanRollback
-	case cli.CommandUninstall:
-		return cli.CommandPlanUninstall
-	case cli.CommandHistoryPurge:
-		return cli.CommandPlanHistoryPurge
-	default:
-		return ""
-	}
 }
 
 func selectionFromRecord(record installstate.Record) cli.SelectionOptions {

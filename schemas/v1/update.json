@@ -3,42 +3,27 @@
   "$id": "https://github.com/alx4j/ai4j/schemas/v1/update.json",
   "title": "AI4J schema v1 update response",
   "$defs": {
-    "data": {
-      "allOf": [
-        {"$ref": "common.json#/$defs/mutationData"},
-        {"properties": {"operation": {"const": "update"}}}
-      ]
-    }
+    "planData": {"allOf": [{"$ref": "common.json#/$defs/planData"}, {"properties": {"operation": {"const": "update"}}}]},
+    "mutationData": {"allOf": [{"$ref": "common.json#/$defs/mutationData"}, {"properties": {"operation": {"const": "update"}}}]}
   },
   "allOf": [
     {"$ref": "common.json#/$defs/baseEnvelope"},
-    {"$ref": "common.json#/$defs/mutationEnvelopeSemantics"},
     {"$ref": "common.json#/$defs/updateDispositionEnvelopeSemantics"},
-    {
-      "type": "object",
-      "properties": {
-        "command": {"const": "update"},
-        "data": {
-          "oneOf": [
-            {"$ref": "#/$defs/data"},
-            {"type": "null"}
-          ]
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": ["status"],
-            "properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}
-          },
-          "then": {"properties": {"data": {"$ref": "#/$defs/data"}}}
-        },
-        {
-          "if": {"required": ["data"], "properties": {"data": {"type": "null"}}},
-          "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "changed": {"const": false}, "exitCode": {"enum": [1, 2, 3, 4, 5, 6, 8, 9]}}}
-        }
-      ],
-      "additionalProperties": true
-    }
+    {"properties": {"command": {"const": "update"}}},
+    {"anyOf": [
+      {"allOf": [
+        {"$ref": "common.json#/$defs/readOnlyEnvelope"},
+        {"$ref": "common.json#/$defs/planEnvelopeSemantics"},
+        {"properties": {"data": {"oneOf": [{"$ref": "#/$defs/planData"}, {"type": "null"}]}}},
+        {"if": {"properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}}, "then": {"properties": {"data": {"$ref": "#/$defs/planData"}}}},
+        {"if": {"properties": {"data": {"type": "null"}}}, "then": {"properties": {"status": {"enum": ["cancelled", "error"]}}}}
+      ]},
+      {"allOf": [
+        {"$ref": "common.json#/$defs/mutationEnvelopeSemantics"},
+        {"properties": {"data": {"oneOf": [{"$ref": "#/$defs/mutationData"}, {"type": "null"}]}}},
+        {"if": {"properties": {"status": {"enum": ["ok", "no_change", "degraded"]}}}, "then": {"properties": {"data": {"$ref": "#/$defs/mutationData"}}}},
+        {"if": {"properties": {"data": {"type": "null"}}}, "then": {"properties": {"status": {"enum": ["cancelled", "error"]}, "changed": {"const": false}, "exitCode": {"enum": [1, 2, 3, 4, 5, 6, 8, 9]}}}}
+      ]}
+    ]}
   ]
 }

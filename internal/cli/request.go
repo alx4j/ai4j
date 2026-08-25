@@ -151,31 +151,6 @@ func (p ConflictPolicy) Valid() bool {
 	return p == ConflictFail || p == ConflictKeep || p == ConflictReplaceOwned || p == ConflictInteractive
 }
 
-type PlanInstallRequest struct {
-	source          SourceOptions
-	target          BuildTarget
-	scope           Scope
-	project         string
-	hasProject      bool
-	selection       SelectionOptions
-	installation    domain.InstallationID
-	hasInstallation bool
-	v1              bool
-	output          OutputMode
-}
-
-func (PlanInstallRequest) request()                                {}
-func (PlanInstallRequest) Command() Command                        { return CommandPlanInstall }
-func (r PlanInstallRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanInstallRequest) Source() SourceOptions                 { return r.source }
-func (r PlanInstallRequest) Target() BuildTarget                   { return r.target }
-func (r PlanInstallRequest) Scope() Scope                          { return r.scope }
-func (r PlanInstallRequest) Project() (string, bool)               { return r.project, r.hasProject }
-func (r PlanInstallRequest) Selection() SelectionOptions           { return r.selection }
-func (r PlanInstallRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanInstallRequest) HasInstallationID() bool               { return r.hasInstallation }
-func (r PlanInstallRequest) V1() bool                              { return r.v1 }
-
 type InstallRequest struct {
 	source            SourceOptions
 	target            BuildTarget
@@ -190,6 +165,7 @@ type InstallRequest struct {
 	hasExpected       bool
 	expectedDigest    string
 	hasExpectedDigest bool
+	dryRun            bool
 	yes               bool
 	output            OutputMode
 }
@@ -211,25 +187,8 @@ func (r InstallRequest) ExpectedCommit() (domain.CommitOID, bool) {
 func (r InstallRequest) ExpectedSourceDigest() (string, bool) {
 	return r.expectedDigest, r.hasExpectedDigest
 }
+func (r InstallRequest) DryRun() bool   { return r.dryRun }
 func (r InstallRequest) Approved() bool { return r.yes }
-
-type PlanUpdateRequest struct {
-	installation    domain.InstallationID
-	hasInstallation bool
-	source          SourceOptions
-	policy          ConflictPolicy
-	v1              bool
-	output          OutputMode
-}
-
-func (PlanUpdateRequest) request()                                {}
-func (PlanUpdateRequest) Command() Command                        { return CommandPlanUpdate }
-func (r PlanUpdateRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanUpdateRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanUpdateRequest) HasInstallationID() bool               { return r.hasInstallation }
-func (r PlanUpdateRequest) Source() SourceOptions                 { return r.source }
-func (r PlanUpdateRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-func (r PlanUpdateRequest) V1() bool                              { return r.v1 }
 
 type UpdateRequest struct {
 	installation      domain.InstallationID
@@ -241,6 +200,7 @@ type UpdateRequest struct {
 	hasExpected       bool
 	expectedDigest    string
 	hasExpectedDigest bool
+	dryRun            bool
 	yes               bool
 	output            OutputMode
 }
@@ -259,23 +219,8 @@ func (r UpdateRequest) ExpectedCommit() (domain.CommitOID, bool) {
 func (r UpdateRequest) ExpectedSourceDigest() (string, bool) {
 	return r.expectedDigest, r.hasExpectedDigest
 }
+func (r UpdateRequest) DryRun() bool   { return r.dryRun }
 func (r UpdateRequest) Approved() bool { return r.yes }
-
-type PlanSyncRequest struct {
-	installation domain.InstallationID
-	selection    SelectionOptions
-	allowDirty   bool
-	policy       ConflictPolicy
-	output       OutputMode
-}
-
-func (PlanSyncRequest) request()                                {}
-func (PlanSyncRequest) Command() Command                        { return CommandPlanSync }
-func (r PlanSyncRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanSyncRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanSyncRequest) Selection() SelectionOptions           { return r.selection }
-func (r PlanSyncRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-func (r PlanSyncRequest) AllowDirty() bool                      { return r.allowDirty }
 
 type SyncRequest struct {
 	installation      domain.InstallationID
@@ -284,6 +229,7 @@ type SyncRequest struct {
 	expectedDigest    string
 	hasExpectedDigest bool
 	policy            ConflictPolicy
+	dryRun            bool
 	yes               bool
 	output            OutputMode
 }
@@ -298,6 +244,7 @@ func (r SyncRequest) AllowDirty() bool                      { return r.allowDirt
 func (r SyncRequest) ExpectedSourceDigest() (string, bool) {
 	return r.expectedDigest, r.hasExpectedDigest
 }
+func (r SyncRequest) DryRun() bool   { return r.dryRun }
 func (r SyncRequest) Approved() bool { return r.yes }
 
 type Scope string
@@ -357,27 +304,12 @@ func (r DoctorRequest) TestMCP() string                       { return r.testMCP
 func (r DoctorRequest) HasMCPTest() bool                      { return r.testMCP != "" }
 func (r DoctorRequest) Approved() bool                        { return r.yes }
 
-type PlanRollbackRequest struct {
-	installation domain.InstallationID
-	operation    domain.OperationID
-	hasOperation bool
-	policy       ConflictPolicy
-	output       OutputMode
-}
-
-func (PlanRollbackRequest) request()                                {}
-func (PlanRollbackRequest) Command() Command                        { return CommandPlanRollback }
-func (r PlanRollbackRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanRollbackRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanRollbackRequest) OperationID() domain.OperationID       { return r.operation }
-func (r PlanRollbackRequest) HasOperationID() bool                  { return r.hasOperation }
-func (r PlanRollbackRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-
 type RollbackRequest struct {
 	installation domain.InstallationID
 	operation    domain.OperationID
 	hasOperation bool
 	policy       ConflictPolicy
+	dryRun       bool
 	yes          bool
 	output       OutputMode
 }
@@ -389,29 +321,15 @@ func (r RollbackRequest) InstallationID() domain.InstallationID { return r.insta
 func (r RollbackRequest) OperationID() domain.OperationID       { return r.operation }
 func (r RollbackRequest) HasOperationID() bool                  { return r.hasOperation }
 func (r RollbackRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
+func (r RollbackRequest) DryRun() bool                          { return r.dryRun }
 func (r RollbackRequest) Approved() bool                        { return r.yes }
-
-type PlanUninstallRequest struct {
-	installation    domain.InstallationID
-	hasInstallation bool
-	policy          ConflictPolicy
-	v1              bool
-	output          OutputMode
-}
-
-func (PlanUninstallRequest) request()                                {}
-func (PlanUninstallRequest) Command() Command                        { return CommandPlanUninstall }
-func (r PlanUninstallRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanUninstallRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanUninstallRequest) HasInstallationID() bool               { return r.hasInstallation }
-func (r PlanUninstallRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-func (r PlanUninstallRequest) V1() bool                              { return r.v1 }
 
 type UninstallRequest struct {
 	installation    domain.InstallationID
 	hasInstallation bool
 	policy          ConflictPolicy
 	v1              bool
+	dryRun          bool
 	yes             bool
 	output          OutputMode
 }
@@ -424,6 +342,7 @@ func (r UninstallRequest) InstallationID() domain.InstallationID { return r.inst
 func (r UninstallRequest) HasInstallationID() bool               { return r.hasInstallation }
 func (r UninstallRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
 func (r UninstallRequest) V1() bool                              { return r.v1 }
+func (r UninstallRequest) DryRun() bool                          { return r.dryRun }
 
 type HistoryRequest struct {
 	installation domain.InstallationID
@@ -443,24 +362,11 @@ const (
 	HistoryPurgeAll       HistoryPurgeSelection = "all"
 )
 
-type PlanHistoryPurgeRequest struct {
-	installation domain.InstallationID
-	selection    HistoryPurgeSelection
-	operation    domain.OperationID
-	output       OutputMode
-}
-
-func (PlanHistoryPurgeRequest) request()                                {}
-func (PlanHistoryPurgeRequest) Command() Command                        { return CommandPlanHistoryPurge }
-func (r PlanHistoryPurgeRequest) OutputMode() OutputMode                { return r.output }
-func (r PlanHistoryPurgeRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r PlanHistoryPurgeRequest) Selection() HistoryPurgeSelection      { return r.selection }
-func (r PlanHistoryPurgeRequest) OperationID() domain.OperationID       { return r.operation }
-
 type HistoryPurgeRequest struct {
 	installation domain.InstallationID
 	selection    HistoryPurgeSelection
 	operation    domain.OperationID
+	dryRun       bool
 	yes          bool
 	output       OutputMode
 }
@@ -471,6 +377,7 @@ func (r HistoryPurgeRequest) OutputMode() OutputMode                { return r.o
 func (r HistoryPurgeRequest) InstallationID() domain.InstallationID { return r.installation }
 func (r HistoryPurgeRequest) Selection() HistoryPurgeSelection      { return r.selection }
 func (r HistoryPurgeRequest) OperationID() domain.OperationID       { return r.operation }
+func (r HistoryPurgeRequest) DryRun() bool                          { return r.dryRun }
 func (r HistoryPurgeRequest) Approved() bool                        { return r.yes }
 
 type VersionRequest struct{ output OutputMode }

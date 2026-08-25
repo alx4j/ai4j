@@ -16,7 +16,7 @@ func planInstallResponse(report validation.Report, conflicts []cli.Conflict) (cl
 		return cli.Response{}, err
 	}
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return cli.NewResponse(cli.CommandPlanInstall, commandResult, nil, cli.UnavailableData{})
+		return cli.NewResponse(cli.CommandInstall, commandResult, nil, cli.UnavailableData{})
 	}
 
 	data, err := newInstallPlan(report, conflicts)
@@ -46,7 +46,7 @@ func planInstallResponse(report validation.Report, conflicts []cli.Conflict) (cl
 			return cli.Response{}, err
 		}
 	}
-	return cli.NewResponse(cli.CommandPlanInstall, commandResult, nil, data)
+	return cli.NewResponse(cli.CommandInstall, commandResult, nil, data)
 }
 
 func newInstallPlan(report validation.Report, conflicts []cli.Conflict) (cli.PlanData, error) {

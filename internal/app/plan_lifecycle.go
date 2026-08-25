@@ -25,10 +25,10 @@ func planUpdateResponse(ctx context.Context, service commandService) (cli.Respon
 			code = "unsupported_state_schema"
 			message = "installation state uses an unsupported schema"
 		}
-		return planUnavailable(cli.CommandPlanUpdate, result.FailureConflict, code, message)
+		return planUnavailable(cli.CommandUpdate, result.FailureConflict, code, message)
 	}
 	if !present {
-		return planUnavailable(cli.CommandPlanUpdate, result.FailureConflict, "not_installed", "AI4J is not installed")
+		return planUnavailable(cli.CommandUpdate, result.FailureConflict, "not_installed", "AI4J is not installed")
 	}
 	installed, err := domain.NewCommitOID(record.Source.Commit)
 	if err != nil {
@@ -64,11 +64,11 @@ func planUpdateResponse(ctx context.Context, service commandService) (cli.Respon
 		}
 	}
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return planValidationUnavailable(cli.CommandPlanUpdate, report)
+		return planValidationUnavailable(cli.CommandUpdate, report)
 	}
 	conflicts, problem := service.InspectPlanExisting(ctx, record.Catalog.Checksum, record.Rules.Checksum)
 	if problem != nil {
-		return planUnavailableWithWarnings(cli.CommandPlanUpdate, result.FailureEnvironment, problem.Code(), problem.Message(), report.Warnings)
+		return planUnavailableWithWarnings(cli.CommandUpdate, result.FailureEnvironment, problem.Code(), problem.Message(), report.Warnings)
 	}
 	if disposition == result.UpdateRefRewritten {
 		conflict, conflictErr := cli.NewConflict("ref_rewritten", "toolkit source", "the tracked reference is not a fast-forward update")
@@ -96,7 +96,7 @@ func planUpdateResponse(ctx context.Context, service commandService) (cli.Respon
 		}
 		installedReport := service.Validate(ctx, exactOptions)
 		if len(installedReport.Problems) != 0 || !installedReport.HasSource() {
-			return planValidationUnavailable(cli.CommandPlanUpdate, installedReport)
+			return planValidationUnavailable(cli.CommandUpdate, installedReport)
 		}
 		content, err = diffActiveContent(installedReport.Content, report.Content)
 	} else {
@@ -113,7 +113,7 @@ func planUpdateResponse(ctx context.Context, service commandService) (cli.Respon
 	if err != nil {
 		return cli.Response{}, err
 	}
-	return planResponse(cli.CommandPlanUpdate, data, report.Warnings, conflicts, disposition)
+	return planResponse(cli.CommandUpdate, data, report.Warnings, conflicts, disposition)
 }
 
 func diffActiveContent(installed, desired []cli.ContentItem) ([]cli.ContentItem, error) {
@@ -209,10 +209,10 @@ func planUninstallResponse(ctx context.Context, service commandService) (cli.Res
 			code = "unsupported_state_schema"
 			message = "installation state uses an unsupported schema"
 		}
-		return planUnavailable(cli.CommandPlanUninstall, result.FailureConflict, code, message)
+		return planUnavailable(cli.CommandUninstall, result.FailureConflict, code, message)
 	}
 	if !present {
-		return planUnavailable(cli.CommandPlanUninstall, result.FailureConflict, "not_installed", "AI4J is not installed")
+		return planUnavailable(cli.CommandUninstall, result.FailureConflict, "not_installed", "AI4J is not installed")
 	}
 	exactOptions, err := exactSourceOptions(record)
 	if err != nil {
@@ -220,11 +220,11 @@ func planUninstallResponse(ctx context.Context, service commandService) (cli.Res
 	}
 	report := service.Validate(ctx, exactOptions)
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return planValidationUnavailable(cli.CommandPlanUninstall, report)
+		return planValidationUnavailable(cli.CommandUninstall, report)
 	}
 	conflicts, problem := service.InspectPlanExisting(ctx, record.Catalog.Checksum, record.Rules.Checksum)
 	if problem != nil {
-		return planUnavailableWithWarnings(cli.CommandPlanUninstall, result.FailureEnvironment, problem.Code(), problem.Message(), report.Warnings)
+		return planUnavailableWithWarnings(cli.CommandUninstall, result.FailureEnvironment, problem.Code(), problem.Message(), report.Warnings)
 	}
 	installation, err := domain.NewInstallationID(record.InstallationID)
 	if err != nil {
@@ -246,7 +246,7 @@ func planUninstallResponse(ctx context.Context, service commandService) (cli.Res
 	if err != nil {
 		return cli.Response{}, err
 	}
-	return planResponse(cli.CommandPlanUninstall, data, report.Warnings, conflicts, result.UpdateNotChecked)
+	return planResponse(cli.CommandUninstall, data, report.Warnings, conflicts, result.UpdateNotChecked)
 }
 
 func updateSourceOptions(record installstate.Record) (cli.SourceOptions, error) {

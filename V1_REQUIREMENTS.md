@@ -85,7 +85,7 @@ Unless an approved evaluation decision explicitly revises one of these contracts
 
 - Every Git installation resolves to and records an exact immutable commit.
 - The first-party default is source-selection shorthand only and receives no trust, validation, execution, approval, or recovery exemption.
-- `plan` is the only dry-run concept and makes no persistent toolkit-controlled change.
+- `--dry-run` on a modifying command is the only dry-run concept and makes no persistent toolkit-controlled change.
 - GitHub source acquisition uses operation-specific ephemeral workspaces and no toolkit-managed persistent source cache is populated. A local development checkout remains user-owned and read-only.
 - Repository content is active AI/code content; validation does not claim that it is benign.
 - Normal commands never execute toolkit scripts, binaries, hooks, or MCP servers.
@@ -392,7 +392,7 @@ For a GitHub-backed Claude installation, every native unit must map exactly to a
 
 v1 retains the MVP canonical `github.com` identity, exact-commit, immutable-checkout, ref ambiguity, and fast-forward rules. It extends acquisition to public and private repositories through existing system Git and SSH authentication. AI4J must not store credentials, accept credential-bearing URLs, or implement OAuth.
 
-When a new-source validate, build, plan-install, or install command omits both `--repo` and `--source`, it must use the built-in `github.com/alx4j/ai4j` repository. `--ref` without `--repo` applies to that repository. An explicit `--repo` selects another GitHub repository; an explicit error must never fall back to the default.
+When validate, build, or a new-source install (including `install --dry-run`) omits both `--repo` and `--source`, it must use the built-in `github.com/alx4j/ai4j` repository. `--ref` without `--repo` applies to that repository. An explicit `--repo` selects another GitHub repository; an explicit error must never fall back to the default.
 
 Default expansion must occur before identity, locking, state, cache, or archived-tombstone comparison. Plans, JSON, and state must carry the MVP `sourceSelection`, effective repository, requested/resolved reference, typed commit identity, and rendered digest. v1 additionally records `sourceMode` as `github` or `development_source`; local mode uses `sourceSelection: explicit`.
 
@@ -467,7 +467,7 @@ The same source digest, CLI version, target capability profile, and build option
 
 ### V1-FR-16 — Complete plan
 
-`ai4j plan <operation>` remains the only dry-run interface. Plans must be available for install, update, sync, rollback, uninstall, and history purge.
+`--dry-run` on the corresponding modifying command is the only dry-run interface. It must be available for install, update, sync, rollback, uninstall, and history purge. A dry run returns the same complete plan that normal interactive execution displays before confirmation, but it never prompts or mutates.
 
 In addition to MVP disclosure, a v1 plan must include:
 
@@ -583,7 +583,7 @@ v1 must also support:
 - `replace-owned`: replace only content already proven to be owned by the same installation, after showing the diff and retaining a structural rollback action.
 - `interactive`: choose among safe actions for each conflict in a terminal.
 
-JSON mode must never prompt. It must receive a complete policy through flags or fail before mutation. `interactive` is valid only on an apply command in a terminal and must be rejected for plan, JSON, or non-terminal execution.
+JSON mode must never prompt. It must receive a complete policy through flags or fail before mutation. `interactive` is valid only on an executing command in a terminal and must be rejected with `--dry-run`, JSON, or non-terminal execution.
 
 No policy may silently replace an unrelated unmanaged file or configuration entry. A future `backup-and-replace` policy for unmanaged whole files is conditional on V1-EVAL-02 and is not part of the committed v1 scope.
 
@@ -619,7 +619,7 @@ The retained native package is a rollback artifact, not a general source cache: 
 
 Previous toolkit-owned values, instructions, and package artifacts are opaque and potentially sensitive. They must never be displayed in full, logged, indexed, uploaded, or exported by diagnostics.
 
-Rollback must first produce a plan. `ai4j plan rollback` is its dry-run interface. Rollback itself must use current locks, a new crash journal, checksum preconditions, target capability validation, and active-content disclosure.
+Rollback must first produce a plan. `ai4j rollback --dry-run` returns that plan without mutation; normal interactive rollback displays it before confirmation. Rollback itself must use current locks, a new crash journal, checksum preconditions, target capability validation, and active-content disclosure.
 
 Before install, update, sync, or uninstall mutates, it must create and checksum every prior structural value and native artifact required by the new rollback point and prove through the current supported adapter that the point can be restored. If it cannot, the operation must fail before mutation.
 
@@ -669,7 +669,7 @@ It must not start a script, binary, hook, or MCP server.
 An MCP process-startup check must require an explicit server selection:
 
 ```text
-ai4j doctor --installation <id> --test-mcp <server-id>
+ai4j doctor <id> --test-mcp <server-id>
 ```
 
 The adapter must prefer a supported native target diagnostic when it provides the needed startup evidence without broadening execution. Otherwise, before direct execution, the CLI must show the exact executable, argument list, documented launch context and placeholder substitutions, referenced environment-variable names, ownership, and a side-effect warning. JSON or non-interactive execution requires `--yes`.
@@ -762,13 +762,13 @@ ai4j build [--repo <github-reference>] [--ref <git-reference>] [--source <path>]
             <selection>
             [--allow-dirty] [--json]
 
-ai4j plan install [--repo <github-reference>] [--ref <git-reference>] [--source <path>]
-                   --target <claude|codex>
-                   --scope <user|project-local|project-shared>
-                   [--project <path>]
-                   <selection>
-                   [--allow-dirty] [--json]
-ai4j plan install --installation <archived-id> [--allow-dirty] [--json]
+ai4j install --dry-run [--repo <github-reference>] [--ref <git-reference>] [--source <path>]
+                          --target <claude|codex>
+                          --scope <user|project-local|project-shared>
+                          [--project <path>]
+                          <selection>
+                          [--allow-dirty] [--json]
+ai4j install --dry-run --installation <archived-id> [--allow-dirty] [--json]
 ai4j install [--repo <github-reference>] [--ref <git-reference>] [--source <path>]
               --target <claude|codex>
               --scope <user|project-local|project-shared>
@@ -777,49 +777,51 @@ ai4j install [--repo <github-reference>] [--ref <git-reference>] [--source <path
               [--yes] [--json]
 ai4j install --installation <archived-id> [--allow-dirty] [--yes] [--json]
 
-ai4j plan update --installation <id>
-                  [--repo <github-reference>] [--ref <git-reference>]
-                  [--allow-dirty]
-                  [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j update --installation <id>
-             [--repo <github-reference>] [--ref <git-reference>]
-             [--allow-dirty]
-             [--expected-commit <full-hash> | --expected-source-digest <sha256>]
-             [--conflict-policy <fail|keep|replace-owned|interactive>]
-             [--yes] [--json]
+ai4j update <id> --dry-run
+                 [--repo <github-reference>] [--ref <git-reference>]
+                 [--allow-dirty]
+                 [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j update <id>
+                 [--repo <github-reference>] [--ref <git-reference>]
+                 [--allow-dirty]
+                 [--expected-commit <full-hash> | --expected-source-digest <sha256>]
+                 [--conflict-policy <fail|keep|replace-owned|interactive>]
+                 [--yes] [--json]
 
-ai4j plan sync --installation <id>
-                <selection> [--allow-dirty]
-                [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j sync --installation <id>
-           <selection> [--allow-dirty]
-           [--expected-source-digest <sha256>]
-           [--conflict-policy <fail|keep|replace-owned|interactive>]
-           [--yes] [--json]
-
-ai4j list [--target <claude|codex>] [--scope <scope>] [--json]
-ai4j status --installation <id> [--check-updates] [--json]
-ai4j doctor --installation <id> [--test-mcp <server-id>] [--yes] [--json]
-
-ai4j plan rollback --installation <id> [--operation <operation-id>]
-                    [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j rollback --installation <id> [--operation <operation-id>]
+ai4j sync <id> --dry-run
+               <selection> [--allow-dirty]
+               [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j sync <id>
+               <selection> [--allow-dirty]
+               [--expected-source-digest <sha256>]
                [--conflict-policy <fail|keep|replace-owned|interactive>]
                [--yes] [--json]
 
-ai4j plan uninstall --installation <id>
-                     [--conflict-policy <fail|keep|replace-owned>] [--json]
-ai4j uninstall --installation <id>
-                [--conflict-policy <fail|keep|replace-owned|interactive>]
-                [--yes] [--json]
+ai4j list [--target <claude|codex>] [--scope <scope>] [--json]
+ai4j status --installation <id> [--check-updates] [--json]
+ai4j doctor <id> [--test-mcp <server-id>] [--yes] [--json]
 
-ai4j history --installation <id> [--json]
-ai4j plan history purge --installation <id>
-                         (--operation <operation-id> | --expired | --all) [--json]
-ai4j history purge --installation <id>
-                    (--operation <operation-id> | --expired | --all) [--yes] [--json]
+ai4j rollback <id> --dry-run [--operation <operation-id>]
+                           [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j rollback <id> [--operation <operation-id>]
+                   [--conflict-policy <fail|keep|replace-owned|interactive>]
+                   [--yes] [--json]
+
+ai4j uninstall <id> --dry-run
+                            [--conflict-policy <fail|keep|replace-owned>] [--json]
+ai4j uninstall <id>
+                            [--conflict-policy <fail|keep|replace-owned|interactive>]
+                            [--yes] [--json]
+
+ai4j history <id> [--json]
+ai4j history purge <id> --dry-run
+                               (--operation <operation-id> | --expired | --all) [--json]
+ai4j history purge <id>
+                               (--operation <operation-id> | --expired | --all) [--yes] [--json]
 ai4j version [--json]
 ```
+
+For update, sync, doctor, rollback, uninstall, history, and history purge, `<id>` is the installation ID and must immediately follow the command or `history purge` subcommand. `--installation` is not accepted by those commands. Status retains `--installation` because selecting one installation is optional, and install retains it only for archived reactivation.
 
 `<selection>` means either `--all` alone or one or more repeatable `--asset <id>` and/or `--bundle <id>` options. For a new-source command, omitting `--repo` and `--source` selects the built-in GitHub repository, and `--ref` alone applies to it. `--source` is mutually exclusive with `--repo` and `--ref`. `--allow-dirty` and `--expected-source-digest` are valid only for local source; `--expected-commit` is GitHub-only. Install's `--installation` is valid only for an archived ID and is mutually exclusive with every new-install source, target, scope, project, selection, and expected-revision option. With `--installation`, `--allow-dirty` is valid only for a `development_source` tombstone and has the exact-digest semantics defined by V1-FR-08.
 
@@ -831,15 +833,17 @@ Every target, installation-state, or history mutation must return or display its
 
 Interactive mode must obtain confirmation when a plan introduces, changes, or reactivates active content; changes source identity; accepts a lossy mapping; applies a non-default conflict policy; purges history; or executes an MCP process-startup check. JSON mode and non-terminal input must never prompt and must require `--yes` plus every required policy argument for those operations.
 
-The conflict policy supplied to a plan must match apply. `interactive` is accepted only by an apply command in a terminal and is invalid with `--json` or non-terminal input.
+The conflict policy reviewed with `--dry-run` must match the executing command. `interactive` is accepted only by an executing command in a terminal and is invalid with `--dry-run`, `--json`, or non-terminal input.
 
 `--yes` is approval, not a force flag. It must not bypass validation, ownership, checksum, path, policy, or recovery checks.
+
+`--dry-run` is mutually exclusive with `--yes`, `--expected-commit`, and `--expected-source-digest`. It accepts only non-interactive conflict policies. The command output and JSON `command` field retain the actual command identity, such as `install` or `history.purge`; dry-run success carries plan data, while execution success carries mutation data.
 
 ### V1-FR-37 — JSON and exit codes
 
 v1 must preserve the MVP JSON envelope fields and their meanings. New commands and additive optional object fields may remain in JSON schema version 1; changing a field, adding a closed-enumeration value, or changing exit-code semantics requires a published schema revision.
 
-JSON plans must use stable identifiers, deterministic ordering, and typed action, mapping, capability, conflict, drift, and history records.
+JSON dry-run results and interactively displayed plans must use stable identifiers, deterministic ordering, and typed action, mapping, capability, conflict, drift, and history records.
 
 The published v1 command schemas must additionally define:
 

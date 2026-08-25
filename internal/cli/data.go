@@ -50,25 +50,6 @@ func (o Operation) command() Command {
 	}
 }
 
-func (o Operation) planCommand() Command {
-	switch o {
-	case OperationInstall:
-		return CommandPlanInstall
-	case OperationUpdate:
-		return CommandPlanUpdate
-	case OperationSync:
-		return CommandPlanSync
-	case OperationRollback:
-		return CommandPlanRollback
-	case OperationUninstall:
-		return CommandPlanUninstall
-	case OperationHistoryPurge:
-		return CommandPlanHistoryPurge
-	default:
-		return ""
-	}
-}
-
 type RefKind = gitsource.ResolvedReferenceKind
 
 const (

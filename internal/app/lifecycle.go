@@ -115,7 +115,7 @@ func (l *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest
 	if err != nil {
 		return cli.Response{}, err
 	}
-	planResponse, err := planResponse(cli.CommandPlanUpdate, planData, update.Report.Warnings, nil, result.UpdateAvailable)
+	planResponse, err := planResponse(cli.CommandUpdate, planData, update.Report.Warnings, nil, result.UpdateAvailable)
 	if err != nil {
 		return cli.Response{}, err
 	}
@@ -220,7 +220,7 @@ func (l *lifecycleService) Uninstall(ctx context.Context, request cli.UninstallR
 	if err != nil {
 		return cli.Response{}, err
 	}
-	planResponse, err := planResponse(cli.CommandPlanUninstall, planData, report.Warnings, nil, result.UpdateNotChecked)
+	planResponse, err := planResponse(cli.CommandUninstall, planData, report.Warnings, nil, result.UpdateNotChecked)
 	if err != nil {
 		return cli.Response{}, err
 	}

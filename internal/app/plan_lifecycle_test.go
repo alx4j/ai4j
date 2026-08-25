@@ -14,7 +14,7 @@ import (
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
-func TestPlanUpdateShowsAvailableDesiredStateWithoutMutation(t *testing.T) {
+func TestUpdateDryRunShowsAvailableDesiredStateWithoutMutation(t *testing.T) {
 	t.Parallel()
 	report := testLifecycleReport(t)
 	service := &planValidationStub{
@@ -22,7 +22,7 @@ func TestPlanUpdateShowsAvailableDesiredStateWithoutMutation(t *testing.T) {
 		report: testLifecycleInstalledReport(t),
 		update: validation.UpdateReport{Report: report, Disposition: gitsource.UpdateAvailable},
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "update", "--json"})
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "update", "--dry-run", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +63,11 @@ func TestCodexLifecycleFailsBeforeMutationWithNativeHandoff(t *testing.T) {
 	}
 }
 
-func TestPlanUpdateReportsPinnedWithoutActions(t *testing.T) {
+func TestUpdateDryRunReportsPinnedWithoutActions(t *testing.T) {
 	t.Parallel()
 	report := testLifecycleReport(t)
 	service := &planValidationStub{record: testInstallationRecord("tag", strings.Repeat("a", 40)), present: true, report: report}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "update"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "update", "--dry-run"})
 	response, err := newCommandHandler(service)(request, CommandIO{})
 	if err != nil {
 		t.Fatal(err)
@@ -78,14 +78,14 @@ func TestPlanUpdateReportsPinnedWithoutActions(t *testing.T) {
 	}
 }
 
-func TestPlanUpdateBlocksRewrittenReference(t *testing.T) {
+func TestUpdateDryRunBlocksRewrittenReference(t *testing.T) {
 	t.Parallel()
 	report := testLifecycleReport(t)
 	service := &planValidationStub{
 		record: testInstallationRecord("branch", strings.Repeat("1", 40)), present: true,
 		update: validation.UpdateReport{Report: report, Disposition: gitsource.UpdateRefRewritten},
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "update"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "update", "--dry-run"})
 	response, err := newCommandHandler(service)(request, CommandIO{})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestPlanUpdateBlocksRewrittenReference(t *testing.T) {
 	}
 }
 
-func TestPlanUpdateDisclosesActionsAlongsideOwnedStateConflicts(t *testing.T) {
+func TestUpdateDryRunDisclosesActionsAlongsideOwnedStateConflicts(t *testing.T) {
 	t.Parallel()
 	conflict, err := cli.NewConflict("rules_drift", "Claude user rules/ai4j.md", "the AI4J rules file is modified")
 	if err != nil {
@@ -109,7 +109,7 @@ func TestPlanUpdateDisclosesActionsAlongsideOwnedStateConflicts(t *testing.T) {
 		update:    validation.UpdateReport{Report: testLifecycleReport(t), Disposition: gitsource.UpdateAvailable},
 		conflicts: []cli.Conflict{conflict},
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "update"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "update", "--dry-run"})
 	response, err := newCommandHandler(service)(request, CommandIO{})
 	if err != nil {
 		t.Fatal(err)
@@ -120,10 +120,10 @@ func TestPlanUpdateDisclosesActionsAlongsideOwnedStateConflicts(t *testing.T) {
 	}
 }
 
-func TestPlanUninstallShowsOnlyOwnedRemovalActions(t *testing.T) {
+func TestUninstallDryRunShowsOnlyOwnedRemovalActions(t *testing.T) {
 	t.Parallel()
 	service := &planValidationStub{record: testInstallationRecord("branch", strings.Repeat("a", 40)), present: true, report: testLifecycleReport(t)}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "plan", "uninstall", "--json"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "uninstall", "--dry-run", "--json"})
 	response, err := newCommandHandler(service)(request, CommandIO{})
 	if err != nil {
 		t.Fatal(err)
@@ -139,9 +139,9 @@ func TestPlanUninstallShowsOnlyOwnedRemovalActions(t *testing.T) {
 	}
 }
 
-func TestStoredLifecyclePlanRequiresInstallationState(t *testing.T) {
+func TestStoredLifecycleDryRunRequiresInstallationState(t *testing.T) {
 	t.Parallel()
-	for _, argv := range [][]string{{"ai4j", "plan", "update"}, {"ai4j", "plan", "uninstall"}} {
+	for _, argv := range [][]string{{"ai4j", "update", "--dry-run"}, {"ai4j", "uninstall", "--dry-run"}} {
 		request, _ := cli.NewParser("darwin").Parse(argv)
 		response, err := newCommandHandler(&planValidationStub{})(request, CommandIO{})
 		if err != nil {
