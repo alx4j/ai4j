@@ -6,26 +6,28 @@
 AI4J packages reusable skills, agents, instructions, scripts, and MCP settings
 for Claude Code and Codex.
 
-Use it to install and manage a toolkit in Claude Code or to build a native
-plugin for Codex. AI4J includes a small default toolkit for repository reviews,
-so you can try the complete workflow without creating a toolkit first.
+Use it to manage toolkits in Claude Code or to build native packages for
+Codex. The repository includes a small default toolkit, so you can try both
+workflows without creating your own toolkit first.
+
+Examples use `ai4j` on macOS. Use `ai4j.exe` on Windows.
 
 ## Supported workflows
 
-The primary workflows are Claude Code on Apple Silicon macOS and Codex on
-Windows x64.
-
-| Host | Claude Code | Codex |
+| Workflow | Apple Silicon macOS | Windows x64 |
 |---|---|---|
-| Apple Silicon macOS | Build, install, update, and remove | Build a native plugin |
-| Windows x64 | Build, install, update, and remove | Build a native plugin |
+| Build Claude packages | Supported | Supported |
+| Install and manage Claude toolkits | Supported | Supported |
+| Build Codex packages | Supported | Supported |
+| Install Codex packages | Interactive Codex handoff | Interactive Codex handoff |
 
-Codex plugins are installed through Codex after AI4J builds them. Other
-operating systems and architectures are not currently supported. See
-[Compatibility](COMPATIBILITY.md) for tested versions.
+AI4J manages Claude installations through Claude's supported plugin commands.
+Codex installation remains an interactive Codex step after AI4J builds the
+package. See [Compatibility](COMPATIBILITY.md) for tested versions.
+Other host profiles are not currently supported.
 
-Before you start, install Git and the AI client you intend to use. Run AI4J as
-your normal user; it does not require `sudo` or an administrator terminal.
+You need Git and the AI clients named by the workflow. Run AI4J as your normal
+user; it does not require `sudo` or an administrator terminal.
 
 ## Install AI4J
 
@@ -41,8 +43,8 @@ ai4j version
 ### Windows
 
 Download `ai4j.exe` and `ai4j.exe.sha256` from the same
-[AI4J release](https://github.com/alx4j/ai4j/releases/latest). Open PowerShell in
-the download directory and verify the checksum:
+[AI4J release](https://github.com/alx4j/ai4j/releases/latest). Open PowerShell
+in the download directory and verify the checksum:
 
 ```powershell
 $Expected = ((Get-Content .\ai4j.exe.sha256 -Raw) -split '\s+')[0].ToLowerInvariant()
@@ -50,7 +52,7 @@ $Actual = (Get-FileHash .\ai4j.exe -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($Actual -ne $Expected) { throw 'AI4J checksum mismatch' }
 ```
 
-Install it for your Windows user and add it to `PATH`:
+Install the executable for your Windows user:
 
 ```powershell
 $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\AI4J'
@@ -69,56 +71,58 @@ ai4j.exe version
 
 New PowerShell windows will also find `ai4j.exe` on `PATH`.
 
-## Claude on macOS: install the default toolkit
+## Install the default toolkit in Claude on macOS
 
-This workflow installs the default toolkit for your Claude Code user account.
-
-First, validate the toolkit without changing your Claude installation:
+Start Claude Code once so that its configuration directory exists. Then
+validate the default toolkit without changing Claude:
 
 ```sh
 ai4j validate --target claude
 ```
 
-Next, preview the installation:
+Preview the installation:
 
 ```sh
-ai4j plan install --target claude --scope user --bundle default
+ai4j install --dry-run --target claude --scope user --bundle default
 ```
 
-The plan shows the source commit and the content that will become active. Copy
-the full commit hash from the plan, then run:
+The preview shows the exact source commit and everything that will become
+active. Copy the full commit hash, then install the reviewed content:
 
 ```sh
 ai4j install --target claude --scope user --bundle default \
-  --expected-commit <full-commit-hash> --yes
+  --expected-commit <full-commit-hash>
 ```
 
-Check the installed toolkit:
+AI4J shows the plan again and asks for confirmation. After installation, use
+the returned installation ID to check the result:
 
 ```sh
 ai4j list
-ai4j status
+ai4j status --installation <installation-id>
 ```
 
-You are done when `status` reports the installation as healthy. Start a new
-Claude Code session before using the installed repository-review content.
+Start a new Claude Code session before using the installed content.
 
-## Codex on Windows: build and install the default plugin
+## Build the default plugin for Codex on Windows
 
-Validate the default toolkit, then build its Codex plugin:
+The default bundle includes a Claude-backed MCP server, so both Claude Code and
+Codex are part of this workflow. Make sure `claude` is on `PATH`, then build the
+first-party Codex package:
 
 ```powershell
-ai4j.exe validate --target codex
 ai4j.exe build --target codex --host windows-amd64 `
-    --output dist\codex --bundle default
+    --output codex-build --bundle default
 ```
 
-The build creates the plugin in `dist\codex\plugin`. The output directory must
-not already exist.
+The build validates the package and writes it to `codex-build\plugin`. The
+output directory must not already exist.
 
-AI4J does not install the plugin directly. Complete the installation in Codex:
+AI4J does not install Codex plugins automatically. Complete the handoff in
+Codex:
 
-1. Open Codex and ask it: `Use $plugin-creator to add C:\full\path\to\dist\codex\plugin to my personal marketplace.`
+1. Ask Codex:
+   `Use $plugin-creator to add C:\full\path\to\codex-build\plugin to my personal marketplace.`
 2. Refresh Codex.
 3. Open the Plugins tab in the desktop app, or run `/plugins` in Codex CLI.
 4. Install `ai4j-default` and start a new session.
@@ -126,38 +130,21 @@ AI4J does not install the plugin directly. Complete the installation in Codex:
 You are done when Codex shows `ai4j-default` as installed and the
 `repository-review` skill is available.
 
-## Create your own toolkit
-
-Create a toolkit in a new directory:
-
-```sh
-ai4j init --target claude --output my-claude-toolkit
-ai4j init --target codex --output my-codex-toolkit --examples
-ai4j init --target claude --target codex --output my-cross-target-toolkit
-```
-
-The target is always explicit. Add `--examples` when you want a working sample
-skill and bundle. AI4J creates `toolkit.json` and the required target-native
-package structure; it does not install the generated content.
-
-To use a toolkit from another GitHub repository, provide its repository and an
-optional branch, tag, or full commit:
-
-```sh
-ai4j validate --repo owner/repository
-ai4j validate --repo owner/repository --ref v1.0.0
-```
-
 ## Manage a Claude installation
 
 Use the installation ID returned by `install` or shown by `list`.
 
 | Task | Preview | Apply |
 |---|---|---|
-| Update | `ai4j plan update --installation <id>` | `ai4j update --installation <id> --expected-commit <commit> --yes` |
-| Change bundle | `ai4j plan sync --installation <id> --bundle <bundle>` | `ai4j sync --installation <id> --bundle <bundle> --yes` |
-| Roll back | `ai4j plan rollback --installation <id>` | `ai4j rollback --installation <id> --yes` |
-| Remove | `ai4j plan uninstall --installation <id>` | `ai4j uninstall --installation <id> --yes` |
+| Update | `ai4j update <id> --dry-run` | `ai4j update <id>` |
+| Change selection | `ai4j sync <id> --dry-run --bundle <bundle>` | `ai4j sync <id> --bundle <bundle>` |
+| Roll back | `ai4j rollback <id> --dry-run` | `ai4j rollback <id>` |
+| Remove | `ai4j uninstall <id> --dry-run` | `ai4j uninstall <id>` |
+
+Apply commands show their plan and ask for confirmation. Add `--yes` only for
+an already-reviewed non-interactive operation. When applying a Git-backed
+install or update, pass the commit from the preview as
+`--expected-commit <commit>` to ensure the source has not changed.
 
 Read-only inspection commands include:
 
@@ -165,11 +152,57 @@ Read-only inspection commands include:
 ai4j list
 ai4j status --installation <id>
 ai4j status --installation <id> --check-updates
-ai4j history --installation <id>
-ai4j doctor --installation <id>
+ai4j history <id>
+ai4j doctor <id>
 ```
 
-Add `--json` to any command for machine-readable output.
+Add `--json` when you need machine-readable output.
 
-For project-scoped installations, individual asset selection, local development
-sources, recovery, and automation, see the [full user guide](USER_GUIDE.md).
+## Create your own toolkit
+
+Create a new toolkit by naming its target explicitly:
+
+```sh
+ai4j init --target claude --output my-claude-toolkit
+ai4j init --target codex --output my-codex-toolkit --examples
+ai4j init --target claude --target codex --output my-cross-target-toolkit
+```
+
+`--examples` adds a small working skill and bundle. AI4J creates
+`toolkit.json` and the target-native package structure; it does not install or
+execute the generated content.
+
+Local source commands require the toolkit directory to be the root of a Git
+worktree. Commit the generated files before validating them:
+
+```sh
+git -C my-claude-toolkit init
+git -C my-claude-toolkit add .
+git -C my-claude-toolkit commit -m "Create toolkit"
+```
+
+Then validate the local Claude toolkit:
+
+```sh
+ai4j validate --source ./my-claude-toolkit --target claude
+```
+
+Build a local Codex toolkit on Windows:
+
+```powershell
+ai4j.exe build --source .\my-codex-toolkit --target codex `
+    --host windows-amd64 --output my-codex-build --all
+```
+
+Choose content for `build`, `install`, or `sync` with either:
+
+- `--all` by itself for the complete toolkit
+- One or more `--bundle <id>` and/or `--asset <id>` options
+
+New `validate`, `build`, and `install` commands use the first-party repository
+by default. For another source, use `--repo owner/repository` with an optional
+`--ref <branch|tag|commit>`, or `--source <path>` for an explicit local
+checkout. Update and sync start from the installation's recorded source.
+
+For project-scoped Claude installations, local development sources, history,
+recovery, and automation, see the [full user guide](USER_GUIDE.md).
