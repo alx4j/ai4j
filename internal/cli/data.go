@@ -728,7 +728,7 @@ func NewPlanData(operation Operation, source Source, installation domain.Install
 }
 
 func NewOfflinePlanData(operation Operation, installation domain.InstallationID, actions []Action, conflicts []Conflict, final FinalState) (PlanData, error) {
-	if operation != OperationHistoryPurge || !installation.Valid() || !final.valid() || !validActions(actions) || len(conflicts) > 64 || !validConflicts(conflicts) {
+	if operation != OperationHistoryPurge && operation != OperationRollback && operation != OperationUninstall || !installation.Valid() || !final.valid() || !validActions(actions) || len(conflicts) > 64 || !validConflicts(conflicts) {
 		return PlanData{}, fmt.Errorf("offline plan data is incomplete")
 	}
 	return PlanData{operation: operation, installation: installation, actions: sortedActions(actions), conflicts: sortedConflicts(conflicts), final: final, disposition: result.UpdateNotChecked}, nil
@@ -744,7 +744,7 @@ func (d PlanData) Conflicts() []Conflict                       { return append([
 func (d PlanData) ExpectedFinalState() FinalState              { return d.final }
 func (d PlanData) UpdateDisposition() result.UpdateDisposition { return d.disposition }
 func (d PlanData) valid() bool {
-	if !d.operation.Valid() || d.hasSource != d.source.valid() || !d.hasSource && d.operation != OperationHistoryPurge || !d.installation.Valid() || !d.final.valid() || !validUpdateDisposition(d.disposition) {
+	if !d.operation.Valid() || d.hasSource != d.source.valid() || !d.hasSource && d.operation != OperationHistoryPurge && d.operation != OperationRollback && d.operation != OperationUninstall || !d.installation.Valid() || !d.final.valid() || !validUpdateDisposition(d.disposition) {
 		return false
 	}
 	for _, item := range d.actions {
@@ -933,21 +933,24 @@ func (s RecordedSource) valid() bool {
 
 type Installation struct {
 	id                         domain.InstallationID
-	toolkitID, pluginID        string
+	toolkitID                  string
+	nativePluginIDs            []string
 	source                     RecordedSource
 	toolkitVersion, cliVersion string
 	expectedNativeVersion      string
 }
 
-func NewInstallation(id domain.InstallationID, toolkitID, pluginID string, source RecordedSource, toolkitVersion, cliVersion, expectedNativeVersion string) (Installation, error) {
-	if !id.Valid() || !hyphenatedIdentifierPattern.MatchString(toolkitID) || !pluginIdentifierPattern.MatchString(pluginID) || !source.valid() || !boundedText(toolkitVersion, 128, false) || !boundedText(cliVersion, 128, false) || (expectedNativeVersion != "" && !boundedText(expectedNativeVersion, 128, false)) {
+func NewInstallation(id domain.InstallationID, toolkitID string, nativePluginIDs []string, source RecordedSource, toolkitVersion, cliVersion, expectedNativeVersion string) (Installation, error) {
+	pluginIDs := uniqueSortedStrings(nativePluginIDs)
+	if !id.Valid() || !hyphenatedIdentifierPattern.MatchString(toolkitID) || len(pluginIDs) == 0 || len(pluginIDs) > 256 || !hasUniqueSortedPluginIDs(pluginIDs) || !source.valid() || !boundedText(toolkitVersion, 128, false) || !boundedText(cliVersion, 128, false) || (expectedNativeVersion != "" && !boundedText(expectedNativeVersion, 128, false)) {
 		return Installation{}, fmt.Errorf("installation is incomplete")
 	}
-	return Installation{id: id, toolkitID: toolkitID, pluginID: pluginID, source: source, toolkitVersion: toolkitVersion, cliVersion: cliVersion, expectedNativeVersion: expectedNativeVersion}, nil
+	return Installation{id: id, toolkitID: toolkitID, nativePluginIDs: pluginIDs, source: source, toolkitVersion: toolkitVersion, cliVersion: cliVersion, expectedNativeVersion: expectedNativeVersion}, nil
 }
-func (i Installation) ID() domain.InstallationID      { return i.id }
-func (i Installation) ToolkitID() string              { return i.toolkitID }
-func (i Installation) NativePluginID() string         { return i.pluginID }
+func (i Installation) ID() domain.InstallationID { return i.id }
+func (i Installation) ToolkitID() string         { return i.toolkitID }
+
+func (i Installation) NativePluginIDs() []string      { return cloneStrings(i.nativePluginIDs) }
 func (i Installation) Source() RecordedSource         { return i.source }
 func (i Installation) ToolkitVersion() string         { return i.toolkitVersion }
 func (i Installation) CLIVersion() string             { return i.cliVersion }
@@ -1141,28 +1144,32 @@ func (r RecoveryState) Phase() result.Phase { return r.phase }
 func (r RecoveryState) HasPhase() bool      { return r.phase != "" }
 
 type InstallationSummary struct {
-	id            domain.InstallationID
-	toolkitID     string
-	target        BuildTarget
-	scope         Scope
-	scopeRoot     string
-	lifecycle     string
-	source        RecordedSource
-	all           bool
-	assets        []string
-	bundles       []string
-	resolved      []string
-	health        string
-	historyCount  int
-	lastOperation domain.OperationID
+	id              domain.InstallationID
+	toolkitID       string
+	target          BuildTarget
+	scope           Scope
+	scopeRoot       string
+	lifecycle       string
+	source          RecordedSource
+	requestedBundle string
+	resolvedBundles []string
+	packages        []string
+	resolvedAssets  []string
+	health          string
+	historyCount    int
+	lastOperation   domain.OperationID
 }
 
-func NewInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, all bool, assets, bundles, resolved []string, health string) (InstallationSummary, error) {
-	return NewDetailedInstallationSummary(id, toolkitID, target, scope, scopeRoot, lifecycle, source, all, assets, bundles, resolved, health, 0, domain.OperationID{})
+func NewInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, requestedBundle string, resolvedBundles, packages, resolvedAssets []string, health string) (InstallationSummary, error) {
+	return NewDetailedInstallationSummary(id, toolkitID, target, scope, scopeRoot, lifecycle, source, requestedBundle, resolvedBundles, packages, resolvedAssets, health, 0, domain.OperationID{})
 }
 
-func NewDetailedInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, all bool, assets, bundles, resolved []string, health string, historyCount int, lastOperation domain.OperationID) (InstallationSummary, error) {
-	value := InstallationSummary{id: id, toolkitID: toolkitID, target: target, scope: scope, scopeRoot: scopeRoot, lifecycle: lifecycle, source: source, all: all, assets: uniqueSortedStrings(assets), bundles: uniqueSortedStrings(bundles), resolved: uniqueSortedStrings(resolved), health: health, historyCount: historyCount, lastOperation: lastOperation}
+func NewDetailedInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, requestedBundle string, resolvedBundles, packages, resolvedAssets []string, health string, historyCount int, lastOperation domain.OperationID) (InstallationSummary, error) {
+	value := InstallationSummary{
+		id: id, toolkitID: toolkitID, target: target, scope: scope, scopeRoot: scopeRoot, lifecycle: lifecycle, source: source,
+		requestedBundle: requestedBundle, resolvedBundles: uniqueSortedStrings(resolvedBundles), packages: uniqueSortedStrings(packages), resolvedAssets: uniqueSortedStrings(resolvedAssets),
+		health: health, historyCount: historyCount, lastOperation: lastOperation,
+	}
 	if !value.valid() {
 		return InstallationSummary{}, fmt.Errorf("installation summary is incomplete")
 	}
@@ -1176,22 +1183,23 @@ func (i InstallationSummary) Scope() Scope                        { return i.sco
 func (i InstallationSummary) ScopeRoot() string                   { return i.scopeRoot }
 func (i InstallationSummary) Lifecycle() string                   { return i.lifecycle }
 func (i InstallationSummary) Source() RecordedSource              { return i.source }
-func (i InstallationSummary) SelectAll() bool                     { return i.all }
-func (i InstallationSummary) Assets() []string                    { return cloneStrings(i.assets) }
-func (i InstallationSummary) Bundles() []string                   { return cloneStrings(i.bundles) }
-func (i InstallationSummary) Resolved() []string                  { return cloneStrings(i.resolved) }
+func (i InstallationSummary) RequestedBundle() string             { return i.requestedBundle }
+func (i InstallationSummary) ResolvedBundles() []string           { return cloneStrings(i.resolvedBundles) }
+func (i InstallationSummary) Packages() []string                  { return cloneStrings(i.packages) }
+func (i InstallationSummary) ResolvedAssets() []string            { return cloneStrings(i.resolvedAssets) }
 func (i InstallationSummary) Health() string                      { return i.health }
 func (i InstallationSummary) HistoryCount() int                   { return i.historyCount }
 func (i InstallationSummary) LastOperationID() domain.OperationID { return i.lastOperation }
 func (i InstallationSummary) HasLastOperationID() bool            { return i.lastOperation.Valid() }
 func (i InstallationSummary) valid() bool {
+	selectionValid := hyphenatedIdentifierPattern.MatchString(i.requestedBundle) && len(i.resolvedBundles) != 0 && containsString(i.resolvedBundles, i.requestedBundle)
 	if !i.id.Valid() || !hyphenatedIdentifierPattern.MatchString(i.toolkitID) || !i.target.Valid() || !i.scope.Valid() ||
 		!boundedText(i.scopeRoot, 4096, false) || (i.lifecycle != "active" && i.lifecycle != "archived") || !i.source.valid() ||
-		(i.all && (len(i.assets) != 0 || len(i.bundles) != 0)) || (!i.all && len(i.assets) == 0 && len(i.bundles) == 0) ||
+		!selectionValid || len(i.resolvedBundles) > 4096 || len(i.packages) == 0 || len(i.packages) > 256 || len(i.resolvedAssets) > 4096 ||
 		(i.health != "healthy" && i.health != "drifted" && i.health != "unknown" && i.health != "recovery_required") || i.historyCount < 0 || i.historyCount > 1024 || i.historyCount > 0 && !i.lastOperation.Valid() {
 		return false
 	}
-	return hasUniqueSortedStrings(i.assets) && hasUniqueSortedStrings(i.bundles) && hasUniqueSortedStrings(i.resolved)
+	return hasUniqueSortedHyphenatedIdentifiers(i.resolvedBundles) && hasUniqueSortedPluginIDs(i.packages) && hasUniqueSortedHyphenatedIdentifiers(i.resolvedAssets)
 }
 
 type ListData struct {
@@ -1552,7 +1560,7 @@ func (s FinalState) valid() bool {
 	return s.installation.valid() && s.native.valid() && s.owned.valid()
 }
 func (i Installation) valid() bool {
-	_, err := NewInstallation(i.id, i.toolkitID, i.pluginID, i.source, i.toolkitVersion, i.cliVersion, i.expectedNativeVersion)
+	_, err := NewInstallation(i.id, i.toolkitID, i.nativePluginIDs, i.source, i.toolkitVersion, i.cliVersion, i.expectedNativeVersion)
 	return err == nil
 }
 func (s NativeState) valid() bool {
@@ -1636,6 +1644,29 @@ func hasUniqueSortedStrings(values []string) bool {
 		}
 	}
 	return true
+}
+
+func hasUniqueSortedPluginIDs(values []string) bool {
+	for index, value := range values {
+		if !pluginIdentifierPattern.MatchString(value) || index > 0 && values[index-1] >= value {
+			return false
+		}
+	}
+	return true
+}
+
+func hasUniqueSortedHyphenatedIdentifiers(values []string) bool {
+	for index, value := range values {
+		if !hyphenatedIdentifierPattern.MatchString(value) || index > 0 && values[index-1] >= value {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(values []string, target string) bool {
+	index := sort.SearchStrings(values, target)
+	return index < len(values) && values[index] == target
 }
 
 func uniqueSortedPlaceholders(values []Placeholder) []Placeholder {

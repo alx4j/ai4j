@@ -91,6 +91,89 @@ func TestRenderSupportsEveryTypedDataVariant(t *testing.T) {
 	}
 }
 
+func TestRenderLifecycleUsageRequiresOneBundle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		command cli.Command
+		usage   string
+	}{
+		{cli.CommandInstall, "Usage: ai4j install [source options] --target claude --scope <SCOPE> --bundle <ID>\n"},
+		{cli.CommandSync, "Usage: ai4j sync <INSTALLATION_ID> --bundle <ID> [options]\n"},
+	}
+	for _, test := range tests {
+		data, err := cli.NewDetailedUsageData(cli.UsageMissingOptionValue, "bundle", test.command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := cli.NewResponse("", failedResult(t, result.FailureUsage), nil, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		if _, err := human.Render(&output, response); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), test.usage) || strings.Contains(output.String(), "--all | --asset") {
+			t.Fatalf("Render(%s) = %q", test.command, output.String())
+		}
+	}
+}
+
+func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
+	t.Parallel()
+
+	source := testSource(t)
+	recorded, err := cli.NewRecordedSource(source.Selection(), source.Repository(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _ := domain.NewInstallationID("installation_001")
+	summary, err := cli.NewInstallationSummary(
+		id, "ai4j", cli.BuildTargetClaude, cli.ScopeUser, t.TempDir(), "active", recorded, "default",
+		[]string{"tools", "default", "review"}, []string{"ai4j-tools", "ai4j-review"}, []string{"repository-review", "claude-tools"}, "healthy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installation, err := cli.NewInstallation(id, "ai4j", []string{"ai4j-tools", "ai4j-review"}, recorded, "1.0.0", "1.0.1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
+	status, err := cli.NewDetailedStatusData(&installation, &summary, native, nil, recovery, result.UpdateNotChecked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := cli.NewListData([]cli.InstallationSummary{summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statusResponse, _ := cli.NewResponse(cli.CommandStatus, successResult(t, result.UpdateNotChecked), nil, status)
+	listResponse, _ := cli.NewResponse(cli.CommandList, successResult(t, result.UpdateNotChecked), nil, list)
+	for name, response := range map[string]cli.Response{"status": statusResponse, "list": listResponse} {
+		var output bytes.Buffer
+		if _, err := human.Render(&output, response); err != nil {
+			t.Fatalf("Render(%s) error = %v", name, err)
+		}
+		for _, want := range []string{
+			"Requested bundle: default",
+			"Resolved bundles: default, review, tools",
+			"Native packages: ai4j-review, ai4j-tools",
+			"Resolved assets: claude-tools, repository-review",
+		} {
+			if !strings.Contains(output.String(), want) {
+				t.Fatalf("Render(%s) = %q, want %q", name, output.String(), want)
+			}
+		}
+		if name == "status" && !strings.Contains(output.String(), "Claude plugins: ai4j-review, ai4j-tools") {
+			t.Fatalf("Render(status) = %q", output.String())
+		}
+	}
+}
+
 func TestRenderIsByteIdenticalForShuffledInputsAndRepeatedRuns(t *testing.T) {
 	t.Parallel()
 

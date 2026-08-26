@@ -193,7 +193,7 @@ func statusData(value cli.StatusData) StatusData {
 	var summary *InstallationSummary
 	var expectedNativeVersion *string
 	if item, ok := value.Installation(); ok {
-		installation = &Installation{InstallationID: item.ID().String(), ToolkitID: item.ToolkitID(), NativePluginID: item.NativePluginID(), Source: recordedSource(item.Source()), ToolkitVersion: item.ToolkitVersion(), CLIVersion: item.CLIVersion()}
+		installation = &Installation{InstallationID: item.ID().String(), ToolkitID: item.ToolkitID(), NativePluginIDs: item.NativePluginIDs(), Source: recordedSource(item.Source()), ToolkitVersion: item.ToolkitVersion(), CLIVersion: item.CLIVersion()}
 		expectedNativeVersion = optionalString(item.ExpectedNativeVersion(), item.HasExpectedNativeVersion())
 	}
 	if item, ok := value.Summary(); ok {
@@ -234,7 +234,8 @@ func doctorData(value cli.DoctorData) DoctorData {
 func installationSummary(installation cli.InstallationSummary) InstallationSummary {
 	return InstallationSummary{
 		InstallationID: installation.ID().String(), ToolkitID: installation.ToolkitID(), Target: string(installation.Target()), Scope: string(installation.Scope()), ScopeRoot: installation.ScopeRoot(), Lifecycle: installation.Lifecycle(),
-		Source: recordedSource(installation.Source()), All: installation.SelectAll(), Assets: installation.Assets(), Bundles: installation.Bundles(), Resolved: installation.Resolved(), Health: installation.Health(), HistoryCount: installation.HistoryCount(), LastOperationID: optionalString(installation.LastOperationID().String(), installation.HasLastOperationID()),
+		Source: recordedSource(installation.Source()), RequestedBundle: installation.RequestedBundle(), ResolvedBundles: installation.ResolvedBundles(), Packages: installation.Packages(), ResolvedAssets: installation.ResolvedAssets(),
+		Health: installation.Health(), HistoryCount: installation.HistoryCount(), LastOperationID: optionalString(installation.LastOperationID().String(), installation.HasLastOperationID()),
 	}
 }
 

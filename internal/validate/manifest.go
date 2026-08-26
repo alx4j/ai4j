@@ -55,9 +55,10 @@ type assetVariant struct {
 }
 
 type bundle struct {
-	ID      string   `json:"id"`
-	Assets  []string `json:"assets,omitempty"`
-	Bundles []string `json:"bundles,omitempty"`
+	ID       string   `json:"id"`
+	Assets   []string `json:"assets,omitempty"`
+	Packages []string `json:"packages,omitempty"`
+	Bundles  []string `json:"bundles,omitempty"`
 }
 
 type target struct {

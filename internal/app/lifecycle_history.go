@@ -83,7 +83,7 @@ func (s *lifecycleService) HistoryPurge(ctx context.Context, request cli.History
 	if err != nil {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureRecovery, "history_invalid", "installation history could not be read", result.UpdateNotChecked, nil)
 	}
-	ids := selectedHistoryIDs(entries, request.Selection(), request.OperationID(), s.now())
+	ids := selectedHistoryIDs(entries, request.Selection(), request.OperationID(), record.LastOperation.ID, s.now())
 	operationID, err := newOperationID(s.random)
 	if err != nil {
 		return cli.Response{}, err
@@ -123,7 +123,7 @@ func (s *lifecycleService) planHistoryPurge(installationID domain.InstallationID
 	if err != nil {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureRecovery, "history_invalid", "installation history could not be read", result.UpdateNotChecked, nil)
 	}
-	ids := selectedHistoryIDs(entries, selection, operationID, s.now())
+	ids := selectedHistoryIDs(entries, selection, operationID, record.LastOperation.ID, s.now())
 	presentCondition, err := cli.NewCondition(cli.ConditionPresent, "")
 	if err != nil {
 		return cli.Response{}, err
@@ -162,7 +162,7 @@ func (s *lifecycleService) planHistoryPurge(installationID domain.InstallationID
 	return cli.NewResponse(cli.CommandHistoryPurge, commandResult, nil, data)
 }
 
-func selectedHistoryIDs(entries []installstate.HistoryEntry, selection cli.HistoryPurgeSelection, operationID domain.OperationID, now time.Time) []string {
+func selectedHistoryIDs(entries []installstate.HistoryEntry, selection cli.HistoryPurgeSelection, operationID domain.OperationID, currentOperationID string, now time.Time) []string {
 	var ids []string
 	switch selection {
 	case cli.HistoryPurgeOperation:
@@ -173,9 +173,9 @@ func selectedHistoryIDs(entries []installstate.HistoryEntry, selection cli.Histo
 		}
 	case cli.HistoryPurgeExpired:
 		cutoff := now.UTC().Add(-90 * 24 * time.Hour)
-		for index, entry := range entries {
+		for _, entry := range entries {
 			timestamp, _ := time.Parse(time.RFC3339, entry.Timestamp)
-			if timestamp.Before(cutoff) && index != len(entries)-1 {
+			if timestamp.Before(cutoff) && entry.OperationID != currentOperationID {
 				ids = append(ids, entry.OperationID)
 			}
 		}

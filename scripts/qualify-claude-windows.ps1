@@ -142,6 +142,17 @@ function Assert-JSONContainsString {
     }
 }
 
+function Assert-DefaultBundleStatus {
+    param([Parameter(Mandatory)]$Status)
+
+    if ([string]::Join(',', @($Status.data.installation.nativePluginIds)) -ne 'ai4j-review,ai4j-tools' -or
+        $Status.data.summary.requestedBundle -ne 'default' -or
+        [string]::Join(',', @($Status.data.summary.resolvedBundles)) -ne 'default,review,tools' -or
+        [string]::Join(',', @($Status.data.summary.packages)) -ne 'ai4j-review,ai4j-tools') {
+        throw 'status did not report the flattened default bundle'
+    }
+}
+
 function Invoke-ProjectJourney {
     param([Parameter(Mandatory)][ValidateSet('project-local', 'project-shared')][string]$Scope)
 
@@ -165,10 +176,12 @@ function Invoke-ProjectJourney {
     if ($status.data.nativeState.registration -ne 'registered' -or $status.data.nativeState.installation -ne 'installed' -or $status.data.nativeState.enablement -ne 'enabled') {
         throw "$Scope native state is incomplete"
     }
+    Assert-DefaultBundleStatus -Status $status
     $marketplaceId = ($plan.data.actions | Where-Object kind -eq 'register_marketplace' | Select-Object -First 1).resource
-    $nativePluginId = "$($status.data.installation.nativePluginId)@$marketplaceId"
     $pluginList = Invoke-ClaudeJSON -EvidenceName "$prefix-plugin-list.json" -Arguments @('plugin', 'list', '--json') -WorkingDirectory $projectRoot
-    Assert-JSONContainsString -Document $pluginList -Expected $nativePluginId
+    foreach ($nativePluginId in @($status.data.installation.nativePluginIds)) {
+        Assert-JSONContainsString -Document $pluginList -Expected "$nativePluginId@$marketplaceId"
+    }
     $marketplaceList = Invoke-ClaudeJSON -EvidenceName "$prefix-marketplace-list.json" -Arguments @('plugin', 'marketplace', 'list', '--json') -WorkingDirectory $projectRoot
     Assert-JSONContainsString -Document $marketplaceList -Expected $marketplaceId
 
@@ -187,7 +200,14 @@ function Invoke-ProjectJourney {
         Write-Evidence -Name "$prefix-settings.json" -Text $settingsText
         $settings = $settingsText | ConvertFrom-Json -Depth 100
         $marketplace = $settings.extraKnownMarketplaces.PSObject.Properties[$marketplaceId].Value
-        if ($marketplace.source.source -ne 'settings' -or $marketplace.source.plugins[0].source.source -ne 'git-subdir' -or $marketplace.source.plugins[0].source.sha -ne $script:QualificationRef) {
+        $plugins = @($marketplace.source.plugins)
+        if ($marketplace.source.source -ne 'settings' -or
+            [string]::Join(',', @($plugins.name)) -ne 'ai4j-review,ai4j-tools' -or
+            @($plugins | Where-Object {
+                    $_.source.source -ne 'git-subdir' -or
+                    $_.source.sha -ne $script:QualificationRef -or
+                    $_.source.path -ne "plugins/$($_.name)"
+                }).Count -ne 0) {
             throw 'project-shared settings do not retain the exact Git source declaration'
         }
     }
@@ -257,7 +277,9 @@ try {
     Assert-NativeSuccess 'Windows lock tests'
     Write-Evidence -Name 'windows-lock-tests.txt' -Text ($lockLines -join [Environment]::NewLine)
 
-    Invoke-ClaudeText -EvidenceName 'native-plugin-validate.txt' -Arguments @('plugin', 'validate', '.', '--strict') -WorkingDirectory (Join-Path $script:RepoRoot 'plugins\ai4j-default')
+    foreach ($package in @('ai4j-review', 'ai4j-tools')) {
+        Invoke-ClaudeText -EvidenceName "native-plugin-validate-$package.txt" -Arguments @('plugin', 'validate', '.', '--strict') -WorkingDirectory (Join-Path $script:RepoRoot "plugins\$package")
+    }
 
     & go build -mod=readonly -trimpath -buildvcs=true -o $script:AI4J ./cmd/ai4j
     Assert-NativeSuccess 'Windows executable build'
@@ -289,18 +311,22 @@ try {
     if ($status.data.nativeState.registration -ne 'registered' -or $status.data.nativeState.installation -ne 'installed' -or $status.data.nativeState.enablement -ne 'enabled') {
         throw 'user native state is incomplete'
     }
+    Assert-DefaultBundleStatus -Status $status
     $marketplaceId = "ai4j-$($script:ActiveInstallation -replace '^install-', '')"
-    $nativePluginId = "$($status.data.installation.nativePluginId)@$marketplaceId"
+    $nativePluginIds = @($status.data.installation.nativePluginIds | ForEach-Object { "$_@$marketplaceId" })
     $marketplaceList = Invoke-ClaudeJSON -EvidenceName 'user-marketplace-list.json' -Arguments @('plugin', 'marketplace', 'list', '--json') -WorkingDirectory $script:RepoRoot
     Assert-JSONContainsString -Document $marketplaceList -Expected $marketplaceId
     $pluginList = Invoke-ClaudeJSON -EvidenceName 'user-plugin-list.json' -Arguments @('plugin', 'list', '--json') -WorkingDirectory $script:RepoRoot
-    Assert-JSONContainsString -Document $pluginList -Expected $nativePluginId
+    foreach ($nativePluginId in $nativePluginIds) {
+        Assert-JSONContainsString -Document $pluginList -Expected $nativePluginId
+    }
 
     Invoke-ClaudeText -EvidenceName 'user-marketplace-update.txt' -Arguments @('plugin', 'marketplace', 'update', $marketplaceId) -WorkingDirectory $script:RepoRoot
-    Invoke-ClaudeText -EvidenceName 'user-plugin-update.txt' -Arguments @('plugin', 'update', $nativePluginId, '--scope', 'user') -WorkingDirectory $script:RepoRoot
+    foreach ($nativePluginId in $nativePluginIds) {
+        Invoke-ClaudeText -EvidenceName "user-plugin-update-$($nativePluginId.Split('@')[0]).txt" -Arguments @('plugin', 'update', $nativePluginId, '--scope', 'user') -WorkingDirectory $script:RepoRoot
+    }
     Invoke-AI4J -EvidenceName 'user-status-after-refresh.json' -Arguments @('status', $script:ActiveInstallation) | Out-Null
 
-    $env:AI4J_TOKEN = 'qualification-presence-only'
     Invoke-AI4J -EvidenceName 'user-doctor.json' -Arguments @('doctor', $script:ActiveInstallation) | Out-Null
     $previewLines = & $script:AI4J doctor $script:ActiveInstallation --test-mcp claude-tools --json 2>&1
     $previewExit = $LASTEXITCODE
@@ -326,8 +352,10 @@ try {
     }
     $postPluginList = Invoke-ClaudeJSON -EvidenceName 'user-post-uninstall-plugin-list.json' -Arguments @('plugin', 'list', '--json') -WorkingDirectory $script:RepoRoot
     $postPluginJSON = ConvertTo-Json -InputObject $postPluginList -Depth 100 -Compress
-    if ($postPluginJSON.Contains($nativePluginId, [StringComparison]::Ordinal)) {
-        throw 'user plugin remained after uninstall'
+    foreach ($nativePluginId in $nativePluginIds) {
+        if ($postPluginJSON.Contains($nativePluginId, [StringComparison]::Ordinal)) {
+            throw "user plugin remained after uninstall: $nativePluginId"
+        }
     }
 
     Invoke-ProjectJourney 'project-local'

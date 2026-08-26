@@ -210,21 +210,24 @@ func (d *doctorService) inspectStatic(ctx context.Context, installationID string
 		checks = append(checks, doctorCheck("owned_"+sanitizeCheckID(drift.Resource()), status, drift.Resource()+" is "+string(drift.State())))
 	}
 	if d.native != nil && record.MarketplaceID != "" {
-		native, problem := d.native.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-		if problem != nil {
-			checks = append(checks, doctorCheck("native_state", cli.DoctorCheckWarning, "target-native state is not observable"))
-		} else {
-			summary := fmt.Sprintf("declared=%t installed=%t enabled=%t", native.MarketplaceRegistered, native.PluginInstalled, native.PluginEnabled)
-			checks = append(checks, doctorCheck("native_state", cli.DoctorCheckOK, summary))
+		for _, pkg := range record.Packages {
+			pluginID := nativePluginID(pkg, record.MarketplaceID)
+			native, problem := d.native.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, pluginID)
+			if problem != nil {
+				checks = append(checks, doctorCheck("native_"+sanitizeCheckID(pkg.ID), cli.DoctorCheckWarning, pluginID+" is not observable"))
+			} else {
+				summary := fmt.Sprintf("%s declared=%t installed=%t enabled=%t", pluginID, native.MarketplaceRegistered, native.PluginInstalled, native.PluginEnabled)
+				checks = append(checks, doctorCheck("native_"+sanitizeCheckID(pkg.ID), cli.DoctorCheckOK, summary))
+			}
 		}
 	}
-	artifact := currentDoctorArtifact(record, history)
-	if len(artifact) == 0 {
+	artifacts := currentDoctorArtifacts(record, history)
+	if len(artifacts) == 0 {
 		checks = append(checks, doctorCheck("package_artifact", cli.DoctorCheckWarning, "retained native package artifact is unavailable"))
 	} else {
-		checks = append(checks, doctorCheck("package_artifact", cli.DoctorCheckOK, "retained native package artifact is present and bounded"))
+		checks = append(checks, doctorCheck("package_artifact", cli.DoctorCheckOK, fmt.Sprintf("%d retained native package artifacts are present and bounded", len(artifacts))))
 	}
-	definitions, artifactErr := parseMCPDefinitions(artifact)
+	definitions, artifactErr := parseMCPDefinitionsFromArtifacts(artifacts)
 	if artifactErr != nil {
 		checks = append(checks, doctorCheck("mcp_registration", cli.DoctorCheckWarning, "MCP declarations are unavailable in retained package history"))
 		return checks, record, nil, nil
@@ -254,14 +257,44 @@ func (d *doctorService) inspectStatic(ctx context.Context, installationID string
 	return checks, record, definitions, nil
 }
 
-func currentDoctorArtifact(record installstate.Record, history []installstate.HistoryEntry) []byte {
-	for index := len(history) - 1; index >= 0; index-- {
-		entry := history[index]
-		if entry.After != nil && entry.After.InstallationID == record.InstallationID && len(entry.NativeArtifactAfter) != 0 {
-			return slices.Clone(entry.NativeArtifactAfter)
+func currentDoctorArtifacts(record installstate.Record, history []installstate.HistoryEntry) []installstate.NativeArtifact {
+	for _, entry := range history {
+		if entry.OperationID == record.LastOperation.ID && entry.After != nil && sameCurrentState(record, *entry.After) && len(entry.NativeArtifactsAfter) != 0 {
+			return cloneNativeArtifacts(entry.NativeArtifactsAfter)
 		}
 	}
 	return nil
+}
+
+func currentDoctorArtifact(record installstate.Record, history []installstate.HistoryEntry) []byte {
+	artifacts := currentDoctorArtifacts(record, history)
+	if len(artifacts) == 0 {
+		return nil
+	}
+	return slices.Clone(artifacts[0].Bytes)
+}
+
+func parseMCPDefinitionsFromArtifacts(artifacts []installstate.NativeArtifact) (map[string]mcpDefinition, error) {
+	definitions := make(map[string]mcpDefinition)
+	for _, artifact := range artifacts {
+		current, err := parseMCPDefinitions(artifact.Bytes)
+		if err != nil {
+			if err.Error() == "MCP declaration is unavailable" {
+				continue
+			}
+			return nil, err
+		}
+		for id, definition := range current {
+			if _, duplicate := definitions[id]; duplicate {
+				return nil, errors.New("MCP declaration is duplicated across packages")
+			}
+			definitions[id] = definition
+		}
+	}
+	if len(definitions) == 0 {
+		return nil, errors.New("MCP declaration is unavailable")
+	}
+	return definitions, nil
 }
 
 func parseMCPDefinitions(artifact []byte) (map[string]mcpDefinition, error) {

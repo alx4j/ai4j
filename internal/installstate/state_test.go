@@ -18,7 +18,7 @@ func TestStoreRejectsUnsupportedSchemaWithoutModifyingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupported := []byte("{\"schemaVersion\":2}\n")
+	unsupported := []byte("{\"schemaVersion\":3}\n")
 	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	second := testRecord()
 	second.InstallationID = "installation-002"
 	second.ToolkitID = "zeta-toolkit"
-	second.PluginID = "zeta-plugin"
+	second.Packages = []NativePackage{{ID: "zeta-plugin", Path: "plugins/zeta-plugin"}}
 	second.Target = "codex"
 	second.Host = "windows-amd64"
 	second.Scope = "project-local"
@@ -97,6 +97,7 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	conflict := first
 	conflict.InstallationID = "installation-003"
 	conflict.Lifecycle = "archived"
+	conflict.NativeResources = nil
 	if err := store.SaveNew(conflict); !errors.Is(err, ErrStateOccupied) {
 		t.Fatalf("logical identity conflict = %v", err)
 	}
@@ -123,6 +124,38 @@ func TestStoreRoundTripsOneAtomicInstallationRecord(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Dir(store.Path()))
 	if err != nil || len(entries) != 1 || entries[0].Name() != "installation.json" {
 		t.Fatalf("state directory = %v, %v", entries, err)
+	}
+}
+
+func TestStoreCanonicalizesFlattenedSelectionAndNativePackages(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := testRecord()
+	record.Selection.ResolvedBundles = []string{"nested", "default"}
+	record.Selection.ResolvedAssets = []string{"zeta-asset", "alpha-asset"}
+	record.Packages = []NativePackage{
+		{ID: "zeta-plugin", Path: "plugins/zeta-plugin"},
+		{ID: "alpha-plugin", Path: "plugins/alpha-plugin"},
+	}
+	record.NativeResources = []string{
+		"claude:zeta-plugin@ai4j",
+		"claude:marketplace:ai4j",
+		"claude:alpha-plugin@ai4j",
+	}
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	got, present, err := store.Load()
+	if err != nil || !present {
+		t.Fatalf("Load() = %#v, %t, %v", got, present, err)
+	}
+	if got.Packages[0].ID != "alpha-plugin" || got.Packages[1].ID != "zeta-plugin" ||
+		got.Selection.ResolvedBundles[0] != "default" || got.Selection.ResolvedAssets[0] != "alpha-asset" ||
+		got.NativeResources[0] != "claude:alpha-plugin@ai4j" {
+		t.Fatalf("canonical record = %#v", got)
 	}
 }
 
@@ -194,7 +227,7 @@ func TestStoreDistinguishesAbsentUnsupportedAndMalformedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.Path(), []byte(`{"schemaVersion":2}`), 0o600); err != nil {
+	if err := os.WriteFile(store.Path(), []byte(`{"schemaVersion":3}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.Load(); !errors.Is(err, ErrUnsupportedSchema) {
@@ -244,6 +277,50 @@ func TestRecordRejectsContradictorySourceMetadata(t *testing.T) {
 	}
 }
 
+func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{name: "requested bundle is not resolved", mutate: func(record *Record) {
+			record.Selection.ResolvedBundles = []string{"nested"}
+		}},
+		{name: "resolved bundles are not sorted", mutate: func(record *Record) {
+			record.Selection.ResolvedBundles = []string{"nested", "default"}
+		}},
+		{name: "resolved assets are duplicated", mutate: func(record *Record) {
+			record.Selection.ResolvedAssets = []string{"ai4j-rules", "ai4j-rules"}
+		}},
+		{name: "native package set is empty", mutate: func(record *Record) {
+			record.Packages = nil
+		}},
+		{name: "native packages are not sorted", mutate: func(record *Record) {
+			record.Packages = []NativePackage{{ID: "zeta-plugin", Path: "plugins/zeta"}, {ID: "alpha-plugin", Path: "plugins/alpha"}}
+		}},
+		{name: "native package path escapes", mutate: func(record *Record) {
+			record.Packages[0].Path = "../plugin"
+		}},
+		{name: "active native resources omit a package", mutate: func(record *Record) {
+			record.NativeResources = []string{"claude:marketplace:ai4j"}
+		}},
+		{name: "archived record retains active native resources", mutate: func(record *Record) {
+			record.Lifecycle = "archived"
+			record.Catalog = OwnedFile{}
+			record.Rules = OwnedFile{}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := testRecord()
+			test.mutate(&record)
+			if err := record.Validate(); !errors.Is(err, ErrMalformedState) {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestStateCommitRejectsAChangedPreimage(t *testing.T) {
 	t.Parallel()
 	store, err := NewStore(t.TempDir())
@@ -274,10 +351,11 @@ func testRecord() Record {
 	requested := "main"
 	scopeRoot, _ := filepath.Abs(".")
 	return Record{
-		SchemaVersion: SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j", PluginID: "ai4j-default",
+		SchemaVersion: SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j",
+		Packages: []NativePackage{{ID: "ai4j-default", Path: "plugins/ai4j-default"}}, MarketplaceID: "ai4j",
 		Source: Source{Mode: "github", Selection: "explicit", Repository: "github.com/alx4j/ai4j", RequestedRef: &requested, RefKind: "branch", Commit: strings.Repeat("a", 40), RenderedDigest: strings.Repeat("d", 64)},
 		Target: "claude", Host: "darwin-arm64", Scope: "user", ScopeRoot: scopeRoot, Lifecycle: "active",
-		Selection:       Selection{All: true, Assets: []string{}, Bundles: []string{}, Resolved: []string{"ai4j-rules"}},
+		Selection:       Selection{RequestedBundle: "default", ResolvedBundles: []string{"default"}, ResolvedAssets: []string{"ai4j-rules"}},
 		NativeResources: []string{"claude:ai4j-default@ai4j", "claude:marketplace:ai4j"}, Health: "healthy", AI4JVersion: "0.0.0-dev",
 		Catalog:       OwnedFile{Path: "state/catalog/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
 		Rules:         OwnedFile{Path: ".claude/rules/ai4j.md", Checksum: strings.Repeat("c", 64)},

@@ -8,10 +8,12 @@ on:
       - .github/workflows/claude-macos-qualification.yml
       - cmd/**
       - internal/**
-      - plugins/ai4j-default/**
+      - schemas/**
+      - plugins/**
       - scripts/qualify-claude-macos.sh
       - toolkit/**
       - toolkit.json
+      - .claude-plugin/**
       - go.mod
       - go.sum
   workflow_dispatch:

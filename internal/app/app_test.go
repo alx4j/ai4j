@@ -130,7 +130,7 @@ func TestApplicationCodexLifecycleFailsBeforeDependencyConstruction(t *testing.T
 
 	commands := [][]string{
 		{"ai4j", "validate", "--target", "codex", "--json"},
-		{"ai4j", "install", "--target", "codex", "--scope", "user", "--all", "--yes", "--json"},
+		{"ai4j", "install", "--target", "codex", "--scope", "user", "--bundle", "default", "--yes", "--json"},
 	}
 	for _, arguments := range commands {
 		factoryCalls := 0
@@ -231,7 +231,7 @@ func TestApplicationEveryUsageIssueBypassesDependenciesAndStdin(t *testing.T) {
 		{name: "missing option value", arguments: []string{"ai4j", "validate", "--repo"}, issue: cli.UsageMissingOptionValue},
 		{name: "empty option value", arguments: []string{"ai4j", "validate", "--repo="}, issue: cli.UsageEmptyOptionValue},
 		{name: "unexpected option value", arguments: []string{"ai4j", "version", "--json=true"}, issue: cli.UsageUnexpectedOptionValue},
-		{name: "invalid option value", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--expected-commit", "not-a-commit"}, issue: cli.UsageInvalidOptionValue, forbidden: "not-a-commit"},
+		{name: "invalid option value", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--expected-commit", "not-a-commit"}, issue: cli.UsageInvalidOptionValue, forbidden: "not-a-commit"},
 	}
 	for _, test := range tests {
 		test := test

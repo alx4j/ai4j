@@ -8,11 +8,13 @@ on:
       - .github/workflows/windows-qualification.yml
       - cmd/**
       - internal/**
-      - plugins/ai4j-default/**
+      - schemas/**
+      - plugins/**
       - scripts/qualify-claude-windows.ps1
       - scripts/qualify-codex-windows.ps1
       - toolkit/**
       - toolkit.json
+      - .claude-plugin/**
       - go.mod
       - go.sum
   workflow_dispatch:

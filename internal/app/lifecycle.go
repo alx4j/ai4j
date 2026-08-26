@@ -18,7 +18,7 @@ import (
 )
 
 type lifecycleValidation interface {
-	SelectLifecycle(context.Context, cli.SourceOptions, bool, []string, []string) validation.LifecycleSelection
+	SelectLifecycle(context.Context, cli.SourceOptions, string) validation.LifecycleSelection
 	ValidateUpdate(context.Context, cli.SourceOptions, domain.CommitOID) validation.UpdateReport
 	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
 }
@@ -40,10 +40,11 @@ type lifecycleExecution struct {
 	source            validation.LifecycleSelection
 	before            *installstate.Record
 	desired           *installstate.Record
+	beforeArtifacts   []installstate.NativeArtifact
 	catalog           []byte
 	catalogBefore     []byte
 	rules             []byte
-	artifact          []byte
+	artifacts         []installstate.NativeArtifact
 	actions           []cli.Action
 	content           []cli.ContentItem
 	conflicts         []cli.Conflict
@@ -51,6 +52,7 @@ type lifecycleExecution struct {
 	final             cli.FinalState
 	disposition       result.UpdateDisposition
 	rollback          *installstate.HistoryEntry
+	nonRestorable     bool
 }
 
 type applyRequest struct {
@@ -248,7 +250,7 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 	return s.commitExecution(ctx, request.command, execution, policy, request.commandIO)
 }
 
-func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.SourceOptions, target cli.BuildTarget, scope cli.Scope, project string, hasProject bool, selection cli.SelectionOptions, installationID domain.InstallationID, reactivation bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.SourceOptions, target cli.BuildTarget, scope cli.Scope, project string, hasProject bool, selection cli.BundleSelection, installationID domain.InstallationID, reactivation bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
 	var before *installstate.Record
 	scopeRoot := s.effectiveClaudeRoot()
 	if reactivation {
@@ -284,7 +286,7 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 			}
 		}
 	}
-	report := s.validation.SelectLifecycle(ctx, source, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	report := s.validation.SelectLifecycle(ctx, source, selection.Bundle())
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandInstall, report)
 	}
@@ -294,9 +296,6 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 	desired, document, err := s.recordForSelection(report, source, selection, installationID, scope, scopeRoot)
 	if err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
-	}
-	if err := s.inspectProjectLocal(ctx, desired); err != nil {
-		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
 	}
 	records, err := s.state.LoadAll()
 	if err != nil {
@@ -313,6 +312,9 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 			}
 		}
 	}
+	if err := s.inspectProjectLocal(ctx, before, desired); err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
+	}
 	catalogBytes := document.Bytes()
 	var catalogBefore []byte
 	if desired.Scope == "project-shared" {
@@ -326,6 +328,9 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 		conflicts = s.existingConflicts(ctx, *before, true)
 	}
 	visible, degraded := applyConflictPolicy(conflicts, policy, before != nil)
+	if before != nil {
+		visible, degraded = applyActiveTransitionConflictPolicy(conflicts, policy)
+	}
 	actions, err := s.transitionActions(cli.OperationInstall, before, &desired, len(report.Rules) != 0)
 	if err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan actions could not be created")
@@ -334,7 +339,7 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 		actions = nil
 	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
-	return lifecycleExecution{operation: cli.OperationInstall, source: report, before: before, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifact: report.NativeArtifact, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
+	return lifecycleExecution{operation: cli.OperationInstall, source: report, before: before, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifacts: retainedArtifacts(report), actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID domain.InstallationID, requested cli.SourceOptions, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -342,6 +347,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	if err != nil || !present || record.Lifecycle != "active" {
 		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
+	selection := selectionFromRecord(record)
 	if record.Source.Mode == "development_source" {
 		if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() {
 			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_change_unsupported", "GitHub and local source modes cannot be changed in place")
@@ -350,8 +356,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if optionErr != nil {
 			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "source_invalid", "stored local source is invalid")
 		}
-		selection := selectionFromRecord(record)
-		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 		if len(report.Problems) != 0 || !report.HasSource() {
 			return stopSelection(cli.CommandUpdate, report)
 		}
@@ -391,8 +396,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if err != nil {
 			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "invalid_source", "requested source change is invalid")
 		}
-		selection := selectionFromRecord(record)
-		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 		if len(report.Problems) != 0 || !report.HasSource() {
 			return stopSelection(cli.CommandUpdate, report)
 		}
@@ -416,15 +420,14 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	default:
 		return stopLifecycle(cli.CommandUpdate, result.FailureSource, "update_source_failed", "the stored source could not be checked")
 	}
-	selection := selectionFromRecord(record)
-	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandUpdate, report)
 	}
 	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
 }
 
-func (s *lifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.SelectionOptions, allowDirty bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+func (s *lifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.BundleSelection, allowDirty bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
 	record, present, err := s.state.LoadByID(installationID.String())
 	if err != nil || !present || record.Lifecycle != "active" {
 		return stopLifecycle(cli.CommandSync, result.FailureConflict, "installation_not_active", "the selected installation is not active")
@@ -438,20 +441,20 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 	if err != nil {
 		return stopLifecycle(cli.CommandSync, result.FailureInternal, "source_invalid", "stored source selection is invalid")
 	}
-	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandSync, report)
 	}
 	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, options, selection, policy, result.UpdateNotChecked)
 }
 
-func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.SelectionOptions, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
+func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.BundleSelection, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
 	desired, document, err := s.recordForSelection(report, sourceOptions, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
 	}
 	desired.History = slices.Clone(record.History)
-	if err := s.inspectProjectLocal(ctx, desired); err != nil {
+	if err := s.inspectProjectLocal(ctx, &record, desired); err != nil {
 		return stopLifecycle(command, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
 	}
 	catalogBytes := document.Bytes()
@@ -463,23 +466,32 @@ func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Comm
 		}
 	}
 	conflicts := s.existingConflicts(ctx, record, true)
-	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	visible, degraded := applyActiveTransitionConflictPolicy(conflicts, policy)
 	actions, err := s.transitionActions(operation, &record, &desired, len(report.Rules) != 0)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan actions could not be created")
 	}
-	installedContent := []cli.ContentItem{}
-	options, err := exactSourceOptions(record)
-	if err != nil {
-		return stopLifecycle(command, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
-	}
+	var beforeArtifacts []installstate.NativeArtifact
+	var content []cli.ContentItem
 	installedSelection := selectionFromRecord(record)
-	installed := s.validation.SelectLifecycle(ctx, options, installedSelection.SelectAll(), installedSelection.Assets(), installedSelection.Bundles())
-	if len(installed.Problems) != 0 || !installed.HasSource() {
-		return stopSelection(command, installed)
+	if record.Source.Mode == "development_source" {
+		beforeArtifacts = s.currentArtifacts(&record)
+		if len(beforeArtifacts) == 0 && len(actions) != 0 {
+			return stopLifecycle(command, result.FailureConflict, "rollback_artifact_unavailable", "exact native rollback material is unavailable")
+		}
+		content, err = recordedTransitionContent(record.Selection.ResolvedAssets, report.Content)
+	} else {
+		options, optionsErr := exactSourceOptions(record)
+		if optionsErr != nil {
+			return stopLifecycle(command, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
+		}
+		installed := s.validation.SelectLifecycle(ctx, options, installedSelection.Bundle())
+		if len(installed.Problems) != 0 || !installed.HasSource() {
+			return stopSelection(command, installed)
+		}
+		beforeArtifacts = retainedArtifacts(installed)
+		content, err = diffActiveContent(installed.Content, report.Content)
 	}
-	installedContent = installed.Content
-	content, err := diffActiveContent(installedContent, report.Content)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "active content changes could not be created")
 	}
@@ -491,7 +503,7 @@ func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Comm
 		}
 	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
-	return lifecycleExecution{operation: operation, source: report, before: &record, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifact: report.NativeArtifact, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: disposition}, cli.Response{}, false, nil
+	return lifecycleExecution{operation: operation, source: report, before: &record, desired: &desired, beforeArtifacts: beforeArtifacts, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifacts: retainedArtifacts(report), actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: disposition}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID domain.InstallationID, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -503,14 +515,27 @@ func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID 
 	if record.Lifecycle == "archived" {
 		return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
-	options, err := exactSourceOptions(record)
-	if err != nil {
-		return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
-	}
+	var report validation.LifecycleSelection
+	var beforeArtifacts []installstate.NativeArtifact
 	selection := selectionFromRecord(record)
-	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
-	if len(report.Problems) != 0 || !report.HasSource() {
-		return stopSelection(cli.CommandUninstall, report)
+	nonRestorable := false
+	if record.Source.Mode == "development_source" {
+		beforeArtifacts = s.currentArtifacts(&record)
+		report = recordedLifecycleSelection(record)
+		if len(beforeArtifacts) == 0 {
+			nonRestorable = true
+			report.Warnings = append(report.Warnings, rollbackUnavailableWarning())
+		}
+	} else {
+		options, optionsErr := exactSourceOptions(record)
+		if optionsErr != nil {
+			return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
+		}
+		report = s.validation.SelectLifecycle(ctx, options, selection.Bundle())
+		if len(report.Problems) != 0 || !report.HasSource() {
+			return stopSelection(cli.CommandUninstall, report)
+		}
+		beforeArtifacts = retainedArtifacts(report)
 	}
 	desired := record
 	var catalogAfter []byte
@@ -523,10 +548,11 @@ func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID 
 	desired.Lifecycle = "archived"
 	desired.Health = "healthy"
 	desired.Catalog = installstate.OwnedFile{}
+	desired.NativeCatalog = installstate.OwnedFile{}
 	desired.Rules = installstate.OwnedFile{}
 	desired.NativeResources = []string{}
-	conflicts := s.existingConflicts(ctx, record, false)
-	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	conflicts := s.existingConflicts(ctx, record, true)
+	visible, degraded := applyRemovalConflictPolicy(conflicts, policy)
 	actions, err := s.transitionActions(cli.OperationUninstall, &record, &desired, false)
 	if err != nil {
 		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall plan actions could not be created")
@@ -535,7 +561,7 @@ func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID 
 	if err != nil {
 		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall content plan could not be created")
 	}
-	return lifecycleExecution{operation: cli.OperationUninstall, source: report, before: &record, desired: &desired, catalog: catalogAfter, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
+	return lifecycleExecution{operation: cli.OperationUninstall, source: report, before: &record, desired: &desired, beforeArtifacts: beforeArtifacts, catalog: catalogAfter, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, nonRestorable: nonRestorable}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareRollback(ctx context.Context, installationID domain.InstallationID, operationID domain.OperationID, selected bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -543,13 +569,11 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	if err != nil || !present {
 		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
 	}
-	entries, err := s.state.LoadHistory(record.InstallationID)
-	if err != nil || len(entries) == 0 {
-		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_unavailable", "no retained rollback point is available")
+	entry, found, err := s.state.LoadHistoryEntry(record.InstallationID, record.LastOperation.ID)
+	if err != nil || !found {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_unavailable", "the current installation has no retained rollback point")
 	}
-	entry := entries[len(entries)-1]
 	if selected {
-		var found bool
 		entry, found, err = s.state.LoadHistoryEntry(record.InstallationID, operationID.String())
 		if err != nil || !found {
 			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_not_found", "the selected rollback point does not exist")
@@ -564,21 +588,44 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	} else {
 		desired.Lifecycle = "archived"
 		desired.Catalog = installstate.OwnedFile{}
+		desired.NativeCatalog = installstate.OwnedFile{}
 		desired.Rules = installstate.OwnedFile{}
 		desired.NativeResources = []string{}
 	}
 	desired.History = slices.Clone(record.History)
-	selection := selectionFromRecord(desired)
-	options, err := exactSourceOptions(desired)
-	if err != nil {
-		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_state_invalid", "the rollback source is invalid")
+	if desired.Lifecycle == "active" {
+		if err := s.inspectProjectLocal(ctx, &record, desired); err != nil {
+			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
+		}
 	}
-	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
-	if len(report.Problems) != 0 || !report.HasSource() {
-		return stopSelection(cli.CommandRollback, report)
+	selection := selectionFromRecord(desired)
+	var report validation.LifecycleSelection
+	if desired.Source.Mode == "development_source" {
+		report = recordedLifecycleSelection(desired)
+	} else {
+		options, optionsErr := exactSourceOptions(desired)
+		if optionsErr != nil {
+			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_state_invalid", "the rollback source is invalid")
+		}
+		report = s.validation.SelectLifecycle(ctx, options, selection.Bundle())
+		if len(report.Problems) != 0 || !report.HasSource() {
+			return stopSelection(cli.CommandRollback, report)
+		}
+	}
+	rollbackArtifacts := cloneNativeArtifacts(entry.NativeArtifactsBefore)
+	catalogBefore, catalogAfter := slices.Clone(entry.CatalogAfter), slices.Clone(entry.CatalogBefore)
+	if desired.Lifecycle == "active" && desired.Scope != "project-shared" {
+		catalogAfter, desired.Catalog, err = retainedRollbackCatalog(desired, rollbackArtifacts)
+		if err != nil {
+			return stopLifecycle(cli.CommandRollback, result.FailureInternal, "rollback_artifact_invalid", "retained rollback packages could not be prepared")
+		}
 	}
 	conflicts := s.existingConflicts(ctx, record, record.Lifecycle == "active")
-	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	visible, degraded := applyActiveTransitionConflictPolicy(conflicts, policy)
+	if desired.Lifecycle == "archived" {
+		conflicts = s.existingConflicts(ctx, record, true)
+		visible, degraded = applyRemovalConflictPolicy(conflicts, policy)
+	}
 	actions, err := s.transitionActions(cli.OperationRollback, &record, &desired, desired.Rules != (installstate.OwnedFile{}))
 	if err != nil {
 		return stopLifecycle(cli.CommandRollback, result.FailureInternal, "plan_failed", "rollback plan actions could not be created")
@@ -587,12 +634,19 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	if desired.Lifecycle == "archived" {
 		final = mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
 	}
-	catalogBefore, catalogAfter := slices.Clone(entry.CatalogAfter), slices.Clone(entry.CatalogBefore)
 	if record.Scope == "project-shared" {
 		catalogBefore, catalogAfter, err = s.planProjectSharedRollback(record, &desired, entry.CatalogBefore)
 		if err != nil {
 			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be rolled back safely")
 		}
 	}
-	return lifecycleExecution{operation: cli.OperationRollback, source: report, before: &record, desired: &desired, catalog: catalogAfter, catalogBefore: catalogBefore, rules: slices.Clone(entry.RulesBefore), artifact: slices.Clone(entry.NativeArtifactBefore), actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, rollback: &entry}, cli.Response{}, false, nil
+	return lifecycleExecution{operation: cli.OperationRollback, source: report, before: &record, desired: &desired, catalog: catalogAfter, catalogBefore: catalogBefore, rules: slices.Clone(entry.RulesBefore), artifacts: rollbackArtifacts, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, rollback: &entry}, cli.Response{}, false, nil
+}
+
+func retainedArtifacts(report validation.LifecycleSelection) []installstate.NativeArtifact {
+	artifacts := make([]installstate.NativeArtifact, len(report.Packages))
+	for index, pkg := range report.Packages {
+		artifacts[index] = installstate.NativeArtifact{PackageID: pkg.ID, Bytes: slices.Clone(pkg.NativeArtifact)}
+	}
+	return artifacts
 }

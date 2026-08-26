@@ -159,8 +159,29 @@ func planAsCommand(response cli.Response, command cli.Command) (cli.Response, er
 	return cli.NewResponse(command, response.Result(), nil, response.Data())
 }
 
-func selectionFromRecord(record installstate.Record) cli.SelectionOptions {
-	return cli.NewSelectionOptions(record.Selection.All, record.Selection.Assets, record.Selection.Bundles)
+func selectionFromRecord(record installstate.Record) cli.BundleSelection {
+	selection, _ := cli.NewBundleSelection(record.Selection.RequestedBundle)
+	return selection
+}
+
+func recordedLifecycleSelection(record installstate.Record) validation.LifecycleSelection {
+	return validation.LifecycleSelection{
+		ToolkitID:        record.ToolkitID,
+		DeclarationID:    record.DeclarationID,
+		ToolkitVersion:   record.ToolkitVersion,
+		RequestedBundle:  record.Selection.RequestedBundle,
+		ResolvedBundles:  slices.Clone(record.Selection.ResolvedBundles),
+		ResolvedPackages: packageIDs(record.Packages),
+		ResolvedAssets:   slices.Clone(record.Selection.ResolvedAssets),
+	}
+}
+
+func rollbackUnavailableWarning() result.Warning {
+	warning, err := result.NewWarning("rollback_unavailable", "retained rollback artifacts are unavailable; uninstall will remove recorded owned resources without creating a rollback point", nil)
+	if err != nil {
+		panic(err)
+	}
+	return warning
 }
 
 func installationIDFor(report validation.LifecycleSelection, scope cli.Scope, scopeRoot string) domain.InstallationID {
@@ -178,8 +199,40 @@ func marketplaceIDFor(installationID domain.InstallationID) string {
 	return "ai4j-" + value
 }
 
-func nativePluginID(record installstate.Record) string {
-	return record.PluginID + "@" + record.MarketplaceID
+func nativePluginID(pkg installstate.NativePackage, marketplaceID string) string {
+	return pkg.ID + "@" + marketplaceID
+}
+
+func nativePluginIDs(record installstate.Record) []string {
+	ids := make([]string, len(record.Packages))
+	for index, pkg := range record.Packages {
+		ids[index] = nativePluginID(pkg, record.MarketplaceID)
+	}
+	return ids
+}
+
+func packageChanges(before, after []installstate.NativePackage) (removed, retained, added []installstate.NativePackage) {
+	beforeByID := make(map[string]installstate.NativePackage, len(before))
+	afterByID := make(map[string]installstate.NativePackage, len(after))
+	for _, pkg := range before {
+		beforeByID[pkg.ID] = pkg
+	}
+	for _, pkg := range after {
+		afterByID[pkg.ID] = pkg
+	}
+	for _, pkg := range before {
+		if _, exists := afterByID[pkg.ID]; exists {
+			retained = append(retained, pkg)
+		} else {
+			removed = append(removed, pkg)
+		}
+	}
+	for _, pkg := range after {
+		if _, exists := beforeByID[pkg.ID]; !exists {
+			added = append(added, pkg)
+		}
+	}
+	return removed, retained, added
 }
 
 func mustInstallation(value string) domain.InstallationID {
@@ -217,9 +270,9 @@ func cloneRecordPtr(record *installstate.Record) *installstate.Record {
 }
 
 func cloneRecord(record installstate.Record) installstate.Record {
-	record.Selection.Assets = slices.Clone(record.Selection.Assets)
-	record.Selection.Bundles = slices.Clone(record.Selection.Bundles)
-	record.Selection.Resolved = slices.Clone(record.Selection.Resolved)
+	record.Selection.ResolvedBundles = slices.Clone(record.Selection.ResolvedBundles)
+	record.Selection.ResolvedAssets = slices.Clone(record.Selection.ResolvedAssets)
+	record.Packages = slices.Clone(record.Packages)
 	record.NativeResources = slices.Clone(record.NativeResources)
 	record.History = slices.Clone(record.History)
 	if record.Source.RequestedRef != nil {
@@ -227,6 +280,14 @@ func cloneRecord(record installstate.Record) installstate.Record {
 		record.Source.RequestedRef = &value
 	}
 	return record
+}
+
+func cloneNativeArtifacts(artifacts []installstate.NativeArtifact) []installstate.NativeArtifact {
+	cloned := make([]installstate.NativeArtifact, len(artifacts))
+	for index, artifact := range artifacts {
+		cloned[index] = installstate.NativeArtifact{PackageID: artifact.PackageID, Bytes: slices.Clone(artifact.Bytes)}
+	}
+	return cloned
 }
 
 func recordsEquivalent(left, right installstate.Record) bool {
@@ -237,7 +298,7 @@ func recordsEquivalent(left, right installstate.Record) bool {
 }
 
 func sameCurrentState(current, expected installstate.Record) bool {
-	return current.InstallationID == expected.InstallationID && current.Lifecycle == expected.Lifecycle && recordSourceRevision(current) == recordSourceRevision(expected) && current.Catalog.Checksum == expected.Catalog.Checksum && current.Rules.Checksum == expected.Rules.Checksum && slices.Equal(current.NativeResources, expected.NativeResources)
+	return recordsEquivalent(current, expected)
 }
 
 func recordSourceRevision(record installstate.Record) string {

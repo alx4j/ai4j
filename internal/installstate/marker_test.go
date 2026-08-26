@@ -2,6 +2,7 @@ package installstate
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,7 +17,7 @@ func TestStoreRoundTripsAndDeletesOperationMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := NewInstallMarker("operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40))
+	want, err := NewResourceMarker("install", "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40), testMarkerResources())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestStoreRejectsUnsupportedMalformedAndReplacementMarkers(t *testing.T) {
 	if _, _, err := store.LoadMarker(); !errors.Is(err, ErrMalformedMarker) || strings.Contains(err.Error(), "SECRET_CANARY") {
 		t.Fatalf("malformed marker error = %v", err)
 	}
-	marker, err := NewInstallMarker("operation-002", "install-bbbbbbbbbbbb", strings.Repeat("b", 40))
+	marker, err := NewResourceMarker("install", "operation-002", "install-bbbbbbbbbbbb", strings.Repeat("b", 40), testMarkerResources())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,12 +73,39 @@ func TestStoreRejectsUnsupportedMalformedAndReplacementMarkers(t *testing.T) {
 func TestOperationMarkerSupportsEachModifyingCommand(t *testing.T) {
 	t.Parallel()
 	for _, operation := range []string{"install", "update", "uninstall"} {
-		marker, err := NewOperationMarker(operation, "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40))
+		marker, err := NewResourceMarker(operation, "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40), testMarkerResources())
 		if err != nil || marker.Operation != operation {
-			t.Fatalf("NewOperationMarker(%q) = %#v, %v", operation, marker, err)
+			t.Fatalf("NewResourceMarker(%q) = %#v, %v", operation, marker, err)
 		}
 	}
-	if _, err := NewOperationMarker("repair", "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40)); !errors.Is(err, ErrMalformedMarker) {
+	if _, err := NewResourceMarker("repair", "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40), testMarkerResources()); !errors.Is(err, ErrMalformedMarker) {
 		t.Fatalf("unsupported operation error = %v", err)
+	}
+}
+
+func testMarkerResources() []string {
+	return []string{
+		"claude:ai4j-review@ai4j",
+		"claude:ai4j-tools@ai4j",
+		"claude:marketplace:ai4j",
+		"owned:.claude/rules/ai4j.md",
+		"owned:state/catalog/.claude-plugin/marketplace.json",
+		"owned:state/installation.json",
+	}
+}
+
+func TestOperationMarkerBoundsMaximumPackageSetTransitionResources(t *testing.T) {
+	t.Parallel()
+	resources := make([]string, maximumMarkerResources)
+	for index := range resources {
+		resources[index] = fmt.Sprintf("claude:package-%04d@marketplace", index)
+	}
+	marker, err := NewResourceMarker("sync", "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40), resources)
+	if err != nil || len(marker.Resources) != maximumMarkerResources {
+		t.Fatalf("maximum marker = %#v, %v", marker, err)
+	}
+	resources = append(resources, "owned:state/installation.json")
+	if _, err := NewResourceMarker("sync", "operation-002", "install-aaaaaaaaaaaa", strings.Repeat("a", 40), resources); !errors.Is(err, ErrMalformedMarker) {
+		t.Fatalf("oversized marker error = %v", err)
 	}
 }

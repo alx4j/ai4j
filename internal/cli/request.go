@@ -112,19 +112,18 @@ func (r BuildRequest) SelectAll() bool        { return r.all }
 func (r BuildRequest) Assets() []string       { return append([]string(nil), r.assets...) }
 func (r BuildRequest) Bundles() []string      { return append([]string(nil), r.bundles...) }
 
-type SelectionOptions struct {
-	all     bool
-	assets  []string
-	bundles []string
+// BundleSelection identifies the one top-level bundle requested by a lifecycle
+// command. Nested bundle expansion belongs to toolkit validation, not argv.
+type BundleSelection struct{ bundle string }
+
+func NewBundleSelection(bundle string) (BundleSelection, error) {
+	if !selectionIdentifier(bundle) {
+		return BundleSelection{}, fmt.Errorf("bundle identifier is invalid")
+	}
+	return BundleSelection{bundle: bundle}, nil
 }
 
-func NewSelectionOptions(all bool, assets, bundles []string) SelectionOptions {
-	return SelectionOptions{all: all, assets: append([]string(nil), assets...), bundles: append([]string(nil), bundles...)}
-}
-
-func (s SelectionOptions) SelectAll() bool   { return s.all }
-func (s SelectionOptions) Assets() []string  { return append([]string(nil), s.assets...) }
-func (s SelectionOptions) Bundles() []string { return append([]string(nil), s.bundles...) }
+func (s BundleSelection) Bundle() string { return s.bundle }
 
 type ConflictPolicy string
 
@@ -145,7 +144,7 @@ type InstallRequest struct {
 	scope             Scope
 	project           string
 	hasProject        bool
-	selection         SelectionOptions
+	selection         BundleSelection
 	installation      domain.InstallationID
 	hasInstallation   bool
 	expectedCommit    domain.CommitOID
@@ -164,7 +163,7 @@ func (r InstallRequest) Source() SourceOptions                 { return r.source
 func (r InstallRequest) Target() BuildTarget                   { return r.target }
 func (r InstallRequest) Scope() Scope                          { return r.scope }
 func (r InstallRequest) Project() (string, bool)               { return r.project, r.hasProject }
-func (r InstallRequest) Selection() SelectionOptions           { return r.selection }
+func (r InstallRequest) Selection() BundleSelection            { return r.selection }
 func (r InstallRequest) InstallationID() domain.InstallationID { return r.installation }
 func (r InstallRequest) HasInstallationID() bool               { return r.hasInstallation }
 func (r InstallRequest) ExpectedCommit() (domain.CommitOID, bool) {
@@ -206,7 +205,7 @@ func (r UpdateRequest) Approved() bool { return r.yes }
 
 type SyncRequest struct {
 	installation      domain.InstallationID
-	selection         SelectionOptions
+	selection         BundleSelection
 	allowDirty        bool
 	expectedDigest    string
 	hasExpectedDigest bool
@@ -220,7 +219,7 @@ func (SyncRequest) request()                                {}
 func (SyncRequest) Command() Command                        { return CommandSync }
 func (r SyncRequest) OutputMode() OutputMode                { return r.output }
 func (r SyncRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r SyncRequest) Selection() SelectionOptions           { return r.selection }
+func (r SyncRequest) Selection() BundleSelection            { return r.selection }
 func (r SyncRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
 func (r SyncRequest) AllowDirty() bool                      { return r.allowDirty }
 func (r SyncRequest) ExpectedSourceDigest() (string, bool) {

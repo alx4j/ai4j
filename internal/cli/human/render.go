@@ -147,11 +147,9 @@ func renderList(output *boundedBuffer, data cli.ListData) {
 		} else {
 			output.indentedField(1, "Source", installation.Source().Repository().String()+" at "+installation.Source().Commit().String())
 		}
-		selection := "all"
-		if !installation.SelectAll() {
-			selection = selectionText(installation.Assets(), installation.Bundles())
-		}
-		output.indentedField(1, "Selection", selection)
+		renderInstallationSelection(output, installation, 1)
+		output.indentedField(1, "Native packages", strings.Join(installation.Packages(), ", "))
+		output.indentedField(1, "Resolved assets", strings.Join(installation.ResolvedAssets(), ", "))
 		output.indentedField(1, "Recorded operations", strconv.Itoa(installation.HistoryCount()))
 		output.indentedLine(1, "Next: ai4j status "+installation.ID().String())
 	}
@@ -311,7 +309,12 @@ func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult resu
 		output.line("Toolkit")
 		output.indentedField(1, "Name", installation.ToolkitID())
 		output.indentedField(1, "Version", installation.ToolkitVersion())
-		output.indentedField(1, "Claude plugin", installation.NativePluginID())
+		pluginIDs := installation.NativePluginIDs()
+		pluginLabel := "Claude plugins"
+		if len(pluginIDs) == 1 {
+			pluginLabel = "Claude plugin"
+		}
+		output.indentedField(1, pluginLabel, strings.Join(pluginIDs, ", "))
 		output.indentedField(1, "Installed by AI4J", installation.CLIVersion())
 		if installation.HasExpectedNativeVersion() {
 			output.indentedField(1, "Expected native version", installation.ExpectedNativeVersion())
@@ -324,12 +327,9 @@ func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult resu
 			output.indentedField(1, "Scope", humanize(string(summary.Scope())))
 			output.indentedField(1, "Location", summary.ScopeRoot())
 			output.indentedField(1, "Lifecycle", humanize(summary.Lifecycle()))
-			selection := "all"
-			if !summary.SelectAll() {
-				selection = selectionText(summary.Assets(), summary.Bundles())
-			}
-			output.indentedField(1, "Selection", selection)
-			output.indentedField(1, "Resolved content", strings.Join(summary.Resolved(), ", "))
+			renderInstallationSelection(output, summary, 1)
+			output.indentedField(1, "Native packages", strings.Join(summary.Packages(), ", "))
+			output.indentedField(1, "Resolved assets", strings.Join(summary.ResolvedAssets(), ", "))
 			output.indentedField(1, "Recorded operations", strconv.Itoa(summary.HistoryCount()))
 			if summary.HasLastOperationID() {
 				output.indentedField(1, "Last operation", summary.LastOperationID().String())
@@ -373,6 +373,16 @@ func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult resu
 		}
 	}
 	renderUpdateStatus(output, data)
+}
+
+func renderInstallationSelection(output *boundedBuffer, installation cli.InstallationSummary, indent int) {
+	requested := installation.RequestedBundle()
+	resolved := strings.Join(installation.ResolvedBundles(), ", ")
+	if resolved == "" {
+		resolved = "None recorded"
+	}
+	output.indentedField(indent, "Requested bundle", requested)
+	output.indentedField(indent, "Resolved bundles", resolved)
 }
 
 func renderVersion(output *boundedBuffer, data cli.VersionData) {
@@ -580,11 +590,11 @@ func commandUsage(command cli.Command) string {
 	case cli.CommandBuild:
 		return "ai4j build [--repo <OWNER/REPO> | --source <PATH>] --target <TARGET> --host <HOST> --output <DIRECTORY> (--all | --asset <ID> | --bundle <ID>)"
 	case cli.CommandInstall:
-		return "ai4j install [source options] --target claude --scope <SCOPE> (--all | --asset <ID> | --bundle <ID>)"
+		return "ai4j install [source options] --target claude --scope <SCOPE> --bundle <ID>"
 	case cli.CommandUpdate:
 		return "ai4j update <INSTALLATION_ID> [options]"
 	case cli.CommandSync:
-		return "ai4j sync <INSTALLATION_ID> (--all | --asset <ID> | --bundle <ID>) [options]"
+		return "ai4j sync <INSTALLATION_ID> --bundle <ID> [options]"
 	case cli.CommandList:
 		return "ai4j list [--target claude] [--scope <SCOPE>]"
 	case cli.CommandStatus:
@@ -723,20 +733,6 @@ func renderUpdateStatus(output *boundedBuffer, data cli.StatusData) {
 func statusIsArchived(data cli.StatusData) bool {
 	summary, ok := data.Summary()
 	return ok && summary.Lifecycle() == "archived"
-}
-
-func selectionText(assets, bundles []string) string {
-	parts := make([]string, 0, 2)
-	if len(assets) != 0 {
-		parts = append(parts, "assets: "+strings.Join(assets, ", "))
-	}
-	if len(bundles) != 0 {
-		parts = append(parts, "bundles: "+strings.Join(bundles, ", "))
-	}
-	if len(parts) == 0 {
-		return "none"
-	}
-	return strings.Join(parts, "; ")
 }
 
 func targetStrings(targets []cli.BuildTarget) []string {

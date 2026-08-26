@@ -116,9 +116,10 @@
       "properties": {
         "id": {"$ref": "#/$defs/id"},
         "assets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "packages": {"type": "array", "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
         "bundles": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}
       },
-      "anyOf": [{"required": ["assets"]}, {"required": ["bundles"]}],
+      "anyOf": [{"required": ["assets"]}, {"required": ["packages"]}, {"required": ["bundles"]}],
       "additionalProperties": false
     },
     "nativePackage": {

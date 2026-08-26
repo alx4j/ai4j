@@ -1,7 +1,6 @@
 {
-  "name": "ai4j-default",
+  "name": "ai4j-review",
   "description": "Practical repository review guidance and a focused review agent",
-  "version": "1.0.0",
   "author": {
     "name": "AI4J"
   }

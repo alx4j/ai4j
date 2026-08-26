@@ -21,9 +21,8 @@ import (
 const maximumStatusFileBytes = 16 << 20
 
 type statusValidation interface {
-	InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem)
 	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
-	SelectLifecycle(context.Context, cli.SourceOptions, bool, []string, []string) validation.LifecycleSelection
+	SelectLifecycle(context.Context, cli.SourceOptions, string) validation.LifecycleSelection
 	ValidateUpdate(context.Context, cli.SourceOptions, domain.CommitOID) validation.UpdateReport
 }
 
@@ -35,6 +34,34 @@ type statusService struct {
 	validation statusValidation
 	state      installstate.Store
 	home       string
+}
+
+func inspectRecordNative(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, *result.Problem) {
+	status := validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}
+	for _, pluginID := range nativePluginIDs(record) {
+		observed, problem := inspector.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, pluginID)
+		if problem != nil {
+			return validation.NativeStatus{}, problem
+		}
+		status.MarketplaceRegistered = status.MarketplaceRegistered && observed.MarketplaceRegistered
+		status.PluginInstalled = status.PluginInstalled && observed.PluginInstalled
+		status.PluginEnabled = status.PluginEnabled && observed.PluginEnabled
+	}
+	return status, nil
+}
+
+func inspectAnyRecordNative(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, *result.Problem) {
+	var status validation.NativeStatus
+	for _, pluginID := range nativePluginIDs(record) {
+		observed, problem := inspector.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, pluginID)
+		if problem != nil {
+			return validation.NativeStatus{}, problem
+		}
+		status.MarketplaceRegistered = status.MarketplaceRegistered || observed.MarketplaceRegistered
+		status.PluginInstalled = status.PluginInstalled || observed.PluginInstalled
+		status.PluginEnabled = status.PluginEnabled || observed.PluginEnabled
+	}
+	return status, nil
 }
 
 func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (cli.Response, error) {
@@ -65,13 +92,7 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 			if err != nil {
 				return cli.Response{}, err
 			}
-			var observation validation.NativeStatus
-			var problem *result.Problem
-			if record.MarketplaceID == "" {
-				observation, problem = s.validation.InspectNativeStatus(ctx)
-			} else {
-				observation, problem = s.validation.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-			}
+			observation, problem := inspectRecordNative(ctx, s.validation, record)
 			if problem != nil {
 				native, err = unknownNative()
 				warning, warningErr := result.NewWarning(problem.Code(), problem.Message(), nil)
@@ -164,7 +185,11 @@ func summaryFromRecord(record installstate.Record) (cli.InstallationSummary, err
 	if err != nil {
 		return cli.InstallationSummary{}, err
 	}
-	return cli.NewDetailedInstallationSummary(id, record.ToolkitID, cli.BuildTarget(record.Target), cli.Scope(record.Scope), record.ScopeRoot, record.Lifecycle, source, record.Selection.All, record.Selection.Assets, record.Selection.Bundles, record.Selection.Resolved, record.Health, len(record.History), lastOperation)
+	return cli.NewDetailedInstallationSummary(
+		id, record.ToolkitID, cli.BuildTarget(record.Target), cli.Scope(record.Scope), record.ScopeRoot, record.Lifecycle, source,
+		record.Selection.RequestedBundle, record.Selection.ResolvedBundles, packageIDs(record.Packages), record.Selection.ResolvedAssets,
+		record.Health, len(record.History), lastOperation,
+	)
 }
 
 func recoveryFromState(stateErr error, markerPresent bool, markerErr error) cli.RecoveryState {
@@ -197,7 +222,15 @@ func installationFromRecord(record installstate.Record) (cli.Installation, error
 	if toolkitVersion == "" {
 		toolkitVersion = "unversioned"
 	}
-	return cli.NewInstallation(installationID, record.ToolkitID, record.PluginID, source, toolkitVersion, record.AI4JVersion, "")
+	return cli.NewInstallation(installationID, record.ToolkitID, packageIDs(record.Packages), source, toolkitVersion, record.AI4JVersion, "")
+}
+
+func packageIDs(packages []installstate.NativePackage) []string {
+	ids := make([]string, len(packages))
+	for index, pkg := range packages {
+		ids[index] = pkg.ID
+	}
+	return ids
 }
 
 func recordedSourceFromRecord(record installstate.Record) (cli.RecordedSource, error) {
@@ -249,6 +282,17 @@ func (s statusService) inspectDrift(record installstate.Record) ([]cli.Drift, er
 		{catalogPath, record.Catalog.Path, record.Catalog.Checksum},
 		{filepath.Join(rulesRoot, filepath.FromSlash(record.Rules.Path)), record.Rules.Path, record.Rules.Checksum},
 	}
+	if record.Scope == "project-shared" && record.NativeCatalog != (installstate.OwnedFile{}) {
+		nativeCatalog, err := projectSharedNativeCatalogFile(record)
+		if err != nil {
+			return nil, err
+		}
+		checks = append(checks, struct {
+			path     string
+			resource string
+			checksum string
+		}{filepath.Join(s.state.DataRoot(), filepath.FromSlash(nativeCatalog.Path)), nativeCatalog.Path, nativeCatalog.Checksum})
+	}
 	items := make([]cli.Drift, 0, len(checks))
 	for _, check := range checks {
 		if check.resource == "" {
@@ -292,13 +336,13 @@ func inspectFileDrift(path, expectedChecksum string) cli.DriftState {
 }
 
 func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem) {
+	selection := selectionFromRecord(record)
 	if record.Source.Mode == "development_source" {
 		options, err := cli.NewDevelopmentSourceOptions(record.Source.Checkout, true)
 		if err != nil {
 			return result.UpdateUnknown, statusProblem("update_check_failed", "stored local source could not be checked")
 		}
-		selection := selectionFromRecord(record)
-		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 		if len(report.Problems) != 0 {
 			problem := report.Problems[0]
 			return result.UpdateUnknown, &problem

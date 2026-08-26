@@ -161,7 +161,7 @@ type FinalState struct {
 
 type PlanData struct {
 	Operation          string        `json:"operation"`
-	Source             *Source       `json:"source,omitempty"`
+	Source             *Source       `json:"source"`
 	InstallationID     string        `json:"installationId"`
 	Actions            []Action      `json:"actions"`
 	ActiveContent      []ContentItem `json:"activeContent"`
@@ -199,12 +199,12 @@ type HistoryData struct {
 }
 
 type Installation struct {
-	InstallationID string         `json:"installationId"`
-	ToolkitID      string         `json:"toolkitId"`
-	NativePluginID string         `json:"nativePluginId"`
-	Source         RecordedSource `json:"source"`
-	ToolkitVersion string         `json:"toolkitVersion"`
-	CLIVersion     string         `json:"cliVersion"`
+	InstallationID  string         `json:"installationId"`
+	ToolkitID       string         `json:"toolkitId"`
+	NativePluginIDs []string       `json:"nativePluginIds"`
+	Source          RecordedSource `json:"source"`
+	ToolkitVersion  string         `json:"toolkitVersion"`
+	CLIVersion      string         `json:"cliVersion"`
 }
 
 type RecordedSource struct {
@@ -286,10 +286,10 @@ type InstallationSummary struct {
 	ScopeRoot       string         `json:"scopeRoot"`
 	Lifecycle       string         `json:"lifecycle"`
 	Source          RecordedSource `json:"source"`
-	All             bool           `json:"all"`
-	Assets          []string       `json:"assets"`
-	Bundles         []string       `json:"bundles"`
-	Resolved        []string       `json:"resolved"`
+	RequestedBundle string         `json:"requestedBundle"`
+	ResolvedBundles []string       `json:"resolvedBundles"`
+	Packages        []string       `json:"packages"`
+	ResolvedAssets  []string       `json:"resolvedAssets"`
 	Health          string         `json:"health"`
 	HistoryCount    int            `json:"historyCount"`
 	LastOperationID *string        `json:"lastOperationId"`

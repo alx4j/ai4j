@@ -72,10 +72,12 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 			if !bytes.Equal(report.Rules, files["toolkit/rules/ai4j.md"]) || report.RulesChecksum != fmt.Sprintf("%x", rulesDigest) {
 				t.Fatalf("validated rules bytes/checksum do not match the tracked rules file")
 			}
-			if runner.claudeValidations != 1 || runner.toolkitExecutions != 0 {
+			if runner.claudeValidations != 2 || runner.toolkitExecutions != 0 {
 				t.Fatalf("claude validations=%d toolkit executions=%d", runner.claudeValidations, runner.toolkitExecutions)
 			}
-			if len(runner.claudeValidationDirectories) != 1 || !strings.HasSuffix(runner.claudeValidationDirectories[0], filepath.Join("plugins", "ai4j-default")) {
+			if len(runner.claudeValidationDirectories) != 2 ||
+				!strings.HasSuffix(runner.claudeValidationDirectories[0], filepath.Join("plugins", "ai4j-review")) ||
+				!strings.HasSuffix(runner.claudeValidationDirectories[1], filepath.Join("plugins", "ai4j-tools")) {
 				t.Fatalf("Claude validation directories = %v", runner.claudeValidationDirectories)
 			}
 			for _, item := range report.Content {
@@ -224,7 +226,7 @@ func TestValidateRejectsLiteralSecretWithoutStartingNativeContent(t *testing.T) 
 	}
 	temporary := t.TempDir()
 	files := firstPartyFiles(t)
-	files["plugins/ai4j-default/.mcp.json"] = []byte(`{"mcpServers":{"claude-tools":{"type":"stdio","command":"claude","args":["mcp","serve"],"env":{"AI4J_TOKEN":"secret-canary"}}}}`)
+	files["plugins/ai4j-tools/.mcp.json"] = []byte(`{"mcpServers":{"claude-tools":{"type":"stdio","command":"claude","args":["mcp","serve"],"env":{"AI4J_TOKEN":"secret-canary"}}}}`)
 	runner := &fixtureRunner{files: files}
 	service, err := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: temporary})
 	if err != nil {
@@ -373,7 +375,7 @@ func firstPartyFiles(t *testing.T) map[string][]byte {
 		t.Fatal(err)
 	}
 	paths := []string{"toolkit.json", ".claude-plugin/marketplace.json", "toolkit/rules/ai4j.md"}
-	err = filepath.WalkDir(filepath.Join(repository, "plugins", "ai4j-default"), func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(filepath.Join(repository, "plugins"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}

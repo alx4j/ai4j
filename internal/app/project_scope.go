@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,8 +88,16 @@ func (s *lifecycleService) runClaudeFor(ctx context.Context, record installstate
 	return s.runClaudeAt(ctx, nativeDirectory(record), arguments)
 }
 
-func (s *lifecycleService) inspectProjectLocal(ctx context.Context, record installstate.Record) error {
-	if record.Scope != "project-local" || record.Rules.Path == "" {
+func (s *lifecycleService) inspectProjectLocal(ctx context.Context, before *installstate.Record, desired installstate.Record) error {
+	if desired.Scope != "project-local" {
+		return nil
+	}
+	record := desired
+	owned := before != nil && before.Lifecycle == "active" && before.Rules != (installstate.OwnedFile{})
+	if owned {
+		record = *before
+	}
+	if record.Rules.Path == "" {
 		return nil
 	}
 	git, err := s.runner.LookPath("git")
@@ -97,16 +106,29 @@ func (s *lifecycleService) inspectProjectLocal(ctx context.Context, record insta
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
-	relative := filepath.ToSlash(record.Rules.Path)
-	tracked, err := s.runner.Run(commandContext, record.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
-	if err != nil || tracked.ExitCode != 0 && tracked.ExitCode != 1 {
-		return errors.New("project rules tracking could not be inspected")
+	if desired.Rules != (installstate.OwnedFile{}) {
+		relative := filepath.ToSlash(desired.Rules.Path)
+		tracked, err := s.runner.Run(commandContext, desired.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
+		if err != nil || tracked.ExitCode != 0 && tracked.ExitCode != 1 {
+			return errors.New("project rules tracking could not be inspected")
+		}
+		if tracked.ExitCode == 0 {
+			return errors.New("project rules destination is tracked")
+		}
 	}
-	if tracked.ExitCode == 0 {
-		return errors.New("project rules destination is tracked")
+	path, err := s.projectExcludePath(ctx, record)
+	if err != nil {
+		return err
 	}
-	_, err = s.projectExcludePath(ctx, record)
-	return err
+	contents, _, err := readProjectMetadata(path)
+	if err != nil {
+		return err
+	}
+	present := slices.Contains(strings.Split(strings.ReplaceAll(string(contents), "\r\n", "\n"), "\n"), projectExcludeLine(record))
+	if present != owned {
+		return errors.New("project rules exclusion ownership does not match installation state")
+	}
+	return nil
 }
 
 func (s *lifecycleService) projectExcludePath(ctx context.Context, record installstate.Record) (string, error) {
@@ -138,7 +160,18 @@ func (s *lifecycleService) ensureProjectLocalExclusion(ctx context.Context, reco
 	if err != nil {
 		return err
 	}
-	return editProjectExclude(path, projectExcludeLine(record), true)
+	return editProjectExclude(path, projectExcludeLine(record), true, false)
+}
+
+func (s *lifecycleService) addProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
+	if record.Scope != "project-local" || record.Rules.Path == "" {
+		return nil
+	}
+	path, err := s.projectExcludePath(ctx, record)
+	if err != nil {
+		return err
+	}
+	return editProjectExclude(path, projectExcludeLine(record), true, true)
 }
 
 func (s *lifecycleService) removeProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
@@ -149,46 +182,75 @@ func (s *lifecycleService) removeProjectLocalExclusion(ctx context.Context, reco
 	if err != nil {
 		return err
 	}
-	return editProjectExclude(path, projectExcludeLine(record), false)
+	return editProjectExclude(path, projectExcludeLine(record), false, false)
 }
 
 func projectExcludeLine(record installstate.Record) string {
 	return "/" + filepath.ToSlash(record.Rules.Path)
 }
 
-func editProjectExclude(path, ownedLine string, present bool) error {
+func editProjectExclude(path, ownedLine string, present, rejectExisting bool) error {
 	contents, mode, err := readProjectMetadata(path)
 	if err != nil {
 		return err
+	}
+	if !present {
+		updated, found := removeProjectExcludeLines(contents, ownedLine)
+		if !found {
+			return nil
+		}
+		return replaceProjectMetadata(path, updated, mode)
 	}
 	newline := "\n"
 	if bytes.Contains(contents, []byte("\r\n")) {
 		newline = "\r\n"
 	}
 	lines := strings.Split(strings.ReplaceAll(string(contents), "\r\n", "\n"), "\n")
-	filtered := make([]string, 0, len(lines)+1)
 	found := false
 	for _, line := range lines {
 		if line == ownedLine {
 			found = true
-			continue
 		}
-		filtered = append(filtered, line)
 	}
-	if present {
-		filtered = append(filtered, ownedLine)
+	if rejectExisting && found {
+		return errors.New("project rules exclusion appeared after planning")
 	}
-	if present && found || !present && !found {
+	if found {
 		return nil
 	}
-	for len(filtered) > 0 && filtered[len(filtered)-1] == "" {
-		filtered = filtered[:len(filtered)-1]
-	}
-	updated := []byte(strings.Join(filtered, newline))
-	if len(updated) != 0 {
+	updated := slices.Clone(contents)
+	if len(updated) != 0 && updated[len(updated)-1] != '\n' {
 		updated = append(updated, []byte(newline)...)
 	}
+	updated = append(updated, []byte(ownedLine+newline)...)
 	return replaceProjectMetadata(path, updated, mode)
+}
+
+func removeProjectExcludeLines(contents []byte, ownedLine string) ([]byte, bool) {
+	updated := make([]byte, 0, len(contents))
+	found := false
+	for start := 0; start < len(contents); {
+		end := bytes.IndexByte(contents[start:], '\n')
+		if end < 0 {
+			end = len(contents)
+		} else {
+			end += start + 1
+		}
+		lineEnd := end
+		if lineEnd > start && contents[lineEnd-1] == '\n' {
+			lineEnd--
+		}
+		if lineEnd > start && contents[lineEnd-1] == '\r' {
+			lineEnd--
+		}
+		if string(contents[start:lineEnd]) == ownedLine {
+			found = true
+		} else {
+			updated = append(updated, contents[start:end]...)
+		}
+		start = end
+	}
+	return updated, found
 }
 
 func readProjectMetadata(path string) ([]byte, os.FileMode, error) {
