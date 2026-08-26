@@ -41,11 +41,11 @@ func TestListAndSelectedStatusInspectMultipleInstallationsOffline(t *testing.T) 
 		t.Fatal(err)
 	}
 	items := response.Data().(cli.ListData).Installations()
-	if _, migration := response.Data().(cli.ListData).Migration(); migration || len(items) != 2 || items[0].ID().String() != "installation-001" || items[1].ID().String() != "installation-002" || validator.nativeCalls != 0 || validator.updateCalls != 0 {
+	if len(items) != 2 || items[0].ID().String() != "installation-001" || items[1].ID().String() != "installation-002" || validator.nativeCalls != 0 || validator.updateCalls != 0 {
 		t.Fatalf("list = %#v, calls=%d/%d", items, validator.nativeCalls, validator.updateCalls)
 	}
 	var output bytes.Buffer
-	if exit, err := jsonout.Render(&output, response); err != nil || exit != result.ExitSuccess || !strings.Contains(output.String(), `"installationId":"installation-002"`) || !strings.Contains(output.String(), `"migration":null`) {
+	if exit, err := jsonout.Render(&output, response); err != nil || exit != result.ExitSuccess || !strings.Contains(output.String(), `"installationId":"installation-002"`) {
 		t.Fatalf("list JSON exit=%d error=%v output=%s", exit, err, output.String())
 	}
 	selectedRequest, err := cli.NewParser("darwin").Parse([]string{"ai4j", "status", "--installation", "installation-002"})
@@ -337,6 +337,11 @@ type statusValidationStub struct {
 }
 
 func (s *statusValidationStub) InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem) {
+	s.nativeCalls++
+	return s.native, s.nativeProblem
+}
+
+func (s *statusValidationStub) InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem) {
 	s.nativeCalls++
 	return s.native, s.nativeProblem
 }

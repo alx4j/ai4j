@@ -19,7 +19,7 @@ The order favors usable behavior:
 
 1. Prove Claude/Codex fidelity and ship deterministic cross-target builds.
 2. Add selection and authoring.
-3. Upgrade state and complete one rollback-capable lifecycle on the existing macOS/Claude path.
+3. Establish canonical state and complete one rollback-capable lifecycle on the existing macOS/Claude path.
 4. Expand that lifecycle to new sources, Windows, project scopes, and Codex.
 5. Add opt-in execution diagnostics and qualify the release last.
 
@@ -67,7 +67,7 @@ Wave 2  Multiple-installation state and inspection
    |
 Wave 3  Complete Claude/macOS/user lifecycle with rollback  <-- first usable v1
    |
-Wave 4  Private GitHub, local development, and source migration
+Wave 4  Private GitHub, local development, and source changes
    |
 Wave 5  Windows Claude user-scope parity
    |
@@ -150,28 +150,28 @@ The complete plan is approximately **36–61 focused engineering days**. The fir
 
 ### Wave 2 — Multiple-installation state and local inspection
 
-**Goal:** replace the MVP's single-installation state with a recoverable v1 state model and deliver local multi-installation inspection before expanding mutations.
+**Goal:** establish the canonical multi-installation state model and deliver local inspection before expanding mutations.
 
 **Estimate:** L, 3–5 days.
 
 | Story | Outcome | Requirements |
 |---|---|---|
-| V1-ST-010 — Versioned v1 state migration | Existing MVP state is previewed and migrated under an exclusive lock and minimal recovery journal; unknown future schemas block mutation. | V1-FR-04, V1-FR-08 |
+| V1-ST-010 — Canonical installation state | One current state format stores independent installations atomically; any unsupported pre-release format fails closed without conversion. | V1-FR-04, V1-FR-08 |
 | V1-ST-011 — Installation identity and state collection | Active and archived records use immutable installation IDs plus logical target/scope/root/toolkit identity without cross-installation inference. | V1-FR-08, V1-AR-05 |
 | V1-ST-012 — Offline list and precise status | `list` deterministically enumerates active/archived installations; `status` reports one installation, source, selection, native observations, drift, health, and recovery state without network or execution. | V1-FR-20 |
-| V1-ST-013 — Complete v1 command parsing | The v1 grammar, mutual exclusions, installation selection, stable errors, JSON envelope, and exit semantics are executable even when later-wave capabilities return `unsupported_capability`. | V1-FR-35 through V1-FR-37 |
+| V1-ST-013 — Complete command parsing | The CLI grammar, mutual exclusions, installation selection, stable errors, JSON envelope, and exit semantics are executable even when later-wave capabilities return `unsupported_capability`. | V1-FR-35 through V1-FR-37 |
 
 **Exit gate**
 
-- A real MVP installation migrates without changing target content and remains inspectable.
+- Canonical state remains inspectable without a compatibility or conversion layer.
 - Multiple state records coexist without path or identity collisions.
 - `list` is offline and deterministic; `status` distinguishes observed, unknown, drifted, recovery-required, active, and archived state.
-- A migration interruption either completes, compensates, or leaves a precise recoverable state.
-- Existing MVP validate, plan, install, status, update, and uninstall regressions remain green.
+- An interrupted current-format operation either completes, compensates, or leaves a precise recoverable state.
+- Validate, plan, install, status, update, and uninstall regressions remain green.
 
 ### Wave 3 — Complete Claude/macOS user lifecycle with rollback
 
-**Goal:** deliver the first complete v1 lifecycle on the existing supported target/host/scope: GitHub-backed Claude, Darwin ARM64, user scope.
+**Goal:** deliver the first complete lifecycle on the existing supported target/host/scope: GitHub-backed Claude, Darwin ARM64, user scope.
 
 **Estimate:** XL, 5–8 days.
 
@@ -193,7 +193,7 @@ The complete plan is approximately **36–61 focused engineering days**. The fir
 
 This is the first usable v1 checkpoint. If speed is the priority, release an internal preview here before expanding the platform matrix.
 
-### Wave 4 — Private GitHub, local development, and source migration
+### Wave 4 — Private GitHub, local development, and source changes
 
 **Goal:** extend the complete Wave 3 lifecycle to all committed source workflows while retaining exact provenance and ephemeral acquisition.
 
@@ -203,14 +203,14 @@ This is the first usable v1 checkpoint. If speed is the priority, release an int
 |---|---|---|
 | V1-ST-018 — Private GitHub through existing authentication | Public and private canonical GitHub sources use system Git/SSH authentication without accepting or storing credentials. | V1-FR-11 |
 | V1-ST-019 — Local-development source | Explicit local checkouts support validate, build, install, update, and sync with stable digests, dirty-state approval, expected-digest checks, and immutable Claude install-backing bundles. | V1-FR-13, V1-AR-05 |
-| V1-ST-020 — Source/reference migration and diff | Explicit GitHub source or reference migration preserves installation identity and shows source, rendered, ownership, compatibility, and rollback changes before approval. | V1-FR-12, V1-FR-19 |
+| V1-ST-020 — Source/reference change and diff | An explicit GitHub source or reference change preserves installation identity and shows source, rendered, ownership, compatibility, and rollback changes before approval. | V1-FR-12, V1-FR-19 |
 
 **Exit gate**
 
 - Private repositories work through already configured Git/SSH authentication and no credential-bearing URL is accepted.
 - Local source is never inferred, never mutated, and cannot be combined with project-shared scope.
 - Dirty local input requires explicit approval, is marked non-reproducible, and must match the expected digest at apply time.
-- GitHub source/reference migrations never occur implicitly and preserve toolkit and installation identity.
+- GitHub source/reference changes never occur implicitly and preserve toolkit and installation identity.
 - Claude development installs use only immutable selected-content backing bundles, not general source caches.
 
 ### Wave 5 — Windows Claude user-scope parity
@@ -304,7 +304,7 @@ Decision recorded 2026-08-25: the documented Codex interface provides interactiv
 
 | Story | Outcome | Requirements |
 |---|---|---|
-| V1-ST-032 — Failure and compatibility qualification | Automated contracts cover four target/host tuples, three scopes, failure injection, concurrent edits, policy blocks, structural formats, and migrations without claiming deferred live-host qualification. | V1-NFR-02, V1-NFR-04, V1-NFR-06 |
+| V1-ST-032 — Failure and compatibility qualification | Automated contracts cover four target/host tuples, three scopes, failure injection, concurrent edits, policy blocks, and structural formats without claiming deferred live-host qualification. | V1-NFR-02, V1-NFR-04, V1-NFR-06 |
 | V1-ST-033 — Reproducible unsigned artifacts | The same clean commit and exact Go patch produce reproducible macOS and Windows binaries, matching checksums, and explicit unsigned-release documentation. | V1-NFR-01, V1-NFR-05, V1-NFR-08 |
 | V1-ST-034 — Release documentation and acceptance | Contract-tested compatibility ranges, capability requirements, user guide, JSON schemas, release-candidate verification, and all numbered acceptance criteria are complete. | V1-FR-37, V1-NFR-05, V1-NFR-06 |
 
@@ -425,4 +425,4 @@ A wave is complete only when every story in that wave meets this definition and 
 - If an evaluation selects behavior that is currently excluded, revise this plan before implementation.
 - If a target version lacks a required public capability, narrow or revise the supported capability range; do not create an undocumented workaround.
 - If new work does not trace to a v1 requirement, acceptance criterion, regression, or concrete safety blocker, move it to `BACKLOG.md`.
-- Preserve completed MVP behavior throughout the sequence. A v1 wave may migrate state or commands, but it must not leave the existing complete lifecycle unusable between commits.
+- Preserve completed behavior throughout the sequence. A wave must not leave the existing complete lifecycle unusable between commits.

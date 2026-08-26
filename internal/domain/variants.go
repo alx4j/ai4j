@@ -136,7 +136,7 @@ func (v Capability) String() string { return v.value }
 func (v Capability) Valid() bool    { return symbolPattern.MatchString(v.value) }
 
 // StateSchemaVersion is deliberately numeric so an unknown newer wire value
-// can be retained and rejected instead of being mapped to the MVP schema.
+// can be retained and rejected instead of being mapped to a known schema.
 type StateSchemaVersion struct{ value uint16 }
 
 func NewStateSchemaVersion(value uint16) (StateSchemaVersion, error) {
@@ -149,49 +149,18 @@ func (v StateSchemaVersion) Uint16() uint16 { return v.value }
 func (v StateSchemaVersion) Valid() bool    { return v.value != 0 }
 
 var (
-	targetClaude                  = mustValue(NewTarget("claude"))
-	hostDarwin                    = mustValue(NewHost("darwin"))
-	scopeUser                     = mustValue(NewScope("user"))
-	sourceModeGitHub              = mustValue(NewSourceMode("github"))
 	sourceSelectionBuiltInDefault = mustValue(NewSourceSelection("built_in_default"))
 	sourceSelectionExplicit       = mustValue(NewSourceSelection("explicit"))
 	gitTransportHTTPS             = mustValue(NewGitTransport("https"))
 	gitTransportSSH               = mustValue(NewGitTransport("ssh"))
-	selectionWholeToolkit         = mustValue(NewSelectionMode("whole_toolkit"))
-	recoveryShortLived            = mustValue(NewRecoveryPolicy("short_lived"))
 	objectFormatSHA1              = mustValue(NewObjectFormat("sha1"))
-	stateSchemaV1                 = mustValue(NewStateSchemaVersion(1))
-	targetCodex                   = mustValue(NewTarget("codex"))
-
-	capabilityNativeValidation        = mustValue(NewCapability("native_validation"))
-	capabilityInspection              = mustValue(NewCapability("inspection"))
-	capabilityMarketplaceRegistration = mustValue(NewCapability("marketplace_registration"))
-	capabilityPluginInstallation      = mustValue(NewCapability("plugin_installation"))
-	capabilityEnablement              = mustValue(NewCapability("enablement"))
-	capabilityUpdate                  = mustValue(NewCapability("update"))
-	capabilityUninstall               = mustValue(NewCapability("uninstall"))
 )
 
-func ClaudeTarget() Target                          { return targetClaude }
-func CodexTarget() Target                           { return targetCodex }
-func DarwinHost() Host                              { return hostDarwin }
-func UserScope() Scope                              { return scopeUser }
-func GitHubSourceMode() SourceMode                  { return sourceModeGitHub }
-func BuiltInDefaultSource() SourceSelection         { return sourceSelectionBuiltInDefault }
-func ExplicitSource() SourceSelection               { return sourceSelectionExplicit }
-func HTTPSGitTransport() GitTransport               { return gitTransportHTTPS }
-func SSHGitTransport() GitTransport                 { return gitTransportSSH }
-func WholeToolkitSelection() SelectionMode          { return selectionWholeToolkit }
-func ShortLivedRecovery() RecoveryPolicy            { return recoveryShortLived }
-func SHA1ObjectFormat() ObjectFormat                { return objectFormatSHA1 }
-func MVPStateSchema() StateSchemaVersion            { return stateSchemaV1 }
-func NativeValidationCapability() Capability        { return capabilityNativeValidation }
-func InspectionCapability() Capability              { return capabilityInspection }
-func MarketplaceRegistrationCapability() Capability { return capabilityMarketplaceRegistration }
-func PluginInstallationCapability() Capability      { return capabilityPluginInstallation }
-func EnablementCapability() Capability              { return capabilityEnablement }
-func UpdateCapability() Capability                  { return capabilityUpdate }
-func UninstallCapability() Capability               { return capabilityUninstall }
+func BuiltInDefaultSource() SourceSelection { return sourceSelectionBuiltInDefault }
+func ExplicitSource() SourceSelection       { return sourceSelectionExplicit }
+func HTTPSGitTransport() GitTransport       { return gitTransportHTTPS }
+func SSHGitTransport() GitTransport         { return gitTransportSSH }
+func SHA1ObjectFormat() ObjectFormat        { return objectFormatSHA1 }
 
 func mustValue[T any](value T, err error) T {
 	if err != nil {
@@ -238,15 +207,3 @@ func (s CapabilitySet) Values() []Capability {
 }
 
 func (s CapabilitySet) Empty() bool { return len(s.values) == 0 }
-
-func MVPCapabilities() CapabilitySet {
-	return mustValue(NewCapabilitySet(
-		NativeValidationCapability(),
-		InspectionCapability(),
-		MarketplaceRegistrationCapability(),
-		PluginInstallationCapability(),
-		EnablementCapability(),
-		UpdateCapability(),
-		UninstallCapability(),
-	))
-}

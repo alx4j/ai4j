@@ -3,7 +3,6 @@ package installstate
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,57 +11,51 @@ import (
 	"testing"
 )
 
-func TestStoreMigratesLegacySingleRecordIntoVersionedCollection(t *testing.T) {
+func TestStoreRejectsUnsupportedSchemaWithoutModifyingIt(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	store, err := NewStore(home)
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := fmt.Sprintf(`{
-  "schemaVersion": 1,
-  "installationId": "installation-001",
-  "toolkitId": "ai4j",
-  "pluginId": "ai4j-default",
-  "source": {"selection":"explicit","repository":"github.com/alx4j/ai4j","requestedRef":"main","refKind":"branch","commit":"%s"},
-  "target": "claude",
-  "scope": "user",
-  "ai4jVersion": "0.0.0-dev",
-  "catalog": {"path":"state/catalog/.claude-plugin/marketplace.json","checksum":"%s"},
-  "rules": {"path":".claude/rules/ai4j.md","checksum":"%s"},
-  "lastOperation": {"id":"operation-001","timestamp":"2026-08-24T12:00:00Z"}
-}
-`, strings.Repeat("a", 40), strings.Repeat("b", 64), strings.Repeat("c", 64))
+	unsupported := []byte("{\"schemaVersion\":2}\n")
 	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.Path(), []byte(legacy), 0o600); err != nil {
+	if err := os.WriteFile(store.Path(), unsupported, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := store.Snapshot()
-	if err != nil || !snapshot.MigrationRequired || len(snapshot.Installations) != 1 || snapshot.Installations[0].ScopeRoot != home {
-		t.Fatalf("legacy snapshot = %#v, error = %v", snapshot, err)
+	if _, err := store.Snapshot(); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("unsupported Snapshot() error = %v", err)
 	}
 	before, _ := os.ReadFile(store.Path())
-	if !bytes.Equal(before, []byte(legacy)) {
-		t.Fatal("read-only migration preview changed state")
+	if !bytes.Equal(before, unsupported) {
+		t.Fatal("unsupported state changed after rejected read")
 	}
-	if err := store.beginMigration(); err != nil {
+	if err := store.Save(testRecord()); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("Save() over unsupported state error = %v", err)
+	}
+	after, _ := os.ReadFile(store.Path())
+	if !bytes.Equal(after, before) {
+		t.Fatal("unsupported state changed after rejected write")
+	}
+}
+
+func TestNewStoreAtUsesAnAbsoluteCleanDataRoot(t *testing.T) {
+	t.Parallel()
+	dataRoot := t.TempDir()
+	store, err := NewStoreAt(dataRoot)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.beginMigration(); err == nil {
-		t.Fatal("second migration acquired the exclusive journal")
+	if want := filepath.Join(dataRoot, "state"); store.Root() != want {
+		t.Fatalf("Root() = %q, want %q", store.Root(), want)
 	}
-	migrated, err := store.Migrate()
-	if err != nil || !migrated {
-		t.Fatalf("Migrate() = %t, %v", migrated, err)
+	if _, err := NewStoreAt("relative"); err == nil {
+		t.Fatal("relative data root was accepted")
 	}
-	after, err := store.Snapshot()
-	if err != nil || after.MigrationRequired || after.SchemaVersion != SchemaVersion || len(after.Installations) != 1 || after.Installations[0].SchemaVersion != SchemaVersion {
-		t.Fatalf("migrated snapshot = %#v, error = %v", after, err)
-	}
-	if pending, err := store.MigrationPending(); err != nil || pending {
-		t.Fatalf("migration journal = %t, %v", pending, err)
+	if _, err := NewStoreAt(dataRoot + string(os.PathSeparator) + "."); err == nil {
+		t.Fatal("unclean data root was accepted")
 	}
 }
 
@@ -201,7 +194,7 @@ func TestStoreDistinguishesAbsentUnsupportedAndMalformedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.Path(), []byte(`{"schemaVersion":3}`), 0o600); err != nil {
+	if err := os.WriteFile(store.Path(), []byte(`{"schemaVersion":2}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.Load(); !errors.Is(err, ErrUnsupportedSchema) {
@@ -265,7 +258,7 @@ func TestStateCommitRejectsAChangedPreimage(t *testing.T) {
 	if err := os.WriteFile(store.Path(), changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = store.writeState([]byte("replacement\n"), false, stateExpectation{contents: original, present: true})
+	err = store.writeState([]byte("replacement\n"), stateExpectation{contents: original, present: true})
 	if !errors.Is(err, ErrStateChanged) {
 		t.Fatalf("writeState() error = %v", err)
 	}

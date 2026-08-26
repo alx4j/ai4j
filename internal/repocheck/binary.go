@@ -81,7 +81,7 @@ func ValidateBinary(build *debug.BuildInfo, expectedRevision, artifactSHA256 str
 	case "windows/amd64":
 		evidence.Executable = "ai4j.exe"
 	default:
-		problems = append(problems, fmt.Errorf("target %s/%s is not a v1 release target", evidence.TargetOS, evidence.TargetArch))
+		problems = append(problems, fmt.Errorf("target %s/%s is not supported for release", evidence.TargetOS, evidence.TargetArch))
 	}
 	if evidence.CGOEnabled != "0" {
 		problems = append(problems, fmt.Errorf("CGO_ENABLED %q, want 0", evidence.CGOEnabled))

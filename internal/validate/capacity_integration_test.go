@@ -26,7 +26,7 @@ func TestCommandsFailBeforeBoundedWritesWhenCapacityIsInsufficient(t *testing.T)
 		t.Fatal(err)
 	}
 
-	validateRequest, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate"})
+	validateRequest, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
 	validateReport := service.Validate(context.Background(), validateRequest.(cli.ValidateRequest).Source())
 	if validateReport.Failure != FailureEnvironment || len(validateReport.Problems) != 1 || validateReport.Problems[0].Code() != "insufficient_disk_space" {
 		t.Fatalf("validate report = failure:%s problems:%v", validateReport.Failure, validateReport.Problems)

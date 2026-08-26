@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/alx4j/ai4j/internal/host/privatepath"
@@ -50,11 +52,12 @@ func (m marker) valid() bool {
 }
 
 type Workspace struct {
-	mu      sync.Mutex
-	path    string
-	lease   *lease
-	closed  bool
-	purpose Purpose
+	mu        sync.Mutex
+	path      string
+	lease     *lease
+	removeAll func(string) error
+	closed    bool
+	purpose   Purpose
 }
 
 func Create(root string, purpose Purpose) (*Workspace, error) {
@@ -94,7 +97,7 @@ func Create(root string, purpose Purpose) (*Workspace, error) {
 		return nil, err
 	}
 	cleanup = false
-	return &Workspace{path: path, lease: lease, purpose: purpose}, nil
+	return &Workspace{path: path, lease: lease, removeAll: privatepath.RemoveAll, purpose: purpose}, nil
 }
 
 func (w *Workspace) Path() string {
@@ -118,18 +121,20 @@ func (w *Workspace) Close() error {
 	if w.closed {
 		return nil
 	}
+	if err := w.removeAll(w.path); err != nil {
+		return err
+	}
+	if err := w.lease.release(); err != nil {
+		return err
+	}
+	if err := os.Remove(metadataPath(w.path, leaseName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(metadataPath(w.path, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	w.closed = true
-	markerErr := os.Remove(metadataPath(w.path, markerName))
-	if errors.Is(markerErr, os.ErrNotExist) {
-		markerErr = nil
-	}
-	leaseErr := w.lease.release()
-	lockErr := os.Remove(metadataPath(w.path, leaseName))
-	if errors.Is(lockErr, os.ErrNotExist) {
-		lockErr = nil
-	}
-	removeErr := privatepath.RemoveAll(w.path)
-	return errors.Join(markerErr, leaseErr, lockErr, removeErr)
+	return nil
 }
 
 // Publish atomically renames a completed staging workspace to a new output
@@ -153,13 +158,19 @@ func (w *Workspace) Publish(output string) error {
 		return err
 	}
 	w.closed = true
-	_ = os.Remove(metadataPath(w.path, markerName))
-	_ = w.lease.release()
-	_ = os.Remove(metadataPath(w.path, leaseName))
+	if err := w.lease.release(); err == nil {
+		if err := os.Remove(metadataPath(w.path, leaseName)); err == nil || errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(metadataPath(w.path, markerName))
+		}
+	}
 	return nil
 }
 
 func Scavenge(root string) error {
+	return scavenge(root, privatepath.RemoveAll)
+}
+
+func scavenge(root string, removeAll func(string) error) error {
 	root, err := canonicalRoot(root)
 	if err != nil {
 		return err
@@ -168,23 +179,39 @@ func Scavenge(root string) error {
 	if err != nil {
 		return err
 	}
-	candidates := 0
-	for _, entry := range entries {
-		purpose, candidate := purposeForDirectory(entry.Name())
-		if !candidate || !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+	candidates := orphanCandidates(entries)
+	if len(candidates) > maximumOrphanCount {
+		return errors.New("too many AI4J orphan-workspace candidates")
+	}
+	for _, name := range candidates {
+		purpose, _ := purposeForDirectory(name)
+		path := filepath.Join(root, name)
+		info, pathErr := os.Lstat(path)
+		pathPresent := pathErr == nil
+		if pathPresent && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
 			continue
 		}
-		candidates++
-		if candidates > maximumOrphanCount {
-			return errors.New("too many AI4J orphan-workspace candidates")
+		if pathErr != nil && !errors.Is(pathErr, os.ErrNotExist) {
+			return pathErr
 		}
-		path := filepath.Join(root, entry.Name())
 		observed, err := readMarker(metadataPath(path, markerName))
-		if err != nil || observed.Purpose != purpose || observed.Directory != entry.Name() {
+		if err != nil || observed.Purpose != purpose || observed.Directory != name {
 			continue
 		}
 		lease, err := tryLease(metadataPath(path, leaseName))
-		if errors.Is(err, errLeaseBusy) || errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, errLeaseBusy) {
+			continue
+		}
+		if errors.Is(err, os.ErrNotExist) && !pathPresent {
+			repeated, repeatedErr := readMarker(metadataPath(path, markerName))
+			if repeatedErr == nil && repeated == observed {
+				if err := os.Remove(metadataPath(path, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			continue
+		}
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -195,9 +222,11 @@ func Scavenge(root string) error {
 			_ = lease.release()
 			continue
 		}
-		if err := os.Remove(metadataPath(path, markerName)); err != nil {
-			_ = lease.release()
-			return err
+		if pathPresent {
+			if err := removeAll(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				_ = lease.release()
+				return err
+			}
 		}
 		if err := lease.release(); err != nil {
 			return err
@@ -205,11 +234,33 @@ func Scavenge(root string) error {
 		if err := os.Remove(metadataPath(path, leaseName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := privatepath.RemoveAll(path); err != nil {
+		if err := os.Remove(metadataPath(path, markerName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}
 	return nil
+}
+
+func orphanCandidates(entries []os.DirEntry) []string {
+	candidates := make(map[string]struct{})
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, ok := purposeForDirectory(name); ok && entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			candidates[name] = struct{}{}
+		}
+		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, markerName) {
+			candidate := strings.TrimSuffix(strings.TrimPrefix(name, "."), markerName)
+			if _, ok := purposeForDirectory(candidate); ok {
+				candidates[candidate] = struct{}{}
+			}
+		}
+	}
+	names := make([]string, 0, len(candidates))
+	for name := range candidates {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func metadataPath(workspacePath, suffix string) string {

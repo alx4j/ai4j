@@ -10,7 +10,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-func TestCollisionKeyV1PinsUnicodeAndGoldenCanonicalSpelling(t *testing.T) {
+func TestCollisionKeyPinsUnicodeAndGoldenCanonicalSpelling(t *testing.T) {
 	t.Parallel()
 	if cases.UnicodeVersion != pathsafe.CollisionUnicodeVersion || norm.Version != pathsafe.CollisionUnicodeVersion {
 		t.Fatalf("Unicode tables = cases %s / norm %s, want %s", cases.UnicodeVersion, norm.Version, pathsafe.CollisionUnicodeVersion)
@@ -20,12 +20,11 @@ func TestCollisionKeyV1PinsUnicodeAndGoldenCanonicalSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !key.Valid() || key.Version() != pathsafe.CollisionKeyVersionV1() ||
-		key.Version().String() != "unicode15_nfc_casefold_v1" || key.Canonical() != "plugins/caf\u00e9/strasse.md" {
-		t.Fatalf("key = version %q canonical %q", key.Version(), key.Canonical())
+	if !key.Valid() || key.Canonical() != "plugins/caf\u00e9/strasse.md" {
+		t.Fatalf("key = %q", key.Canonical())
 	}
-	if (pathsafe.CollisionKey{}).Valid() || (pathsafe.CollisionKeyVersion{}).Valid() {
-		t.Fatal("zero collision key or version is valid")
+	if (pathsafe.CollisionKey{}).Valid() {
+		t.Fatal("zero collision key is valid")
 	}
 	if !pathsafe.EquivalentLeafCollision().Valid() || !pathsafe.AncestorLeafCollision().Valid() ||
 		pathsafe.EquivalentLeafCollision().String() != "equivalent_leaf" ||
@@ -35,7 +34,7 @@ func TestCollisionKeyV1PinsUnicodeAndGoldenCanonicalSpelling(t *testing.T) {
 	}
 }
 
-func TestCollisionKeyV1UsesCanonicalEquivalenceAndFullDefaultCaseFold(t *testing.T) {
+func TestCollisionKeyUsesCanonicalEquivalenceAndFullDefaultCaseFold(t *testing.T) {
 	t.Parallel()
 	pairs := [][2]string{
 		{"Skills/Agent.md", "skills/agent.md"},
@@ -54,7 +53,7 @@ func TestCollisionKeyV1UsesCanonicalEquivalenceAndFullDefaultCaseFold(t *testing
 		}
 	}
 
-	// V1 uses canonical NFC, not compatibility NFKC. Fullwidth Latin remains
+	// Canonicalization uses NFC, not compatibility NFKC. Fullwidth Latin remains
 	// distinct from ASCII even though both are case-folded.
 	fullwidth := mustCollisionKey(t, "width/\uff21.md")
 	ascii := mustCollisionKey(t, "width/A.md")

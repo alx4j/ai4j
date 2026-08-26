@@ -68,10 +68,10 @@ The default source is the first-party AI4J toolkit at `github.com/alx4j/ai4j`.
 First validate it without installing anything:
 
 ```sh
-ai4j validate
+ai4j validate --target claude
 ```
 
-Review a complete v1 installation plan and select the content you want:
+Review a complete installation plan and select the content you want:
 
 ```sh
 ai4j install --dry-run --target claude --scope user --bundle default
@@ -159,22 +159,22 @@ Validation resolves an exact Git commit and checks the toolkit without installin
 Validate the first-party default:
 
 ```sh
-ai4j validate
+ai4j validate --target claude
 ```
 
 Validate a specific branch, tag, or full commit:
 
 ```sh
-ai4j validate --ref main
-ai4j validate --ref v1.0.0
-ai4j validate --ref <full-commit-hash>
+ai4j validate --ref main --target claude
+ai4j validate --ref v1.0.0 --target claude
+ai4j validate --ref <full-commit-hash> --target claude
 ```
 
 Validate another GitHub toolkit repository:
 
 ```sh
-ai4j validate --repo owner/repository
-ai4j validate --repo owner/repository --ref main
+ai4j validate --repo owner/repository --target claude
+ai4j validate --repo owner/repository --ref main --target claude
 ```
 
 `--repo` accepts canonical GitHub HTTPS or SSH forms. Private repositories use your existing system Git credential helper, SSH agent, or default SSH keys; AI4J neither accepts nor stores credentials. The short `owner/repository` form is recommended. An explicit source failure never falls back to the built-in repository.
@@ -204,7 +204,7 @@ Validation is static. It does not claim that toolkit instructions are trustworth
 Planning is read-only:
 
 ```sh
-ai4j install --dry-run
+ai4j install --dry-run --target claude --scope user --bundle default
 ai4j update <installation-id> --dry-run
 ai4j sync <installation-id> --dry-run --bundle default
 ai4j rollback <installation-id> --dry-run
@@ -220,7 +220,7 @@ For update, sync, doctor, rollback, uninstall, and history commands, put the ins
 
 ## Install
 
-Interactive installation displays the plan and asks for confirmation. A v1 install requires one target, scope, and selection:
+Interactive installation displays the plan and asks for confirmation. An install requires one target, scope, and selection:
 
 ```sh
 ai4j install --target claude --scope user --bundle default
@@ -289,7 +289,7 @@ ai4j list
 ai4j list --target claude --scope user
 ```
 
-The list is ordered deterministically and shows each immutable installation ID, active or archived lifecycle, target, scope root, source commit, requested and resolved selection, health, retained-history count, and last operation. If an older MVP state record is present, `list` also previews the schema migration and its defaults without changing the file.
+The list is ordered deterministically and shows each immutable installation ID, active or archived lifecycle, target, scope root, source commit, requested and resolved selection, health, retained-history count, and last operation. Unsupported pre-release state formats fail closed and are never rewritten automatically.
 
 Inspect one installation by ID:
 
@@ -297,7 +297,7 @@ Inspect one installation by ID:
 ai4j status --installation <installation-id>
 ```
 
-For backward compatibility, plain `ai4j status` still works when zero or one record exists. An installation ID is required when several records exist. Local status does not access GitHub:
+Plain `ai4j status` works when zero or one record exists. An installation ID is required when several records exist. Local status does not access GitHub:
 
 ```sh
 ai4j status
@@ -346,7 +346,7 @@ The command invokes the executable directly without a shell, passes only the doc
 
 ## Update
 
-Without source flags, AI4J updates only the branch recorded during installation. Repository or reference migration requires explicit `--repo` and/or `--ref` options.
+Without source flags, AI4J updates only the branch recorded during installation. Changing the repository or reference requires explicit `--repo` and/or `--ref` options.
 
 Review one installation's update first:
 
@@ -371,7 +371,7 @@ Update behavior is intentionally conservative:
 
 Repeating an update when the branch has not moved returns `no_change`.
 
-To migrate an existing GitHub installation explicitly, plan with `--repo` and/or `--ref`, then apply with the exact commit shown in that plan. The toolkit and installation IDs are preserved:
+To change an existing GitHub installation's source, plan with `--repo` and/or `--ref`, then apply with the exact commit shown in that plan. The toolkit and installation IDs are preserved:
 
 ```sh
 ai4j update <installation-id> --dry-run --repo owner/new-repository --ref main
@@ -461,8 +461,9 @@ An archived installation can be inspected, rolled back, reactivated explicitly w
 Every command supports `--json`:
 
 ```sh
-ai4j install --dry-run --json
-ai4j install --expected-commit <full-commit-hash> --yes --json
+ai4j install --dry-run --target claude --scope user --bundle default --json
+ai4j install --target claude --scope user --bundle default \
+  --expected-commit <full-commit-hash> --yes --json
 ai4j status --json
 ```
 
@@ -495,7 +496,7 @@ It also records an operation marker and a private structural history entry befor
 
 Temporary source, build, init, lifecycle, and rollback workspaces carry an AI4J sidecar marker plus a live operating-system lease. A later command removes a crash orphan only when both identify a recognized AI4J workspace and the lease proves that no process still owns it. Live and unmarked directories are retained. Completed build and init staging directories are published with one atomic directory rename, so a partial output tree is not exposed.
 
-Before another modifying command starts, AI4J now reconciles an interrupted v1 operation automatically in three exact cases: the recorded final state is already fully committed, the target exactly matches the recorded final state but the state/history commit is incomplete, or both state and target still exactly match the recorded pre-operation state. It rechecks state and target immediately before repair. Mixed state, drift, unsupported journals, history purge interruptions, and target state that cannot be observed exactly remain fail-closed as `recovery_required`.
+Before another modifying command starts, AI4J reconciles an interrupted operation automatically in three exact cases: the recorded final state is already fully committed, the target exactly matches the recorded final state but the state/history commit is incomplete, or both state and target still exactly match the recorded pre-operation state. It rechecks state and target immediately before repair. Mixed state, drift, unsupported journals, history purge interruptions, and target state that cannot be observed exactly remain fail-closed as `recovery_required`.
 
 When recovery is required:
 
@@ -552,6 +553,6 @@ The following are intentionally deferred:
 - OAuth and stored credentials
 - Offline GitHub operation and persistent source caches
 - Automatic crash compensation and general repair
-- Release signing, Apple notarization, Windows Authenticode, SBOMs, and provenance attestations; v1 artifacts are explicitly unsigned and checksum-verifiable
+- Release signing, Apple notarization, Windows Authenticode, SBOMs, and provenance attestations; release artifacts are unsigned and checksum-verifiable
 
 Unsupported target, host, scope, or lifecycle combinations fail explicitly with `unsupported_capability` and exit code `3`; parsing a command does not imply that the selected combination is supported.

@@ -114,4 +114,4 @@ Complete these technical substories in order. Each substory starts only after th
 
 ## Out of scope
 
-- Non-GitHub hosts, local source, OAuth, credential storage, or repository migration.
+- Non-GitHub hosts, local source, OAuth, credential storage, or changing an existing installation's repository.

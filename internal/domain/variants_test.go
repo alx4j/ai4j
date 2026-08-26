@@ -43,7 +43,7 @@ func TestGitTransportIsClosedAndCredentialFree(t *testing.T) {
 	}
 }
 
-func TestMVPVocabulary(t *testing.T) {
+func TestBuiltInVocabulary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -51,14 +51,8 @@ func TestMVPVocabulary(t *testing.T) {
 		value interface{ String() string }
 		want  string
 	}{
-		{name: "target", value: domain.ClaudeTarget(), want: "claude"},
-		{name: "host", value: domain.DarwinHost(), want: "darwin"},
-		{name: "scope", value: domain.UserScope(), want: "user"},
-		{name: "source mode", value: domain.GitHubSourceMode(), want: "github"},
 		{name: "built-in source", value: domain.BuiltInDefaultSource(), want: "built_in_default"},
 		{name: "explicit source", value: domain.ExplicitSource(), want: "explicit"},
-		{name: "selection", value: domain.WholeToolkitSelection(), want: "whole_toolkit"},
-		{name: "recovery", value: domain.ShortLivedRecovery(), want: "short_lived"},
 		{name: "object format", value: domain.SHA1ObjectFormat(), want: "sha1"},
 	}
 	for _, test := range tests {
@@ -69,9 +63,6 @@ func TestMVPVocabulary(t *testing.T) {
 			}
 		})
 	}
-	if got := domain.MVPStateSchema().Uint16(); got != 1 {
-		t.Fatalf("MVP state schema = %d, want 1", got)
-	}
 }
 
 func TestVariantConstructorsPreserveFutureValuesAndRejectInvalidWireValues(t *testing.T) {
@@ -81,8 +72,8 @@ func TestVariantConstructorsPreserveFutureValuesAndRejectInvalidWireValues(t *te
 	if err != nil {
 		t.Fatalf("NewTarget() error = %v", err)
 	}
-	if future == domain.ClaudeTarget() {
-		t.Fatal("future target was mapped to the MVP target")
+	if future.String() != "test_target" {
+		t.Fatalf("target = %q, want test_target", future)
 	}
 
 	invalid := []string{"", "Claude", "codex-target", "../claude", "claude/value"}
@@ -95,7 +86,7 @@ func TestVariantConstructorsPreserveFutureValuesAndRejectInvalidWireValues(t *te
 		t.Error("NewStateSchemaVersion(0) succeeded")
 	}
 	unknown, err := domain.NewStateSchemaVersion(2)
-	if err != nil || unknown == domain.MVPStateSchema() {
+	if err != nil || !unknown.Valid() || unknown.Uint16() != 2 {
 		t.Fatalf("unknown schema = %#v, error = %v", unknown, err)
 	}
 }
@@ -103,13 +94,24 @@ func TestVariantConstructorsPreserveFutureValuesAndRejectInvalidWireValues(t *te
 func TestCapabilitySetIsDefensiveAndDeterministic(t *testing.T) {
 	t.Parallel()
 
-	set := domain.MVPCapabilities()
-	values := set.Values()
-	if len(values) != 7 {
-		t.Fatalf("capability count = %d, want 7", len(values))
+	inspection, err := domain.NewCapability("inspection")
+	if err != nil {
+		t.Fatal(err)
 	}
-	values[0] = domain.UpdateCapability()
-	if got := set.Values(); len(got) != 7 || !set.Contains(domain.NativeValidationCapability()) {
+	update, err := domain.NewCapability("update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := domain.NewCapabilitySet(update, inspection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := set.Values()
+	if len(values) != 2 {
+		t.Fatalf("capability count = %d, want 2", len(values))
+	}
+	values[0] = update
+	if got := set.Values(); len(got) != 2 || !set.Contains(inspection) {
 		t.Fatalf("set changed through returned slice: %v", got)
 	}
 	for index := 1; index < len(set.Values()); index++ {
@@ -118,7 +120,9 @@ func TestCapabilitySetIsDefensiveAndDeterministic(t *testing.T) {
 			t.Fatalf("capabilities are not sorted: %v", ordered)
 		}
 	}
-	if reflect.TypeOf(domain.ClaudeTarget()) == reflect.TypeOf(domain.DarwinHost()) {
+	target, _ := domain.NewTarget("claude")
+	host, _ := domain.NewHost("darwin")
+	if reflect.TypeOf(target) == reflect.TypeOf(host) {
 		t.Fatal("target and host types must be distinct")
 	}
 }

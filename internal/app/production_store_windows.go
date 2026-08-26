@@ -9,10 +9,10 @@ import (
 	"github.com/alx4j/ai4j/internal/installstate"
 )
 
-func productionStateStore(home string) (installstate.Store, error) {
+func productionStateStore(_ string) (installstate.Store, error) {
 	localAppData, err := os.UserCacheDir()
 	if err != nil {
 		return installstate.Store{}, err
 	}
-	return installstate.NewStoreAt(home, filepath.Join(localAppData, "AI4J"))
+	return installstate.NewStoreAt(filepath.Join(localAppData, "AI4J"))
 }

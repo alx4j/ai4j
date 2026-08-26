@@ -11,10 +11,8 @@ import (
 )
 
 const (
-	// CollisionUnicodeVersion pins the Unicode data used by collision-key v1.
-	// Changing the tables or algorithm requires a new CollisionKeyVersion.
+	// CollisionUnicodeVersion pins the Unicode data used by collision keys.
 	CollisionUnicodeVersion = "15.0.0"
-	collisionKeyV1Label     = "unicode15_nfc_casefold_v1"
 	// MaximumCollisionKeyBytes bounds comparison identities even if a value is
 	// constructed inside this package without using NewCollisionKey.
 	MaximumCollisionKeyBytes = 64 << 10
@@ -22,27 +20,10 @@ const (
 
 var ErrInvalidCollisionKey = errors.New("invalid collision key")
 
-// CollisionKeyVersion identifies a closed comparison algorithm.
-type CollisionKeyVersion struct{ value uint8 }
-
-var collisionKeyVersionV1 = CollisionKeyVersion{value: 1}
-
-func CollisionKeyVersionV1() CollisionKeyVersion { return collisionKeyVersionV1 }
-
-func (v CollisionKeyVersion) String() string {
-	if v == collisionKeyVersionV1 {
-		return collisionKeyV1Label
-	}
-	return "invalid"
-}
-
-func (v CollisionKeyVersion) Valid() bool { return v == collisionKeyVersionV1 }
-
-// CollisionKey is a comparable, versioned identity used only for collision
+// CollisionKey is a comparable identity used only for collision
 // detection and deterministic ordering. Canonical must never be used to open or
 // join a filesystem path.
 type CollisionKey struct {
-	version   CollisionKeyVersion
 	canonical string
 }
 
@@ -50,43 +31,35 @@ func NewCollisionKey(path RelativePath) (CollisionKey, error) {
 	if !path.Valid() {
 		return CollisionKey{}, ErrInvalidRelativePath
 	}
-	key := CollisionKey{
-		version:   collisionKeyVersionV1,
-		canonical: canonicalCollisionSpelling(path.spelling),
-	}
+	key := CollisionKey{canonical: canonicalCollisionSpelling(path.spelling)}
 	if !key.Valid() {
 		return CollisionKey{}, ErrInvalidCollisionKey
 	}
 	return key, nil
 }
 
-func (k CollisionKey) Version() CollisionKeyVersion { return k.version }
-
 // Canonical returns comparison text, not display text or filesystem authority.
 func (k CollisionKey) Canonical() string { return k.canonical }
 
 func (k CollisionKey) Valid() bool {
-	return k.version.Valid() && k.canonical != "" && len(k.canonical) <= MaximumCollisionKeyBytes &&
+	return k.canonical != "" && len(k.canonical) <= MaximumCollisionKeyBytes &&
 		utf8.ValidString(k.canonical) && !strings.Contains(k.canonical, "\\") &&
 		!containsControl(k.canonical) && canonicalCollisionSpelling(k.canonical) == k.canonical
 }
 
-// Compare returns -1, 0, or 1 using version followed by canonical UTF-8 bytes.
+// Compare returns -1, 0, or 1 using canonical UTF-8 bytes.
 func (k CollisionKey) Compare(other CollisionKey) int {
-	if comparison := strings.Compare(k.version.String(), other.version.String()); comparison != 0 {
-		return comparison
-	}
 	return strings.Compare(k.canonical, other.canonical)
 }
 
 func canonicalCollisionSpelling(spelling string) string {
 	canonical := norm.NFC.String(spelling)
 	canonical = cases.Fold().String(canonical)
-	canonical = strings.Map(canonicalCherokeeFoldV1, canonical)
+	canonical = strings.Map(canonicalCherokeeFold, canonical)
 	return norm.NFC.String(canonical)
 }
 
-func canonicalCherokeeFoldV1(character rune) rune {
+func canonicalCherokeeFold(character rune) rune {
 	// Unicode 15 default folding uses the historic uppercase Cherokee
 	// representatives. x/text v0.14 folds uppercase Cherokee in the opposite
 	// direction, so collapse both lowercase ranges back to the pinned UCD v15
@@ -170,9 +143,6 @@ func FindPathCollision(paths []RelativePath) (PathCollision, bool, error) {
 		}
 	}
 	sort.Slice(keyed, func(left, right int) bool {
-		if comparison := strings.Compare(keyed[left].key.version.String(), keyed[right].key.version.String()); comparison != 0 {
-			return comparison < 0
-		}
 		if comparison := compareCanonicalComponents(keyed[left].components, keyed[right].components); comparison != 0 {
 			return comparison < 0
 		}
@@ -216,6 +186,5 @@ func isStrictComponentPrefix(ancestor, descendant []string) bool {
 }
 
 func canonicalKeyIsStrictAncestor(ancestor, descendant CollisionKey) bool {
-	return ancestor.version == descendant.version &&
-		strings.HasPrefix(descendant.canonical, ancestor.canonical+"/")
+	return strings.HasPrefix(descendant.canonical, ancestor.canonical+"/")
 }

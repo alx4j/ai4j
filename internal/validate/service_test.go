@@ -35,11 +35,11 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 		selection  string
 		kind       string
 	}{
-		{name: "built in default branch", arguments: []string{"ai4j", "validate"}, repository: "github.com/alx4j/ai4j", selection: "built_in_default", kind: "default_branch"},
-		{name: "explicit branch", arguments: []string{"ai4j", "validate", "--repo", "https://github.com/example/toolkit.git", "--ref", "main"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
-		{name: "explicit tag", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", "refs/tags/v1"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "tag"},
-		{name: "explicit commit", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", testCommit}, repository: "github.com/example/toolkit", selection: "explicit", kind: "commit"},
-		{name: "existing SSH authentication", arguments: []string{"ai4j", "validate", "--repo", "git@github.com:example/toolkit.git", "--ref", "main"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
+		{name: "built in default branch", arguments: []string{"ai4j", "validate", "--target", "claude"}, repository: "github.com/alx4j/ai4j", selection: "built_in_default", kind: "default_branch"},
+		{name: "explicit branch", arguments: []string{"ai4j", "validate", "--repo", "https://github.com/example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
+		{name: "explicit tag", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", "refs/tags/v1", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "tag"},
+		{name: "explicit commit", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", testCommit, "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "commit"},
+		{name: "existing SSH authentication", arguments: []string{"ai4j", "validate", "--repo", "git@github.com:example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestValidateRunsOnWindowsAMD64(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("windows").Parse([]string{"ai4j.exe", "validate"})
+	request, err := cli.NewParser("windows").Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestValidateCleansWorkspaceAfterNativeValidationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 || report.Problems[0].Code() != "native_validation_failed" {
 		t.Fatalf("failure=%s problems=%v", report.Failure, report.Problems)
@@ -201,7 +201,7 @@ func TestValidateUpdateClassifiesFastForwardNoChangeAndRewrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate"})
+			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
 			installed, _ := domain.NewCommitOID(test.installed)
 			update := service.ValidateUpdate(context.Background(), request.(cli.ValidateRequest).Source(), installed)
 			if update.Report.Failure != test.wantFailure || update.Disposition != test.want || runner.ancestorChecks != test.wantChecks {
@@ -230,7 +230,7 @@ func TestValidateRejectsLiteralSecretWithoutStartingNativeContent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate"})
+	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 ||
 		report.Problems[0].Code() != "literal_secret" || strings.Contains(report.Problems[0].Message(), "secret-canary") {

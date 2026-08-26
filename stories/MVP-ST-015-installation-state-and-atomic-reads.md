@@ -28,4 +28,4 @@ As an AI4J user, I want one small private ownership record so update and uninsta
 
 ## Deferred
 
-The Wave 3 install command owns when state is committed or removed. Multi-installation state, migrations, history, journals, and rollback descriptors are V1 work.
+The Wave 3 install command owns when state is committed or removed. Multiple-installation state, history, journals, and rollback descriptors are V1 work. Unreleased state formats are not compatibility targets.

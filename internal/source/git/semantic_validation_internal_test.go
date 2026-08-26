@@ -425,7 +425,7 @@ func TestMaterializationPlanBindsCommitTreeAndInventory(t *testing.T) {
 	if err != nil || !plan.Valid() || plan.Commit() != commit || plan.Tree() != tree {
 		t.Fatalf("plan = %#v, %v", plan, err)
 	}
-	budget := MVPWorkspaceBudget()
+	budget := DefaultWorkspaceBudget()
 	if !budget.AllowsMaterialization(MaximumWorkspaceBytes-1, inventory) ||
 		budget.AllowsMaterialization(MaximumWorkspaceBytes, inventory) {
 		t.Fatal("workspace plus selected-tree arithmetic is incoherent")
