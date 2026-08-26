@@ -78,7 +78,7 @@ function Invoke-AI4J {
         throw "ai4j command failed with exit code $exitCode"
     }
     $document = $text | ConvertFrom-Json -Depth 100
-    if ($document.status -ne 'ok' -or $document.exitCode -ne 0 -or $document.errors.Count -ne 0) {
+    if ($document.status -notin @('ok', 'no_change') -or $document.exitCode -ne 0 -or $document.errors.Count -ne 0) {
         throw 'ai4j command returned an unsuccessful document'
     }
     return $document
@@ -161,7 +161,7 @@ function Invoke-ProjectJourney {
     )
 
     $script:ActiveInstallation = $install.data.installationId
-    $status = Invoke-AI4J -EvidenceName "$prefix-status.json" -Arguments @('status', '--installation', $script:ActiveInstallation)
+    $status = Invoke-AI4J -EvidenceName "$prefix-status.json" -Arguments @('status', $script:ActiveInstallation)
     if ($status.data.nativeState.registration -ne 'registered' -or $status.data.nativeState.installation -ne 'installed' -or $status.data.nativeState.enablement -ne 'enabled') {
         throw "$Scope native state is incomplete"
     }
@@ -285,7 +285,7 @@ try {
         '--expected-commit', $script:QualificationRef, '--yes'
     )
     $script:ActiveInstallation = $install.data.installationId
-    $status = Invoke-AI4J -EvidenceName 'user-status.json' -Arguments @('status', '--installation', $script:ActiveInstallation)
+    $status = Invoke-AI4J -EvidenceName 'user-status.json' -Arguments @('status', $script:ActiveInstallation)
     if ($status.data.nativeState.registration -ne 'registered' -or $status.data.nativeState.installation -ne 'installed' -or $status.data.nativeState.enablement -ne 'enabled') {
         throw 'user native state is incomplete'
     }
@@ -298,7 +298,7 @@ try {
 
     Invoke-ClaudeText -EvidenceName 'user-marketplace-update.txt' -Arguments @('plugin', 'marketplace', 'update', $marketplaceId) -WorkingDirectory $script:RepoRoot
     Invoke-ClaudeText -EvidenceName 'user-plugin-update.txt' -Arguments @('plugin', 'update', $nativePluginId, '--scope', 'user') -WorkingDirectory $script:RepoRoot
-    Invoke-AI4J -EvidenceName 'user-status-after-refresh.json' -Arguments @('status', '--installation', $script:ActiveInstallation) | Out-Null
+    Invoke-AI4J -EvidenceName 'user-status-after-refresh.json' -Arguments @('status', $script:ActiveInstallation) | Out-Null
 
     $env:AI4J_TOKEN = 'qualification-presence-only'
     Invoke-AI4J -EvidenceName 'user-doctor.json' -Arguments @('doctor', $script:ActiveInstallation) | Out-Null

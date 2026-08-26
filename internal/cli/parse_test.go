@@ -31,7 +31,7 @@ func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 		{name: "dry-run update", argv: []string{"ai4j", "update", "installation-001", "--dry-run", "--json"}, command: cli.CommandUpdate, typeOf: cli.UpdateRequest{}},
 		{name: "update", argv: []string{"ai4j", "update", "installation-001", "--yes", "--expected-commit=" + commitOID}, command: cli.CommandUpdate, typeOf: cli.UpdateRequest{}},
 		{name: "list", argv: []string{"ai4j", "list", "--target", "claude", "--scope=user", "--json"}, command: cli.CommandList, typeOf: cli.ListRequest{}},
-		{name: "status", argv: []string{"ai4j", "status", "--check-updates", "--json"}, command: cli.CommandStatus, typeOf: cli.StatusRequest{}},
+		{name: "status", argv: []string{"ai4j", "status", "installation-001", "--json"}, command: cli.CommandStatus, typeOf: cli.StatusRequest{}},
 		{name: "dry-run uninstall", argv: []string{"ai4j", "uninstall", "installation-001", "--dry-run"}, command: cli.CommandUninstall, typeOf: cli.UninstallRequest{}},
 		{name: "uninstall", argv: []string{"ai4j", "uninstall", "installation-001", "--yes"}, command: cli.CommandUninstall, typeOf: cli.UninstallRequest{}},
 		{name: "version", argv: []string{"ai4j", "version", "--json"}, command: cli.CommandVersion, typeOf: cli.VersionRequest{}},
@@ -67,6 +67,7 @@ func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--expected-source-digest", digest, "--conflict-policy", "replace-owned", "--yes"}},
 		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--bundle", "default", "--conflict-policy", "fail", "--dry-run"}},
 		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--all", "--expected-source-digest", digest, "--yes"}},
+		{cli.CommandStatus, []string{"ai4j", "status", "installation-001", "--json"}},
 		{cli.CommandDoctor, []string{"ai4j", "doctor", "installation-001", "--test-mcp", "server-id", "--yes"}},
 		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--operation", "operation-001", "--conflict-policy", "fail", "--dry-run"}},
 		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--yes"}},
@@ -126,13 +127,9 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 		!install.Approved() || install.OutputMode() != cli.OutputJSON || !present || commit.String() != commitOID {
 		t.Fatalf("install request lost options: %#v", install)
 	}
-	statusRequest, err := parser.Parse([]string{"ai4j", "status", "--check-updates"})
-	if err != nil || !statusRequest.(cli.StatusRequest).CheckUpdates() {
+	statusRequest, err := parser.Parse([]string{"ai4j", "status", "installation-001"})
+	if err != nil || statusRequest.(cli.StatusRequest).InstallationID().String() != "installation-001" {
 		t.Fatalf("status request = %#v, error = %v", statusRequest, err)
-	}
-	selectedStatusRequest, err := parser.Parse([]string{"ai4j", "status", "--installation", "installation-001"})
-	if err != nil || !selectedStatusRequest.(cli.StatusRequest).HasInstallationID() || selectedStatusRequest.(cli.StatusRequest).InstallationID().String() != "installation-001" {
-		t.Fatalf("selected status request = %#v, error = %v", selectedStatusRequest, err)
 	}
 	listRequest, err := parser.Parse([]string{"ai4j", "list", "--target", "codex", "--scope", "project-local"})
 	if err != nil {
@@ -233,6 +230,7 @@ func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 	}{
 		{[]string{"ai4j", "update", "INVALID!"}, cli.UsageInvalidOptionValue, "installation"},
 		{[]string{"ai4j", "sync", "--installation", "installation-001", "--all"}, cli.UsageInapplicableOption, "installation"},
+		{[]string{"ai4j", "status", "--installation", "installation-001"}, cli.UsageInapplicableOption, "installation"},
 		{[]string{"ai4j", "doctor", "--json", "installation-001"}, cli.UsageUnexpectedArgument, ""},
 		{[]string{"ai4j", "rollback", "installation-001", "installation-002"}, cli.UsageUnexpectedArgument, ""},
 		{[]string{"ai4j", "history", "purge", "--all", "installation-001"}, cli.UsageUnexpectedArgument, ""},
@@ -253,6 +251,7 @@ func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 	tests := [][]string{
 		{"ai4j", "update"},
 		{"ai4j", "sync", "--all"},
+		{"ai4j", "status"},
 		{"ai4j", "doctor"},
 		{"ai4j", "rollback"},
 		{"ai4j", "uninstall"},
@@ -359,7 +358,7 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 		{name: "install", command: []string{"install", "--target", "claude", "--scope", "user", "--all"}, options: []option{{[]string{"--repo", "alx4j/ai4j"}, []string{"--repo=alx4j/ai4j"}}, {[]string{"--ref", "main"}, []string{"--ref=main"}}, {[]string{"--expected-commit", commitOID}, []string{"--expected-commit=" + commitOID}}, {[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "update", command: []string{"update", "installation-001"}, options: []option{{[]string{"--expected-commit", commitOID}, []string{"--expected-commit=" + commitOID}}, {[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "list", command: []string{"list"}, options: []option{{[]string{"--target", "claude"}, []string{"--target=claude"}}, {[]string{"--scope", "user"}, []string{"--scope=user"}}, {[]string{"--json"}, []string{"--json"}}}},
-		{name: "status", command: []string{"status"}, options: []option{{[]string{"--check-updates"}, []string{"--check-updates"}}, {[]string{"--json"}, []string{"--json"}}}},
+		{name: "status", command: []string{"status", "installation-001"}, options: []option{{[]string{"--json"}, []string{"--json"}}}},
 		{name: "uninstall", command: []string{"uninstall", "installation-001"}, options: []option{{[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "version", command: []string{"version"}, options: []option{{[]string{"--json"}, []string{"--json"}}}},
 	}
@@ -428,7 +427,8 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 		{name: "dry-run flag", argv: []string{"ai4j", "status", "--dry-run"}, issue: cli.UsageInapplicableOption},
 		{name: "single dash", argv: []string{"ai4j", "version", "-json"}, issue: cli.UsageUnexpectedArgument},
 		{name: "option terminator", argv: []string{"ai4j", "version", "--"}, issue: cli.UsageUnexpectedArgument},
-		{name: "positional argument", argv: []string{"ai4j", "status", "extra"}, issue: cli.UsageUnexpectedArgument},
+		{name: "extra positional argument", argv: []string{"ai4j", "status", "installation-001", "extra"}, issue: cli.UsageUnexpectedArgument},
+		{name: "removed status update flag", argv: []string{"ai4j", "status", "installation-001", "--check-updates"}, issue: cli.UsageUnknownOption},
 		{name: "flag before command", argv: []string{"ai4j", "--json", "version"}, issue: cli.UsageMisplacedOption, json: true},
 		{name: "short expected commit", argv: []string{"ai4j", "update", "--expected-commit", "0123456"}, issue: cli.UsageInvalidOptionValue},
 		{name: "uppercase expected commit", argv: []string{"ai4j", "update", "--expected-commit", "0123456789ABCDEF0123456789ABCDEF01234567"}, issue: cli.UsageInvalidOptionValue},
@@ -468,7 +468,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 		{name: "update", command: []string{"update", "installation-001"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "sync", command: []string{"sync", "installation-001"}, options: []option{{name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "list", command: []string{"list"}, options: []option{{name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "json", boolean: true}}},
-		{name: "status", command: []string{"status"}, options: []option{{name: "installation", value: "installation-001"}, {name: "check-updates", boolean: true}, {name: "json", boolean: true}}},
+		{name: "status", command: []string{"status", "installation-001"}, options: []option{{name: "json", boolean: true}}},
 		{name: "doctor", command: []string{"doctor", "installation-001"}, options: []option{{name: "test-mcp", value: "server-id"}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "rollback", command: []string{"rollback", "installation-001"}, options: []option{{name: "operation", value: "operation-001"}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "uninstall", command: []string{"uninstall", "installation-001"}, options: []option{{name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
@@ -499,7 +499,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 					assertUsageIssue(t, parser, appendCommand(test.command, "--"+candidate.name+"="), cli.UsageEmptyOptionValue)
 				}
 			}
-			for _, name := range []string{"repo", "ref", "source", "expected-commit", "expected-source-digest", "yes", "json", "allow-dirty", "check-updates", "target", "host", "output", "all", "asset", "bundle", "examples", "scope", "project", "installation", "conflict-policy", "operation", "test-mcp", "expired", "selection", "force", "dry-run"} {
+			for _, name := range []string{"repo", "ref", "source", "expected-commit", "expected-source-digest", "yes", "json", "allow-dirty", "target", "host", "output", "all", "asset", "bundle", "examples", "scope", "project", "installation", "conflict-policy", "operation", "test-mcp", "expired", "selection", "force", "dry-run"} {
 				if _, ok := allowed[name]; ok {
 					continue
 				}

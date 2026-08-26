@@ -96,7 +96,7 @@ func TestApplicationPropagatesContextToCommandHandler(t *testing.T) {
 		}, nil
 	}, human.Render, jsonout.Render)
 
-	application.RunContext(ctx, []string{"ai4j", "status"}, nil, io.Discard, io.Discard)
+	application.RunContext(ctx, []string{"ai4j", "status", "installation-001"}, nil, io.Discard, io.Discard)
 
 	if observed != "request-context" {
 		t.Fatalf("handler context value = %q", observed)
@@ -114,7 +114,7 @@ func TestApplicationRendersHandlerCancellation(t *testing.T) {
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 
-	exitCode := application.RunContext(context.Background(), []string{"ai4j", "status", "--json"}, nil, stdout, stderr)
+	exitCode := application.RunContext(context.Background(), []string{"ai4j", "status", "installation-001", "--json"}, nil, stdout, stderr)
 
 	if exitCode != result.ExitCancelled.Int() {
 		t.Fatalf("exit code = %d, want %d; output=%q", exitCode, result.ExitCancelled.Int(), stdout.String())
@@ -199,7 +199,7 @@ func TestApplicationUsageBypassesDependenciesAndRedactsArguments(t *testing.T) {
 					t.Fatalf("JSON usage rendered as %q", stdout.String())
 				}
 				validateSchema(t, test.schemaName, stdout.Bytes())
-			} else if !bytes.HasPrefix(stdout.Bytes(), []byte("AI4J\n")) {
+			} else if !bytes.HasPrefix(stdout.Bytes(), []byte("No AI4J command was provided.\n")) {
 				t.Fatalf("human usage rendered as %q", stdout.String())
 			}
 		})
@@ -266,6 +266,27 @@ func TestApplicationEveryUsageIssueBypassesDependenciesAndStdin(t *testing.T) {
 				validateSchema(t, "usage.json", stdout.Bytes())
 			}
 		})
+	}
+}
+
+func TestApplicationStatusUsageDescribesPositionalInstallation(t *testing.T) {
+	t.Parallel()
+	application := newTestApplication(t, validBuild(), func() (app.CommandHandler, error) {
+		panic("usage constructed non-version dependencies")
+	}, human.Render, jsonout.Render)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	exitCode := application.Run([]string{"ai4j", "status"}, panicReader{}, stdout, stderr)
+
+	if exitCode != result.ExitUsageOrApproval.Int() || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", exitCode, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Argument: <INSTALLATION_ID>\n") || !strings.Contains(stdout.String(), "Usage: ai4j status <INSTALLATION_ID>\n") {
+		t.Fatalf("status usage does not explain the positional installation ID: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "--installation") {
+		t.Fatalf("status usage still advertises the removed flag: %q", stdout.String())
 	}
 }
 

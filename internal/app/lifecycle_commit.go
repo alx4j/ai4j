@@ -24,7 +24,7 @@ import (
 	"github.com/alx4j/ai4j/internal/workspace"
 )
 
-func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Command, execution lifecycleExecution, policy cli.ConflictPolicy) (cli.Response, error) {
+func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Command, execution lifecycleExecution, policy cli.ConflictPolicy, commandIO CommandIO) (cli.Response, error) {
 	operationID, err := newOperationID(s.random)
 	if err != nil {
 		return lifecycleFailure(command, result.FailureInternal, "operation_id_unavailable", "operation could not be prepared", execution.disposition, execution.source.Warnings)
@@ -79,6 +79,7 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err != nil {
 		return lifecycleFailure(command, result.FailureInternal, "operation_marker_failed", "operation could not be prepared", execution.disposition, execution.source.Warnings)
 	}
+	reportProgress(commandIO, "checking available disk space...")
 	if err := s.preflightExecutionCapacity(marker, entry, desired, execution.catalog, execution.rules, execution.artifact); err != nil {
 		if code, message, ok := appDiskCapacityProblem(err); ok {
 			return lifecycleFailure(command, result.FailureEnvironment, code, message, execution.disposition, execution.source.Warnings)
@@ -94,6 +95,7 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err := s.applyTransition(ctx, execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifact, policy, execution.rollback != nil); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_mutation_failed")
 	}
+	reportProgress(commandIO, "verifying the final installation state...")
 	if err := s.verifyDesired(ctx, *desired); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_verification_failed")
 	}

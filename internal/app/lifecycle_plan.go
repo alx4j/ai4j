@@ -14,11 +14,12 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
+	githubsource "github.com/alx4j/ai4j/internal/source/github"
 	"github.com/alx4j/ai4j/internal/target/claude/catalog"
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
-func (s *lifecycleService) recordForSelection(report validation.LifecycleSelection, selection cli.SelectionOptions, installationID domain.InstallationID, scope cli.Scope, scopeRoot string) (installstate.Record, catalog.Document, error) {
+func (s *lifecycleService) recordForSelection(report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.SelectionOptions, installationID domain.InstallationID, scope cli.Scope, scopeRoot string) (installstate.Record, catalog.Document, error) {
 	marketplaceID := marketplaceIDFor(installationID)
 	if scope == cli.ScopeProjectShared {
 		marketplaceID = report.DeclarationID
@@ -47,6 +48,16 @@ func (s *lifecycleService) recordForSelection(report validation.LifecycleSelecti
 		stateSource = installstate.Source{Mode: "development_source", Selection: domain.ExplicitSource().String(), Checkout: report.Source.Checkout(), SourceDigest: report.Source.SourceDigest().String(), RenderedDigest: report.Source.RenderedDigest().String(), Dirty: report.Source.Dirty()}
 		stateSource.BundleDigest = localBundleDigest(stateSource, selection, report, document.Digest())
 		catalogPath = "state/bundles/" + stateSource.BundleDigest + "/.claude-plugin/marketplace.json"
+	} else {
+		input, inputErr := githubsource.NewSelectionInput(sourceOptions.Repository(), sourceOptions.HasRepository(), sourceOptions.Reference(), sourceOptions.HasReference())
+		if inputErr != nil {
+			return installstate.Record{}, catalog.Document{}, inputErr
+		}
+		effective, resolveErr := githubsource.Resolve(input)
+		if resolveErr != nil || effective.Repository() != report.Source.Repository() {
+			return installstate.Record{}, catalog.Document{}, errors.New("resolved source access does not match validated provenance")
+		}
+		stateSource.Transport = effective.Transport().String()
 	}
 	record := installstate.Record{
 		SchemaVersion: installstate.SchemaVersion, InstallationID: installationID.String(), ToolkitID: report.ToolkitID, DeclarationID: report.DeclarationID, ToolkitVersion: report.ToolkitVersion,

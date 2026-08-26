@@ -70,6 +70,15 @@ func TestAllowedResultSemantics(t *testing.T) {
 			wantExit: result.ExitSuccess,
 		},
 		{
+			name: "pinned source with degraded installation health",
+			facts: with(successFacts(), func(f *result.Facts) {
+				f.Status = result.StatusDegraded
+				f.UpdateDisposition = result.UpdatePinned
+				f.Warnings = []result.Warning{warning}
+			}),
+			wantExit: result.ExitSuccess,
+		},
+		{
 			name:     "cancelled before preparation",
 			facts:    cancelledFacts(problem),
 			wantExit: result.ExitCancelled,
@@ -355,6 +364,18 @@ func TestNewRejectsContradictoryFacts(t *testing.T) {
 				f.Status = result.StatusDegraded
 				f.Phase = result.PhasePrepared
 				f.Outcome = result.OutcomePending
+				f.Warnings = []result.Warning{warning}
+			}),
+		},
+		{
+			name: "degraded pinned mutation",
+			facts: with(successFacts(), func(f *result.Facts) {
+				f.Status = result.StatusDegraded
+				f.Phase = result.PhaseComplete
+				f.Outcome = result.OutcomeCommitted
+				f.Mutation = result.MutationStarted
+				f.DurableChange = result.DurableCommittedWithDiff
+				f.UpdateDisposition = result.UpdatePinned
 				f.Warnings = []result.Warning{warning}
 			}),
 		},

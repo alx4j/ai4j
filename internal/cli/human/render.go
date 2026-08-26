@@ -52,27 +52,7 @@ func Render(output io.Writer, response cli.Response) (result.ExitCode, error) {
 }
 
 func renderEnvelope(output *boundedBuffer, response cli.Response) {
-	command := "usage"
-	if response.Command().Valid() {
-		command = response.Command().String()
-	}
 	commandResult := response.Result()
-
-	output.line("AI4J")
-	output.field("command", command)
-	output.field("status", commandResult.Status().String())
-	output.field("changed", strconv.FormatBool(commandResult.Changed()))
-	output.field("exit-code", strconv.Itoa(commandResult.ExitCode().Int()))
-	if response.HasOperationID() {
-		output.field("operation-id", response.OperationID().String())
-	} else {
-		output.field("operation-id", "none")
-	}
-	output.field("phase", commandResult.Phase().String())
-	output.field("outcome", commandResult.Outcome().String())
-	output.field("mutation", commandResult.Mutation().String())
-	output.field("durable-change", commandResult.DurableChange().String())
-	output.field("update-disposition", commandResult.UpdateDisposition().String())
 
 	switch data := response.Data().(type) {
 	case cli.UsageData:
@@ -84,364 +64,747 @@ func renderEnvelope(output *boundedBuffer, response cli.Response) {
 	case cli.BuildData:
 		renderBuild(output, data)
 	case cli.PlanData:
-		renderPlan(output, data)
+		renderPlan(output, data, commandResult)
 	case cli.MutationData:
-		renderMutation(output, data)
+		renderMutation(output, data, commandResult)
 	case cli.HistoryData:
 		renderHistory(output, data)
 	case cli.ListData:
 		renderList(output, data)
 	case cli.StatusData:
-		renderStatus(output, data)
+		renderStatus(output, data, commandResult)
 	case cli.DoctorData:
-		renderDoctor(output, data)
+		renderDoctor(output, data, commandResult)
 	case cli.VersionData:
 		renderVersion(output, data)
 	case cli.UnavailableData:
-		output.line("data: unavailable")
+		command := "command"
+		if response.Command().Valid() {
+			command = response.Command().String()
+		}
+		output.line("AI4J could not complete the " + command + " command.")
+		output.line("No detailed result is available.")
 	default:
 		output.fail(ErrUnsupportedData)
 	}
-
-	renderDiagnostics(output, "warnings", commandResult.Warnings())
-	renderProblems(output, commandResult.Errors())
+	if response.HasOperationID() {
+		output.line("")
+		output.line("Operation ID: " + response.OperationID().String())
+	}
+	if _, usage := response.Data().(cli.UsageData); !usage {
+		renderDiagnostics(output, "Warnings", commandResult.Warnings())
+		renderProblems(output, commandResult.Errors())
+	}
 }
 
-func renderDoctor(output *boundedBuffer, data cli.DoctorData) {
-	output.field("installation-id", data.InstallationID().String())
-	output.line("checks:")
+func renderDoctor(output *boundedBuffer, data cli.DoctorData, commandResult result.Result) {
+	if commandResult.Status() == result.StatusOK || commandResult.Status() == result.StatusNoChange {
+		output.line("AI4J found no problems with installation " + data.InstallationID().String() + ".")
+	} else {
+		output.line("AI4J diagnostics for installation " + data.InstallationID().String() + ":")
+	}
+	output.line("")
 	for _, check := range data.Checks() {
-		output.indentedLine(1, "- "+check.ID()+" status="+string(check.Status())+" summary="+check.Summary())
+		output.line("[" + doctorMarker(check.Status()) + "] " + check.Summary() + " (" + check.ID() + ")")
 	}
 	if startup, ok := data.StartupCheck(); ok {
-		output.line("mcp-startup-check:")
-		output.indentedField(1, "server", startup.ServerID())
-		output.indentedField(1, "executable", startup.Executable())
+		output.line("")
+		output.line("MCP startup check")
+		output.indentedField(1, "Server", startup.ServerID())
+		output.indentedField(1, "Executable", startup.Executable())
 		arguments := startup.Arguments()
 		for index := range arguments {
 			arguments[index] = strconv.Quote(arguments[index])
 		}
-		output.indentedField(1, "arguments", strings.Join(arguments, " "))
-		output.indentedField(1, "working-directory", startup.WorkingDirectory())
-		output.indentedField(1, "ownership", startup.Ownership())
-		output.indentedField(1, "environment-names", strings.Join(startup.Environment(), ","))
-		output.indentedField(1, "result", startup.Result())
+		output.indentedField(1, "Arguments", strings.Join(arguments, " "))
+		output.indentedField(1, "Working directory", startup.WorkingDirectory())
+		output.indentedField(1, "Environment names", strings.Join(startup.Environment(), ", "))
+		output.indentedField(1, "Result", humanize(startup.Result()))
 		if startup.HasExitCode() {
-			output.indentedField(1, "process-exit-code", strconv.Itoa(startup.ExitCode()))
+			output.indentedField(1, "Process exit code", strconv.Itoa(startup.ExitCode()))
 		}
-		output.indentedField(1, "warning", "the process runs with current-user permissions and may have side effects")
+		output.indentedLine(1, "This check runs the process with your current user permissions and may have side effects.")
 	}
 }
 
 func renderList(output *boundedBuffer, data cli.ListData) {
 	installations := data.Installations()
-	output.line("installations:")
-	output.indentedField(1, "count", strconv.Itoa(len(installations)))
+	if len(installations) == 0 {
+		output.line("No AI4J-managed toolkit installations were found.")
+		return
+	}
+	output.line("Found " + count(len(installations), "AI4J-managed installation", "AI4J-managed installations") + ".")
 	for _, installation := range installations {
-		output.indentedLine(2, "- "+installation.ID().String()+" toolkit="+installation.ToolkitID()+" target="+string(installation.Target())+" scope="+string(installation.Scope())+" lifecycle="+installation.Lifecycle()+" health="+installation.Health())
+		output.line("")
+		output.line(installation.ID().String())
+		output.indentedField(1, "Toolkit", installation.ToolkitID())
+		output.indentedField(1, "Target", humanize(string(installation.Target())))
+		output.indentedField(1, "Scope", humanize(string(installation.Scope())))
+		output.indentedField(1, "Location", installation.ScopeRoot())
+		output.indentedField(1, "Lifecycle", humanize(installation.Lifecycle()))
 		if installation.Source().Mode() == cli.SourceDevelopment {
-			output.indentedLine(3, "root="+installation.ScopeRoot()+" source="+installation.Source().Checkout()+" digest=sha256:"+installation.Source().SourceDigest().String()+" development=true")
+			output.indentedField(1, "Source", installation.Source().Checkout()+" (local checkout)")
 		} else {
-			output.indentedLine(3, "root="+installation.ScopeRoot()+" source="+installation.Source().Repository().String()+" commit=sha1:"+installation.Source().Commit().String())
+			output.indentedField(1, "Source", installation.Source().Repository().String()+" at "+installation.Source().Commit().String())
 		}
 		selection := "all"
 		if !installation.SelectAll() {
-			selection = "assets=" + strings.Join(installation.Assets(), ",") + " bundles=" + strings.Join(installation.Bundles(), ",")
+			selection = selectionText(installation.Assets(), installation.Bundles())
 		}
-		output.indentedLine(3, "selection="+selection+" resolved="+strings.Join(installation.Resolved(), ","))
-		output.indentedLine(3, "history="+strconv.Itoa(installation.HistoryCount())+" last-operation="+installation.LastOperationID().String())
+		output.indentedField(1, "Selection", selection)
+		output.indentedField(1, "Recorded operations", strconv.Itoa(installation.HistoryCount()))
+		output.indentedLine(1, "Next: ai4j status "+installation.ID().String())
 	}
 }
 
 func renderInit(output *boundedBuffer, data cli.InitData) {
-	output.line("init:")
 	targets := data.Targets()
-	output.indentedField(1, "targets", strconv.Itoa(len(targets)))
-	for _, target := range targets {
-		output.indentedLine(2, "- "+string(target))
-	}
-	output.indentedField(1, "output-root", data.OutputRoot())
-	output.indentedField(1, "validation-valid", strconv.FormatBool(data.ValidationValid()))
-	output.indentedField(1, "reproducible", strconv.FormatBool(data.Reproducible()))
+	output.line("Created a toolkit for " + humanList(targetStrings(targets)) + " in " + data.OutputRoot() + ".")
+	output.line("Validation: " + passFail(data.ValidationValid()) + ". Reproducible build: " + yesNo(data.Reproducible()) + ".")
 	artifacts := data.Artifacts()
-	output.indentedField(1, "artifacts", strconv.Itoa(len(artifacts)))
+	output.line("")
+	output.line("Created files (" + strconv.Itoa(len(artifacts)) + "):")
 	for _, artifact := range artifacts {
-		output.indentedLine(2, "- "+artifact.Path()+" sha256="+artifact.Checksum()+" bytes="+strconv.FormatUint(artifact.SizeBytes(), 10))
+		output.indentedLine(1, "- "+artifact.Path()+" ("+formatBytes(artifact.SizeBytes())+", SHA-256 "+artifact.Checksum()+")")
 	}
 }
 
 func renderUsage(output *boundedBuffer, data cli.UsageData) {
-	output.line("usage:")
-	output.indentedField(1, "issue", string(data.Issue()))
+	output.line(usageMessage(data))
+	output.line("Issue code: " + string(data.Issue()))
+	command, hasCommand := data.Command()
 	if data.Option() != "" {
-		output.indentedField(1, "option", data.Option())
+		if hasCommand && data.Option() == "installation" && usesPositionalInstallation(command) {
+			output.line("Argument: <INSTALLATION_ID>")
+		} else {
+			output.line("Option: --" + data.Option())
+		}
+	}
+	if hasCommand {
+		output.line("Usage: " + commandUsage(command))
+	} else {
+		output.line("Available commands: init, validate, build, install, list, status, update, sync, doctor, history, rollback, uninstall, version")
+	}
+}
+
+func usesPositionalInstallation(command cli.Command) bool {
+	switch command {
+	case cli.CommandUpdate, cli.CommandSync, cli.CommandStatus, cli.CommandDoctor, cli.CommandRollback, cli.CommandUninstall, cli.CommandHistory, cli.CommandHistoryPurge:
+		return true
+	default:
+		return false
 	}
 }
 
 func renderValidate(output *boundedBuffer, data cli.ValidateData) {
-	output.line("validation:")
-	output.indentedField(1, "valid", strconv.FormatBool(data.ValidationValid()))
-	output.indentedField(1, "error-count", strconv.Itoa(data.ErrorCount()))
-	output.indentedField(1, "warning-count", strconv.Itoa(data.WarningCount()))
-	renderSource(output, data.Source(), 1)
-	renderContent(output, data.ActiveContent(), 1)
+	if data.ValidationValid() {
+		output.line("Toolkit validation passed.")
+	} else {
+		output.line("Toolkit validation failed with " + count(data.ErrorCount(), "error", "errors") + ".")
+	}
+	output.line("Warnings: " + strconv.Itoa(data.WarningCount()) + ".")
+	renderSource(output, data.Source(), 0)
+	renderContent(output, data.ActiveContent(), 0)
 }
 
 func renderBuild(output *boundedBuffer, data cli.BuildData) {
-	output.line("build:")
-	output.indentedField(1, "target", string(data.Target()))
-	output.indentedField(1, "host", string(data.Host()))
-	output.indentedField(1, "output-root", data.OutputRoot())
-	output.indentedField(1, "reproducible", strconv.FormatBool(data.Reproducible()))
-	output.indentedField(1, "validation-valid", strconv.FormatBool(data.ValidationValid()))
-	renderSource(output, data.Source(), 1)
+	output.line("Built the " + humanize(string(data.Target())) + " package for " + humanize(string(data.Host())) + " in " + data.OutputRoot() + ".")
+	output.line("Validation: " + passFail(data.ValidationValid()) + ". Reproducible build: " + yesNo(data.Reproducible()) + ".")
+	renderSource(output, data.Source(), 0)
 	artifacts := data.Artifacts()
-	output.indentedField(1, "artifacts", strconv.Itoa(len(artifacts)))
+	output.line("")
+	output.line("Artifacts (" + strconv.Itoa(len(artifacts)) + "):")
 	for _, artifact := range artifacts {
-		output.indentedLine(2, "- "+artifact.Path()+" sha256="+artifact.Checksum()+" bytes="+strconv.FormatUint(artifact.SizeBytes(), 10))
+		output.indentedLine(1, "- "+artifact.Path()+" ("+formatBytes(artifact.SizeBytes())+", SHA-256 "+artifact.Checksum()+")")
 	}
 	selection := data.Selection()
-	output.indentedField(1, "selection", strconv.Itoa(len(selection)))
+	output.line("")
+	output.line("Selected content (" + strconv.Itoa(len(selection)) + "):")
 	for _, item := range selection {
-		output.indentedLine(2, "- "+item.Asset()+" variant="+item.Variant()+" reason="+item.Reason()+" from="+item.RequestedBy())
+		output.indentedLine(1, "- "+item.Asset()+" ("+humanize(item.Variant())+"; "+humanize(item.Reason())+" via "+item.RequestedBy()+")")
 	}
-	renderContent(output, data.ActiveContent(), 1)
+	renderContent(output, data.ActiveContent(), 0)
 }
 
-func renderPlan(output *boundedBuffer, data cli.PlanData) {
-	output.line("plan:")
-	output.indentedField(1, "operation", data.Operation().String())
-	output.indentedField(1, "installation-id", data.InstallationID().String())
-	if data.HasSource() {
-		renderSource(output, data.Source(), 1)
-	}
-	renderActions(output, data.Actions(), 1)
-	renderContent(output, data.ActiveContent(), 1)
-	conflicts := data.Conflicts()
-	output.indentedField(1, "conflicts", strconv.Itoa(len(conflicts)))
-	for _, conflict := range conflicts {
-		output.indentedLine(2, "- "+conflict.Code()+" resource="+conflict.Resource()+" message="+conflict.Message())
-	}
-	renderFinalState(output, data.ExpectedFinalState(), 1)
-}
-
-func renderMutation(output *boundedBuffer, data cli.MutationData) {
-	output.line("operation:")
-	output.indentedField(1, "name", data.Operation().String())
-	if data.HasInstallationID() {
-		output.indentedField(1, "installation-id", data.InstallationID().String())
+func renderPlan(output *boundedBuffer, data cli.PlanData, commandResult result.Result) {
+	if len(data.Actions()) == 0 && len(data.Conflicts()) == 0 {
+		output.line("No changes are needed for installation " + data.InstallationID().String() + ".")
 	} else {
-		output.indentedField(1, "installation-id", "none")
+		output.line(planHeadline(data.Operation(), data.InstallationID().String()))
+		output.line("Review the source, active content, and changes below before confirming.")
 	}
+	if data.HasSource() {
+		renderSource(output, data.Source(), 0)
+	}
+	renderActions(output, data.Actions(), 0)
+	renderContent(output, data.ActiveContent(), 0)
+	conflicts := data.Conflicts()
+	if len(conflicts) != 0 {
+		output.line("")
+		output.line("Conflicts (" + strconv.Itoa(len(conflicts)) + "):")
+		for _, conflict := range conflicts {
+			output.indentedLine(1, "- "+conflict.Message()+" ["+conflict.Code()+"]")
+			output.indentedField(2, "Resource", conflict.Resource())
+		}
+	}
+	renderFinalState(output, data.ExpectedFinalState(), 0)
+	if commandResult.Status() == result.StatusError {
+		output.line("")
+		output.line("AI4J will not make changes while these conflicts remain.")
+	}
+}
+
+func renderMutation(output *boundedBuffer, data cli.MutationData, commandResult result.Result) {
 	operationResult := data.OperationResult()
-	output.indentedField(1, "phase", operationResult.Phase().String())
-	output.indentedField(1, "outcome", operationResult.Outcome().String())
-	output.indentedField(1, "mutation", operationResult.Mutation().String())
-	output.indentedField(1, "durable-change", operationResult.DurableChange().String())
-	renderActions(output, data.AppliedActions(), 1)
-	renderFinalState(output, data.FinalState(), 1)
+	installation := "the selected installation"
+	if data.HasInstallationID() {
+		installation = "installation " + data.InstallationID().String()
+	}
+	switch {
+	case commandResult.Status() == result.StatusNoChange:
+		output.line("No changes were needed for " + installation + ".")
+	case operationResult.Phase() == result.PhaseComplete:
+		output.line(mutationSuccess(data.Operation(), data.InstallationID().String(), data.HasInstallationID()))
+	case operationResult.Outcome() == result.OutcomeRolledBack:
+		output.line("AI4J could not complete the operation and restored the previous state for " + installation + ".")
+	case operationResult.Phase() == result.PhaseCommittedCleanupPending:
+		output.line("The operation completed for " + installation + ", but cleanup still requires attention.")
+	default:
+		output.line("AI4J could not complete the operation for " + installation + ".")
+	}
+	if operationResult.Phase() != result.PhaseNone && operationResult.Phase() != result.PhaseComplete {
+		output.line("Current phase: " + humanize(operationResult.Phase().String()) + ".")
+	}
+	renderActions(output, data.AppliedActions(), 0)
+	renderFinalState(output, data.FinalState(), 0)
+	if data.HasInstallationID() {
+		switch data.Operation() {
+		case cli.OperationInstall, cli.OperationUpdate, cli.OperationSync, cli.OperationRollback:
+			output.line("")
+			output.line("Next: ai4j status " + data.InstallationID().String())
+		}
+	}
 }
 
 func renderHistory(output *boundedBuffer, data cli.HistoryData) {
-	output.line("history:")
-	output.indentedField(1, "installation-id", data.InstallationID().String())
 	entries := data.Entries()
-	output.indentedField(1, "entries", strconv.Itoa(len(entries)))
+	if len(entries) == 0 {
+		output.line("Installation " + data.InstallationID().String() + " has no recorded operations.")
+		return
+	}
+	output.line("History for installation " + data.InstallationID().String() + " (" + count(len(entries), "operation", "operations") + "):")
 	for _, entry := range entries {
-		output.indentedLine(2, "- "+entry.OperationID().String()+" operation="+entry.Operation().String()+" timestamp="+entry.Timestamp().Format(time.RFC3339)+" restorable="+strconv.FormatBool(entry.Restorable()))
+		restore := "rollback unavailable"
+		if entry.Restorable() {
+			restore = "rollback available"
+		}
+		output.indentedLine(1, "- "+entry.Timestamp().Format(time.RFC3339)+" - "+humanize(entry.Operation().String())+" ("+entry.OperationID().String()+", "+restore+")")
 	}
 }
 
-func renderStatus(output *boundedBuffer, data cli.StatusData) {
+func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult result.Result) {
 	recovery := data.RecoveryState()
-	output.line("installation:")
+	archived := statusIsArchived(data)
 	if installation, present := data.Installation(); present {
-		output.indentedField(1, "id", installation.ID().String())
-		output.indentedField(1, "toolkit-id", installation.ToolkitID())
-		output.indentedField(1, "native-plugin-id", installation.NativePluginID())
-		output.indentedField(1, "toolkit-version", installation.ToolkitVersion())
-		output.indentedField(1, "cli-version", installation.CLIVersion())
+		output.line(statusHeadline(data, commandResult, installation.ID().String()))
+		output.line("")
+		output.line("Toolkit")
+		output.indentedField(1, "Name", installation.ToolkitID())
+		output.indentedField(1, "Version", installation.ToolkitVersion())
+		output.indentedField(1, "Claude plugin", installation.NativePluginID())
+		output.indentedField(1, "Installed by AI4J", installation.CLIVersion())
 		if installation.HasExpectedNativeVersion() {
-			output.indentedField(1, "expected-native-version", installation.ExpectedNativeVersion())
+			output.indentedField(1, "Expected native version", installation.ExpectedNativeVersion())
 		}
-		renderRecordedSource(output, installation.Source(), 1)
+		renderRecordedSource(output, installation.Source(), 0)
 		if summary, ok := data.Summary(); ok {
-			output.indentedField(1, "target", string(summary.Target()))
-			output.indentedField(1, "scope", string(summary.Scope()))
-			output.indentedField(1, "scope-root", summary.ScopeRoot())
-			output.indentedField(1, "lifecycle", summary.Lifecycle())
-			output.indentedField(1, "history-count", strconv.Itoa(summary.HistoryCount()))
-			output.indentedField(1, "last-operation-id", summary.LastOperationID().String())
-			output.indentedField(1, "health", summary.Health())
+			output.line("")
+			output.line("Placement")
+			output.indentedField(1, "Target", humanize(string(summary.Target())))
+			output.indentedField(1, "Scope", humanize(string(summary.Scope())))
+			output.indentedField(1, "Location", summary.ScopeRoot())
+			output.indentedField(1, "Lifecycle", humanize(summary.Lifecycle()))
 			selection := "all"
 			if !summary.SelectAll() {
-				selection = "assets=" + strings.Join(summary.Assets(), ",") + " bundles=" + strings.Join(summary.Bundles(), ",")
+				selection = selectionText(summary.Assets(), summary.Bundles())
 			}
-			output.indentedField(1, "selection", selection)
-			output.indentedField(1, "resolved", strings.Join(summary.Resolved(), ","))
+			output.indentedField(1, "Selection", selection)
+			output.indentedField(1, "Resolved content", strings.Join(summary.Resolved(), ", "))
+			output.indentedField(1, "Recorded operations", strconv.Itoa(summary.HistoryCount()))
+			if summary.HasLastOperationID() {
+				output.indentedField(1, "Last operation", summary.LastOperationID().String())
+			}
 		}
 	} else if data.UpdateDisposition() == result.UpdateNotInstalled && recovery.State() == cli.RecoveryStateNone {
-		output.indentedField(1, "state", "not-installed")
+		output.line("AI4J could not find the selected installation.")
 	} else {
-		output.indentedField(1, "state", "record-unavailable")
+		output.line("AI4J could not read the installation record.")
 	}
 
 	native := data.NativeState()
-	output.line("native:")
-	output.indentedField(1, "registration", string(native.Registration()))
-	output.indentedField(1, "installation", string(native.Installation()))
-	output.indentedField(1, "enablement", string(native.Enablement()))
-	output.indentedField(1, "activation", string(native.Activation()))
-	output.indentedField(1, "reload", string(native.Reload()))
-	output.indentedField(1, "next-session", string(native.NextSession()))
-	output.indentedField(1, "policy", string(native.Policy()))
-	output.indentedField(1, "version-observation", string(native.VersionStatus()))
-	if native.HasVersion() {
-		output.indentedField(1, "version", native.Version())
+	if _, present := data.Installation(); present && !archived {
+		output.line("")
+		output.line("Claude integration")
+		output.indentedLine(1, nativeLine("Marketplace", string(native.Registration()), native.Registration() == cli.NativeRegistered))
+		output.indentedLine(1, nativeLine("Plugin", string(native.Installation()), native.Installation() == cli.NativeInstalled))
+		output.indentedLine(1, nativeLine("Enablement", string(native.Enablement()), native.Enablement() == cli.NativeEnabled))
+		if native.HasVersion() {
+			output.indentedField(1, "Observed version", native.Version()+" ("+humanize(string(native.VersionStatus()))+")")
+		}
 	}
 
 	drift := data.Drift()
-	output.field("drift", strconv.Itoa(len(drift)))
-	for _, item := range drift {
-		output.indentedLine(1, "- "+item.Resource()+" state="+string(item.State()))
+	if len(drift) != 0 {
+		output.line("")
+		output.line("Managed files")
+		for _, item := range drift {
+			marker := "ATTENTION"
+			if item.State() == cli.DriftUnchanged {
+				marker = "OK"
+			}
+			output.indentedLine(1, "["+marker+"] "+item.Resource()+" - "+humanize(string(item.State())))
+		}
 	}
-	output.field("recovery", string(recovery.State()))
-	if recovery.HasPhase() {
-		output.indentedField(1, "phase", recovery.Phase().String())
+	if recovery.State() != cli.RecoveryStateNone {
+		output.line("")
+		output.line("Recovery: " + humanize(string(recovery.State())) + ".")
+		if recovery.HasPhase() {
+			output.line("Interrupted phase: " + humanize(recovery.Phase().String()) + ".")
+		}
 	}
+	renderUpdateStatus(output, data)
 }
 
 func renderVersion(output *boundedBuffer, data cli.VersionData) {
-	output.line("version:")
-	output.indentedField(1, "product", data.Product())
-	output.indentedField(1, "executable", data.Executable())
-	output.indentedField(1, "cli-version", data.CLIVersion())
-	output.indentedField(1, "cli-source-repository", data.CLISourceRepository().String())
-	output.indentedField(1, "cli-source-commit", data.CLISourceCommit().String())
-	output.indentedField(1, "go-version", data.GoVersion())
-	output.indentedField(1, "build-time", data.BuildTime().Format("2006-01-02T15:04:05Z"))
-	output.indentedField(1, "target", data.TargetOS()+"/"+data.TargetArch())
+	output.line(data.Product() + " " + data.CLIVersion() + " (" + data.TargetOS() + "/" + data.TargetArch() + ")")
+	output.line("Executable: " + data.Executable())
+	output.line("Built with " + data.GoVersion() + " at " + data.BuildTime().Format("2006-01-02T15:04:05Z") + ".")
+	output.line("Source: " + data.CLISourceRepository().String() + " at " + data.CLISourceCommit().String())
 	defaultSource := data.DefaultSource()
-	output.indentedField(1, "default-repository", defaultSource.Repository().String())
-	output.indentedField(1, "default-ref-policy", string(defaultSource.RefPolicy()))
 	if defaultSource.HasReference() {
-		output.indentedField(1, "default-reference", defaultSource.Reference())
+		output.line("Default toolkit source: " + defaultSource.Repository().String() + " at " + defaultSource.Reference())
 	} else {
-		output.indentedField(1, "default-reference", "repository-default")
+		output.line("Default toolkit source: " + defaultSource.Repository().String() + " (repository default branch)")
 	}
 }
 
 func renderSource(output *boundedBuffer, source cli.Source, indent int) {
-	output.indentedLine(indent, "source:")
-	output.indentedField(indent+1, "mode", string(source.Mode()))
-	output.indentedField(indent+1, "selection", source.Selection().String())
+	output.line("")
+	output.indentedLine(indent, "Source")
 	if source.Mode() == cli.SourceDevelopment {
-		output.indentedField(indent+1, "checkout", source.Checkout())
-		output.indentedField(indent+1, "source-digest", "sha256:"+source.SourceDigest().String())
-		output.indentedField(indent+1, "dirty", strconv.FormatBool(source.Dirty()))
+		output.indentedField(indent+1, "Local checkout", source.Checkout())
+		output.indentedField(indent+1, "Content digest", "SHA-256 "+source.SourceDigest().String())
+		output.indentedField(indent+1, "Uncommitted changes included", yesNo(source.Dirty()))
 		return
 	}
-	output.indentedField(indent+1, "repository", source.Repository().String())
+	output.indentedField(indent+1, "Repository", source.Repository().String())
 	if source.HasRequestedRef() {
-		output.indentedField(indent+1, "requested-ref", source.RequestedRef())
+		output.indentedField(indent+1, "Requested reference", source.RequestedRef())
 	} else {
-		output.indentedField(indent+1, "requested-ref", "repository-default")
+		output.indentedField(indent+1, "Requested reference", "repository default branch")
 	}
-	output.indentedField(indent+1, "resolved-ref", string(source.ResolvedRefKind())+":"+source.ResolvedRefName())
 	commit := source.Commit()
-	output.indentedField(indent+1, "commit", commit.ObjectFormat().String()+":"+commit.OID().String())
+	output.indentedField(indent+1, "Exact commit", commit.OID().String())
 }
 
 func renderRecordedSource(output *boundedBuffer, source cli.RecordedSource, indent int) {
-	output.indentedLine(indent, "source:")
-	output.indentedField(indent+1, "mode", string(source.Mode()))
-	output.indentedField(indent+1, "selection", source.Selection().String())
+	output.line("")
+	output.indentedLine(indent, "Source")
 	if source.Mode() == cli.SourceDevelopment {
-		output.indentedField(indent+1, "checkout", source.Checkout())
-		output.indentedField(indent+1, "source-digest", "sha256:"+source.SourceDigest().String())
-		output.indentedField(indent+1, "dirty", strconv.FormatBool(source.Dirty()))
+		output.indentedField(indent+1, "Local checkout", source.Checkout())
+		output.indentedField(indent+1, "Installed content digest", "SHA-256 "+source.SourceDigest().String())
+		output.indentedField(indent+1, "Uncommitted changes included", yesNo(source.Dirty()))
 		return
 	}
-	output.indentedField(indent+1, "repository", source.Repository().String())
+	output.indentedField(indent+1, "Repository", source.Repository().String())
 	if source.HasRequestedRef() {
-		output.indentedField(indent+1, "requested-ref", source.RequestedRef())
+		output.indentedField(indent+1, "Requested reference", source.RequestedRef())
 	} else {
-		output.indentedField(indent+1, "requested-ref", "repository-default")
+		output.indentedField(indent+1, "Requested reference", "repository default branch")
 	}
-	output.indentedField(indent+1, "resolved-ref-kind", source.RefKind().String())
-	output.indentedField(indent+1, "commit", "sha1:"+source.Commit().String())
+	output.indentedField(indent+1, "Exact commit", source.Commit().String())
 }
 
 func renderContent(output *boundedBuffer, values []cli.ContentItem, indent int) {
-	output.indentedField(indent, "active-content", strconv.Itoa(len(values)))
+	output.line("")
+	output.indentedLine(indent, "Active content ("+strconv.Itoa(len(values))+")")
+	if len(values) == 0 {
+		output.indentedLine(indent+1, "None.")
+		return
+	}
 	for _, item := range values {
-		output.indentedLine(indent+1, "- "+string(item.ComponentType())+"/"+item.Identifier()+" path="+item.SourcePath()+" change="+string(item.Change())+" sha256="+item.Checksum())
+		output.indentedLine(indent+1, "- "+humanize(string(item.ComponentType()))+" "+item.Identifier()+" - "+humanize(string(item.Change())))
+		output.indentedField(indent+2, "Source", item.SourcePath())
+		output.indentedField(indent+2, "SHA-256", item.Checksum())
 		execution, present := item.Execution()
 		if !present {
 			continue
 		}
-		output.indentedLine(indent+2, "execution ownership="+string(execution.Ownership())+" dependency="+string(execution.Dependency())+" command="+execution.Command())
+		output.indentedLine(indent+2, "Executable content")
+		output.indentedField(indent+3, "Command", execution.Command())
+		output.indentedField(indent+3, "Ownership", humanize(string(execution.Ownership())))
+		output.indentedField(indent+3, "Dependency", humanize(string(execution.Dependency())))
 		if execution.CWD() != "" {
-			output.indentedField(indent+2, "cwd", execution.CWD())
+			output.indentedField(indent+3, "Working directory", execution.CWD())
 		}
-		renderStrings(output, "args", execution.Args(), indent+2)
+		renderStrings(output, "Arguments", execution.Args(), indent+3)
 		placeholders := execution.SupportedPlaceholders()
 		placeholderStrings := make([]string, len(placeholders))
 		for index, placeholder := range placeholders {
 			placeholderStrings[index] = string(placeholder)
 		}
-		renderStrings(output, "placeholders", placeholderStrings, indent+2)
-		renderStrings(output, "environment", execution.Environment(), indent+2)
+		renderStrings(output, "Supported placeholders", placeholderStrings, indent+3)
+		renderStrings(output, "Environment names", execution.Environment(), indent+3)
 	}
 }
 
 func renderActions(output *boundedBuffer, values []cli.Action, indent int) {
-	output.indentedField(indent, "actions", strconv.Itoa(len(values)))
+	output.line("")
+	output.indentedLine(indent, "Changes ("+strconv.Itoa(len(values))+")")
+	if len(values) == 0 {
+		output.indentedLine(indent+1, "None.")
+		return
+	}
 	for _, action := range values {
-		output.indentedLine(indent+1, "- "+strconv.Itoa(action.Sequence())+" "+string(action.Owner())+"/"+string(action.Kind())+" resource="+action.Resource()+" pre="+conditionText(action.ExpectedPrecondition())+" post="+conditionText(action.ProposedPostcondition())+" recovery="+string(action.RecoveryRequirement()))
+		output.indentedLine(indent+1, strconv.Itoa(action.Sequence())+". "+humanize(string(action.Kind()))+": "+action.Resource())
+		output.indentedField(indent+2, "Owner", humanize(string(action.Owner())))
+		output.indentedField(indent+2, "Before", conditionText(action.ExpectedPrecondition()))
+		output.indentedField(indent+2, "After", conditionText(action.ProposedPostcondition()))
 	}
 }
 
 func conditionText(value cli.Condition) string {
 	if value.HasChecksum() {
-		return string(value.State()) + ":sha256:" + value.Checksum()
+		return humanize(string(value.State())) + " (SHA-256 " + value.Checksum() + ")"
 	}
-	return string(value.State())
+	return humanize(string(value.State()))
 }
 
 func renderFinalState(output *boundedBuffer, state cli.FinalState, indent int) {
-	output.indentedLine(indent, "final-state:")
-	output.indentedField(indent+1, "installation", string(state.Installation()))
-	output.indentedField(indent+1, "native", string(state.Native()))
-	output.indentedField(indent+1, "owned-state", string(state.OwnedState()))
+	output.line("")
+	output.indentedLine(indent, "Final state")
+	output.indentedField(indent+1, "Installation record", humanize(string(state.Installation())))
+	output.indentedField(indent+1, "Claude integration", humanize(string(state.Native())))
+	output.indentedField(indent+1, "AI4J-managed files", humanize(string(state.OwnedState())))
 }
 
 func renderStrings(output *boundedBuffer, label string, values []string, indent int) {
-	output.indentedField(indent, label, strconv.Itoa(len(values)))
+	if len(values) == 0 {
+		return
+	}
+	output.indentedLine(indent, label+":")
 	for _, value := range values {
 		output.indentedLine(indent+1, "- "+value)
 	}
 }
 
 func renderDiagnostics(output *boundedBuffer, label string, values []result.Warning) {
-	output.field(label, strconv.Itoa(len(values)))
+	if len(values) == 0 {
+		return
+	}
+	output.line("")
+	output.line(label + ":")
 	for _, value := range values {
 		renderDiagnostic(output, value.Code(), value.Message(), value.Context())
 	}
 }
 
 func renderProblems(output *boundedBuffer, values []result.Problem) {
-	output.field("errors", strconv.Itoa(len(values)))
+	if len(values) == 0 {
+		return
+	}
+	output.line("")
+	output.line("Problems:")
 	for _, value := range values {
 		renderDiagnostic(output, value.Code(), value.Message(), value.Context())
 	}
 }
 
 func renderDiagnostic(output *boundedBuffer, code, message string, context []result.Context) {
-	output.indentedLine(1, "- "+code+": "+message)
+	output.indentedLine(1, "- "+sentence(message)+" ["+code+"]")
 	for _, item := range context {
-		output.indentedLine(2, item.Field()+"="+item.Value())
+		output.indentedField(2, humanize(item.Field()), item.Value())
 	}
+}
+
+func doctorMarker(status cli.DoctorCheckStatus) string {
+	switch status {
+	case cli.DoctorCheckOK:
+		return "OK"
+	case cli.DoctorCheckWarning:
+		return "WARN"
+	default:
+		return "ERROR"
+	}
+}
+
+func usageMessage(data cli.UsageData) string {
+	switch data.Issue() {
+	case cli.UsageMissingExecutable:
+		return "AI4J could not determine how it was started."
+	case cli.UsageAlternateExecutable:
+		return "Run this program as ai4j (ai4j.exe on Windows)."
+	case cli.UsageMissingCommand:
+		return "No AI4J command was provided."
+	case cli.UsageUnknownCommand:
+		return "That AI4J command is not supported."
+	case cli.UsageUnexpectedArgument:
+		return "This command received an unexpected positional argument."
+	case cli.UsageUnknownOption:
+		return "This command received an unknown option."
+	case cli.UsageMisplacedOption:
+		return "Place the command name before its options."
+	case cli.UsageInapplicableOption:
+		return "This option does not apply to the selected command."
+	case cli.UsageDuplicateOption:
+		return "This option was provided more than once."
+	case cli.UsageMissingOptionValue:
+		return "A required argument or option value is missing."
+	case cli.UsageEmptyOptionValue:
+		return "An option value cannot be empty."
+	case cli.UsageUnexpectedOptionValue:
+		return "This flag does not accept a value."
+	case cli.UsageInvalidOptionValue:
+		return "An argument or option value is invalid."
+	default:
+		return "The command line is invalid."
+	}
+}
+
+func commandUsage(command cli.Command) string {
+	switch command {
+	case cli.CommandInit:
+		return "ai4j init --target <claude|codex> --output <DIRECTORY> [--examples]"
+	case cli.CommandValidate:
+		return "ai4j validate [--repo <OWNER/REPO> | --source <PATH>] --target <claude|codex>"
+	case cli.CommandBuild:
+		return "ai4j build [--repo <OWNER/REPO> | --source <PATH>] --target <TARGET> --host <HOST> --output <DIRECTORY> (--all | --asset <ID> | --bundle <ID>)"
+	case cli.CommandInstall:
+		return "ai4j install [source options] --target claude --scope <SCOPE> (--all | --asset <ID> | --bundle <ID>)"
+	case cli.CommandUpdate:
+		return "ai4j update <INSTALLATION_ID> [options]"
+	case cli.CommandSync:
+		return "ai4j sync <INSTALLATION_ID> (--all | --asset <ID> | --bundle <ID>) [options]"
+	case cli.CommandList:
+		return "ai4j list [--target claude] [--scope <SCOPE>]"
+	case cli.CommandStatus:
+		return "ai4j status <INSTALLATION_ID>"
+	case cli.CommandDoctor:
+		return "ai4j doctor <INSTALLATION_ID> [--test-mcp <SERVER_ID>]"
+	case cli.CommandRollback:
+		return "ai4j rollback <INSTALLATION_ID> [--operation <OPERATION_ID>] [options]"
+	case cli.CommandUninstall:
+		return "ai4j uninstall <INSTALLATION_ID> [options]"
+	case cli.CommandHistory:
+		return "ai4j history <INSTALLATION_ID>"
+	case cli.CommandHistoryPurge:
+		return "ai4j history purge <INSTALLATION_ID> (--operation <OPERATION_ID> | --expired | --all) [options]"
+	case cli.CommandVersion:
+		return "ai4j version"
+	default:
+		return "ai4j <COMMAND> [options]"
+	}
+}
+
+func planHeadline(operation cli.Operation, installationID string) string {
+	switch operation {
+	case cli.OperationInstall:
+		return "Plan: Install the toolkit as " + installationID + "."
+	case cli.OperationUpdate:
+		return "Plan: Update installation " + installationID + "."
+	case cli.OperationSync:
+		return "Plan: Change the selected content for installation " + installationID + "."
+	case cli.OperationRollback:
+		return "Plan: Roll back installation " + installationID + "."
+	case cli.OperationUninstall:
+		return "Plan: Remove installation " + installationID + "."
+	case cli.OperationHistoryPurge:
+		return "Plan: Remove saved history from installation " + installationID + "."
+	default:
+		return "Plan: Change installation " + installationID + "."
+	}
+}
+
+func mutationSuccess(operation cli.Operation, installationID string, hasInstallationID bool) string {
+	installation := "the selected installation"
+	if hasInstallationID {
+		installation = "installation " + installationID
+	}
+	switch operation {
+	case cli.OperationInstall:
+		if hasInstallationID {
+			return "Installed the toolkit successfully as " + installationID + "."
+		}
+		return "Installed the toolkit successfully."
+	case cli.OperationUpdate:
+		return "Updated " + installation + " successfully."
+	case cli.OperationSync:
+		return "Changed the selected content for " + installation + " successfully."
+	case cli.OperationRollback:
+		return "Rolled back " + installation + " successfully."
+	case cli.OperationUninstall:
+		return "Removed " + installation + " successfully."
+	case cli.OperationHistoryPurge:
+		return "Removed saved history from " + installation + " successfully."
+	default:
+		return "Changed " + installation + " successfully."
+	}
+}
+
+func statusHeadline(data cli.StatusData, commandResult result.Result, installationID string) string {
+	if data.RecoveryState().State() != cli.RecoveryStateNone {
+		return "Installation " + installationID + " requires recovery."
+	}
+	if statusIsArchived(data) {
+		return "Installation " + installationID + " is archived."
+	}
+	if statusNeedsAttention(data) {
+		return "Installation " + installationID + " needs attention."
+	}
+	if commandResult.Status() == result.StatusError && data.UpdateDisposition() == result.UpdateUnknown {
+		return "Installation " + installationID + " is healthy, but AI4J could not check for updates."
+	}
+	return "Installation " + installationID + " is healthy."
+}
+
+func statusNeedsAttention(data cli.StatusData) bool {
+	for _, item := range data.Drift() {
+		if item.State() != cli.DriftUnchanged {
+			return true
+		}
+	}
+	native := data.NativeState()
+	return native.Registration() != cli.NativeRegistered || native.Installation() != cli.NativeInstalled || native.Enablement() != cli.NativeEnabled
+}
+
+func nativeLine(label, state string, healthy bool) string {
+	marker := "ATTENTION"
+	if healthy {
+		marker = "OK"
+	} else if strings.Contains(state, "unknown") || strings.Contains(state, "not_observable") {
+		marker = "UNKNOWN"
+	}
+	return "[" + marker + "] " + label + ": " + humanize(state)
+}
+
+func renderUpdateStatus(output *boundedBuffer, data cli.StatusData) {
+	output.line("")
+	output.line("Updates")
+	installation, installed := data.Installation()
+	switch data.UpdateDisposition() {
+	case result.UpdateNotChecked:
+		if data.RecoveryState().State() != cli.RecoveryStateNone {
+			output.indentedLine(1, "The update check was skipped until the installation can be recovered.")
+		} else if statusIsArchived(data) {
+			output.indentedLine(1, "This archived installation has no active files to check, so AI4J did not look for source updates.")
+		} else {
+			output.indentedLine(1, "The update check was not performed.")
+		}
+	case result.UpdateUpToDate:
+		output.indentedLine(1, "No update is available.")
+	case result.UpdateAvailable:
+		output.indentedLine(1, "An update is available.")
+		if installed {
+			output.indentedLine(1, "Next: ai4j update "+installation.ID().String())
+		}
+	case result.UpdatePinned:
+		output.indentedLine(1, "This installation is pinned to its selected source revision.")
+	case result.UpdateRefRewritten:
+		output.indentedLine(1, "The selected source reference no longer points to the installed commit. Review it before updating.")
+	case result.UpdateUnknown:
+		output.indentedLine(1, "AI4J could not check the source for updates.")
+	case result.UpdateNotInstalled:
+		output.indentedLine(1, "No installation was found to update.")
+	default:
+		output.indentedLine(1, "The update check was skipped until the installation can be recovered.")
+	}
+}
+
+func statusIsArchived(data cli.StatusData) bool {
+	summary, ok := data.Summary()
+	return ok && summary.Lifecycle() == "archived"
+}
+
+func selectionText(assets, bundles []string) string {
+	parts := make([]string, 0, 2)
+	if len(assets) != 0 {
+		parts = append(parts, "assets: "+strings.Join(assets, ", "))
+	}
+	if len(bundles) != 0 {
+		parts = append(parts, "bundles: "+strings.Join(bundles, ", "))
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func targetStrings(targets []cli.BuildTarget) []string {
+	values := make([]string, len(targets))
+	for index, target := range targets {
+		values[index] = humanize(string(target))
+	}
+	return values
+}
+
+func humanList(values []string) string {
+	switch len(values) {
+	case 0:
+		return "no targets"
+	case 1:
+		return values[0]
+	case 2:
+		return values[0] + " and " + values[1]
+	default:
+		return strings.Join(values[:len(values)-1], ", ") + ", and " + values[len(values)-1]
+	}
+}
+
+func count(value int, singular, plural string) string {
+	label := plural
+	if value == 1 {
+		label = singular
+	}
+	return strconv.Itoa(value) + " " + label
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
+}
+
+func passFail(value bool) string {
+	if value {
+		return "passed"
+	}
+	return "failed"
+}
+
+func formatBytes(value uint64) string {
+	if value < 1024 {
+		return strconv.FormatUint(value, 10) + " B"
+	}
+	if value < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", float64(value)/1024)
+	}
+	return fmt.Sprintf("%.1f MiB", float64(value)/(1024*1024))
+}
+
+func humanize(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "_", " "), "-", " ")
+}
+
+func sentence(value string) string {
+	if value == "" {
+		return value
+	}
+	value = strings.ToUpper(value[:1]) + value[1:]
+	if !strings.ContainsAny(value[len(value)-1:], ".!?") {
+		value += "."
+	}
+	return value
 }
 
 type boundedBuffer struct {

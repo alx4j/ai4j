@@ -39,6 +39,7 @@ type Source struct {
 	Mode           string  `json:"mode,omitempty"`
 	Selection      string  `json:"selection"`
 	Repository     string  `json:"repository"`
+	Transport      string  `json:"transport,omitempty"`
 	RequestedRef   *string `json:"requestedRef"`
 	RefKind        string  `json:"refKind"`
 	Commit         string  `json:"commit"`
@@ -140,7 +141,7 @@ func (r Record) Validate() error {
 
 func validStateSource(source Source) bool {
 	if source.Mode == "development_source" {
-		return source.Selection == domain.ExplicitSource().String() && source.Repository == "" && source.RequestedRef == nil && source.RefKind == "" && source.Commit == "" && filepath.IsAbs(source.Checkout) && filepath.Clean(source.Checkout) == source.Checkout && digestPattern.MatchString(source.SourceDigest) && digestPattern.MatchString(source.BundleDigest)
+		return source.Selection == domain.ExplicitSource().String() && source.Repository == "" && source.Transport == "" && source.RequestedRef == nil && source.RefKind == "" && source.Commit == "" && filepath.IsAbs(source.Checkout) && filepath.Clean(source.Checkout) == source.Checkout && digestPattern.MatchString(source.SourceDigest) && digestPattern.MatchString(source.BundleDigest)
 	}
 	if source.Mode != "github" && source.Mode != "" {
 		return false
@@ -150,6 +151,11 @@ func validStateSource(source Source) bool {
 	}
 	if _, err := domain.NewCommitOID(source.Commit); err != nil {
 		return false
+	}
+	if source.Transport != "" {
+		if _, err := domain.NewGitTransport(source.Transport); err != nil {
+			return false
+		}
 	}
 	if source.Selection != domain.BuiltInDefaultSource().String() && source.Selection != domain.ExplicitSource().String() || source.Selection == domain.BuiltInDefaultSource().String() && source.Repository != "github.com/alx4j/ai4j" || source.RefKind != "default_branch" && source.RefKind != "branch" && source.RefKind != "tag" && source.RefKind != "commit" || source.RequestedRef != nil && (*source.RequestedRef == "" || len(*source.RequestedRef) > 512) || (source.RefKind == "default_branch") != (source.RequestedRef == nil) || source.RefKind == "commit" && source.RequestedRef != nil && *source.RequestedRef != source.Commit {
 		return false

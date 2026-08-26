@@ -107,6 +107,25 @@ func TestLifecycleUninstallRejectsArchivedInstallation(t *testing.T) {
 	}
 }
 
+func TestLifecyclePersistsCredentialFreeSSHSourceTransport(t *testing.T) {
+	t.Parallel()
+	harness := newLifecycleHarness(t)
+	install := parseRequest[cli.InstallRequest](t, "install", "--repo", "git@github.com:alx4j/ai4j.git", "--ref", "main", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+
+	response, err := harness.service.Install(context.Background(), install, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("SSH install = %#v, %v", response.Result(), err)
+	}
+	records, err := harness.store.LoadAll()
+	if err != nil || len(records) != 1 || records[0].Source.Transport != domain.SSHGitTransport().String() {
+		t.Fatalf("stored SSH source = %#v, error=%v", records, err)
+	}
+	options, err := updateSourceOptions(records[0])
+	if err != nil || options.Repository() != "git@github.com:alx4j/ai4j.git" {
+		t.Fatalf("reconstructed SSH source = %q, error=%v", options.Repository(), err)
+	}
+}
+
 func TestLifecycleDryRunsReturnPlansWithoutLockingPromptingOrMutation(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	acquireCalls := 0
@@ -232,7 +251,7 @@ func TestLifecycleWindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) 
 		t.Fatalf("sync = %#v, %v", response.Result(), err)
 	}
 	status := statusService{validation: harness.validator, state: store, home: harness.service.home}
-	statusRequest := parseRequest[cli.StatusRequest](t, "status", "--installation", record.InstallationID)
+	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	if response, err := status.Status(context.Background(), statusRequest); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("status = %#v, %v", response.Result(), err)
 	}
@@ -379,7 +398,7 @@ func TestLifecycleClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testin
 		}
 	}
 	status := statusService{validation: harness.validator, state: harness.store, home: harness.service.home}
-	statusRequest := parseRequest[cli.StatusRequest](t, "status", "--installation", record.InstallationID)
+	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	harness.native.marketplaces[record.MarketplaceID] = false
 	if response, err = status.Status(context.Background(), statusRequest); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("project-shared status = %#v, %v", response.Result(), err)

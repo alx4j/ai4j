@@ -27,6 +27,7 @@ type Renderer func(io.Writer, cli.Response) (result.ExitCode, error)
 type CommandIO struct {
 	Input       io.Reader
 	Output      io.Writer
+	Progress    io.Writer
 	Interactive bool
 }
 
@@ -103,7 +104,13 @@ func (a Application) RunContext(ctx context.Context, argv []string, stdin io.Rea
 	} else if request.Command() == cli.CommandVersion {
 		response, err = a.version.Handle(request)
 	} else {
-		response, err = a.handleOther(ctx, request, CommandIO{Input: stdin, Output: stdout, Interactive: terminalPair(stdin, stdout)})
+		interactive := terminalPair(stdin, stdout)
+		commandIO := CommandIO{Input: stdin, Output: stdout, Interactive: interactive}
+		if request.OutputMode() == cli.OutputHuman && interactive {
+			commandIO.Progress = stderr
+			reportProgress(commandIO, commandProgressMessage(request.Command()))
+		}
+		response, err = a.handleOther(ctx, request, commandIO)
 	}
 	if isContextCancellation(err) {
 		response, err = cancelledResponse(request.Command(), "command_cancelled", "command was cancelled before mutation", result.UpdateNotChecked, nil)
@@ -162,9 +169,49 @@ func writeOutputFailure(stderr io.Writer) {
 	}
 }
 
+func reportProgress(commandIO CommandIO, message string) {
+	if commandIO.Progress == nil || message == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(commandIO.Progress, "ai4j:", message)
+}
+
+func commandProgressMessage(command cli.Command) string {
+	switch command {
+	case cli.CommandInit:
+		return "creating and validating the toolkit..."
+	case cli.CommandValidate:
+		return "resolving and validating the toolkit..."
+	case cli.CommandBuild:
+		return "resolving, validating, and building the toolkit..."
+	case cli.CommandInstall:
+		return "checking the source and preparing the installation plan..."
+	case cli.CommandUpdate:
+		return "checking the source and preparing the update plan..."
+	case cli.CommandSync:
+		return "checking the selected content and preparing the synchronization plan..."
+	case cli.CommandList:
+		return "loading managed installations..."
+	case cli.CommandStatus:
+		return "checking installation health and source updates..."
+	case cli.CommandDoctor:
+		return "running installation diagnostics..."
+	case cli.CommandRollback:
+		return "checking saved history and preparing the rollback plan..."
+	case cli.CommandUninstall:
+		return "checking managed resources and preparing the removal plan..."
+	case cli.CommandHistory:
+		return "loading installation history..."
+	case cli.CommandHistoryPurge:
+		return "checking saved history and preparing the cleanup plan..."
+	default:
+		return ""
+	}
+}
+
 func newUsageResponse(usageError *cli.UsageError) (cli.Response, error) {
 	option := usageError.Option()
-	data, err := cli.NewUsageData(usageError.Issue(), option)
+	data, err := cli.NewDetailedUsageData(usageError.Issue(), option, usageError.Command())
 	if err != nil {
 		return cli.Response{}, err
 	}

@@ -229,6 +229,9 @@ func TestRecordRejectsContradictorySourceMetadata(t *testing.T) {
 			record.Source.RefKind = "commit"
 			record.Source.RequestedRef = &requested
 		}},
+		{name: "unsupported source transport", mutate: func(record *Record) {
+			record.Source.Transport = "ftp"
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
