@@ -106,7 +106,7 @@ Complete these technical substories in order. Each substory starts only after th
 ## Story acceptance criteria
 
 - [ ] Core lifecycle packages import no Claude- or Darwin-specific implementation package.
-- [ ] The registered MVP capability set contains only the variants permitted by `MVP_REQUIREMENTS.md`.
+- [ ] The registered MVP capability set contains only the variants required by current product behavior.
 - [ ] Fake target, host, source, state, clock, and identifier implementations satisfy the same compile-time ports as production adapters and can be substituted in a core orchestration fixture.
 - [ ] Unknown target, host, scope, source, selection, state-schema, and capability values fail closed before mutation.
 - [ ] Adding a second fake target or host requires registration and adapter code but no change to core lifecycle orchestration.

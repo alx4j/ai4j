@@ -27,7 +27,7 @@ Committer: Oleksii Stupin <oleksii.stupin@gmail.com>
 
 ## Product and architecture guardrails
 
-- Treat `MVP_REQUIREMENTS.md` and `V1_REQUIREMENTS.md` as the normative product baselines.
+- Keep implementation aligned with the user-visible workflows in `README.md`.
 - Implement the CLI in modern, idiomatic Go using the repository-pinned supported toolchain.
 - Keep the MVP core target-, host-, and source-neutral behind compile-time interfaces; model scope and selection as explicit typed core contracts; expose only the MVP capabilities in its CLI.
 - Use documented target-native interfaces. Do not edit Claude or Codex private caches or registries directly.

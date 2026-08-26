@@ -23,8 +23,7 @@ Examples use `ai4j` on macOS. Use `ai4j.exe` on Windows.
 
 AI4J manages Claude installations through Claude's supported plugin commands.
 Codex installation remains an interactive Codex step after AI4J builds the
-package. See [Compatibility](COMPATIBILITY.md) for tested versions.
-Other host profiles are not currently supported.
+package. Other host profiles are not currently supported.
 
 You need Git and the AI clients named by the workflow. Run AI4J as your normal
 user; it does not require `sudo` or an administrator terminal.
@@ -203,6 +202,3 @@ New `validate`, `build`, and `install` commands use the first-party repository
 by default. For another source, use `--repo owner/repository` with an optional
 `--ref <branch|tag|commit>`, or `--source <path>` for an explicit local
 checkout. Update and sync start from the installation's recorded source.
-
-For project-scoped Claude installations, local development sources, history,
-recovery, and automation, see the [full user guide](USER_GUIDE.md).
