@@ -29,7 +29,6 @@ type parsedOptions struct {
 	yes               bool
 	json              bool
 	allowDirty        bool
-	checkUpdates      bool
 	installation      domain.InstallationID
 	hasInstallation   bool
 	targets           []BuildTarget
@@ -67,7 +66,7 @@ var commandOptions = map[Command]map[string]optionKind{
 	CommandUpdate:       {"repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandSync:         {"all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandList:         {"target": valueOption, "scope": valueOption, "json": booleanOption},
-	CommandStatus:       {"installation": valueOption, "check-updates": booleanOption, "json": booleanOption},
+	CommandStatus:       {"json": booleanOption},
 	CommandDoctor:       {"test-mcp": valueOption, "yes": booleanOption, "json": booleanOption},
 	CommandRollback:     {"operation": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandUninstall:    {"conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
@@ -77,7 +76,7 @@ var commandOptions = map[Command]map[string]optionKind{
 }
 
 var knownOptions = map[string]struct{}{
-	"repo": {}, "ref": {}, "source": {}, "expected-commit": {}, "expected-source-digest": {}, "yes": {}, "json": {}, "allow-dirty": {}, "check-updates": {},
+	"repo": {}, "ref": {}, "source": {}, "expected-commit": {}, "expected-source-digest": {}, "yes": {}, "json": {}, "allow-dirty": {},
 	"target": {}, "host": {}, "output": {}, "all": {}, "asset": {}, "bundle": {}, "examples": {}, "scope": {}, "project": {}, "installation": {}, "conflict-policy": {}, "operation": {}, "test-mcp": {}, "expired": {}, "selection": {}, "force": {}, "dry-run": {},
 }
 
@@ -172,7 +171,7 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	case CommandList:
 		return ListRequest{target: firstTarget(options.targets), hasTarget: len(options.targets) == 1, scope: options.scope, hasScope: options.hasScope, output: output}, nil
 	case CommandStatus:
-		return StatusRequest{installation: options.installation, hasInstallation: options.hasInstallation, checkUpdates: options.checkUpdates, output: output}, nil
+		return StatusRequest{installation: options.installation, output: output}, nil
 	case CommandUninstall:
 		return UninstallRequest{installation: options.installation, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandVersion:
@@ -244,7 +243,7 @@ func parseInstallationArgument(command Command, arguments []string, jsonRequeste
 
 func usesPositionalInstallation(command Command) bool {
 	switch command {
-	case CommandUpdate, CommandSync, CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge:
+	case CommandUpdate, CommandSync, CommandStatus, CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge:
 		return true
 	default:
 		return false
@@ -312,8 +311,6 @@ func setBoolean(options *parsedOptions, name string) {
 		options.yes = true
 	case "dry-run":
 		options.dryRun = true
-	case "check-updates":
-		options.checkUpdates = true
 	case "allow-dirty":
 		options.allowDirty = true
 	case "all":
@@ -543,7 +540,7 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if !hasSelection {
 			return missing("all")
 		}
-	case CommandDoctor:
+	case CommandStatus, CommandDoctor:
 		if !options.hasInstallation {
 			return missing("installation")
 		}

@@ -46,6 +46,18 @@ func TestStoredSourceOptionsPreserveSelection(t *testing.T) {
 			t.Fatalf("effective repository = %q, err = %v", effective.Repository().String(), resolveErr)
 		}
 	}
+
+	ssh := explicit
+	ssh.Source.Transport = domain.SSHGitTransport().String()
+	for _, buildOptions := range []func(installstate.Record) (cli.SourceOptions, error){updateSourceOptions, exactSourceOptions} {
+		options, optionErr := buildOptions(ssh)
+		if optionErr != nil {
+			t.Fatal(optionErr)
+		}
+		if options.Repository() != "git@github.com:alx4j/ai4j.git" || !options.HasRepository() {
+			t.Fatalf("SSH repository = %q/%t", options.Repository(), options.HasRepository())
+		}
+	}
 }
 
 func TestActiveContentDiffReportsEveryChange(t *testing.T) {

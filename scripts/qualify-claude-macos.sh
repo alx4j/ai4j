@@ -53,7 +53,7 @@ trap cleanup EXIT
 
 assert_success() {
   local document="$1"
-  jq -e '.status == "ok" and .exitCode == 0 and (.errors | length == 0)' "$document" >/dev/null
+  jq -e '(.status == "ok" or .status == "no_change") and .exitCode == 0 and (.errors | length == 0)' "$document" >/dev/null
 }
 
 run_ai4j() {
@@ -80,7 +80,7 @@ run_project_journey() {
     --expected-commit "$qualification_ref" --yes
 
   active_installation="$(jq -er '.data.installationId' "$evidence_root/$prefix-install.json")"
-  run_ai4j "$prefix-status.json" status --installation "$active_installation"
+  run_ai4j "$prefix-status.json" status "$active_installation"
   jq -e '.data.nativeState.registration == "registered" and
     .data.nativeState.installation == "installed" and
     .data.nativeState.enablement == "enabled"' "$evidence_root/$prefix-status.json" >/dev/null
@@ -175,7 +175,7 @@ run_ai4j user-install.json install \
   --expected-commit "$qualification_ref" --yes
 
 active_installation="$(jq -er '.data.installationId' "$evidence_root/user-install.json")"
-run_ai4j user-status.json status --installation "$active_installation"
+run_ai4j user-status.json status "$active_installation"
 jq -e '.data.nativeState.registration == "registered" and
   .data.nativeState.installation == "installed" and
   .data.nativeState.enablement == "enabled"' "$evidence_root/user-status.json" >/dev/null
@@ -193,7 +193,7 @@ jq -e --arg id "$native_plugin_id" '[.. | strings] | index($id) != null' \
 
 claude plugin marketplace update "$marketplace_id" | tee "$evidence_root/user-marketplace-update.txt"
 claude plugin update "$native_plugin_id" --scope user | tee "$evidence_root/user-plugin-update.txt"
-run_ai4j user-status-after-refresh.json status --installation "$active_installation"
+run_ai4j user-status-after-refresh.json status "$active_installation"
 
 export AI4J_TOKEN=qualification-presence-only
 run_ai4j user-doctor.json doctor "$active_installation"

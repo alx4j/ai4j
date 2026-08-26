@@ -244,7 +244,8 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 	if approval != approvalGranted {
 		return lifecycleFailure(request.command, result.FailureApproval, "approval_required", "operation requires explicit approval", execution.disposition, execution.source.Warnings)
 	}
-	return s.commitExecution(ctx, request.command, execution, policy)
+	reportProgress(request.commandIO, "applying the approved changes...")
+	return s.commitExecution(ctx, request.command, execution, policy, request.commandIO)
 }
 
 func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.SourceOptions, target cli.BuildTarget, scope cli.Scope, project string, hasProject bool, selection cli.SelectionOptions, installationID domain.InstallationID, reactivation bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -290,7 +291,7 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 	if !reactivation {
 		installationID = installationIDFor(report, scope, scopeRoot)
 	}
-	desired, document, err := s.recordForSelection(report, selection, installationID, scope, scopeRoot)
+	desired, document, err := s.recordForSelection(report, source, selection, installationID, scope, scopeRoot)
 	if err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
 	}
@@ -358,7 +359,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if report.Source.SourceDigest().String() != record.Source.SourceDigest {
 			disposition = result.UpdateAvailable
 		}
-		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
 	}
 	if requested.AllowDirty() || requested.HasCheckout() {
 		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a GitHub installation")
@@ -373,16 +374,20 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	}
 	sourceChange := requested.HasRepository() || requested.HasReference()
 	if sourceChange {
-		repository := record.Source.Repository
+		repository, repositoryProvided, sourceErr := storedSourceRepository(record)
+		if sourceErr != nil {
+			return stopLifecycle(cli.CommandUpdate, result.FailureInternal, "source_invalid", "stored source selection is invalid")
+		}
 		if requested.HasRepository() {
 			repository = requested.Repository()
+			repositoryProvided = true
 		}
 		reference := ""
 		hasReference := false
 		if requested.HasReference() {
 			reference, hasReference = requested.Reference(), true
 		}
-		options, err = cli.NewSourceOptions(repository, true, reference, hasReference)
+		options, err = cli.NewSourceOptions(repository, repositoryProvided, reference, hasReference)
 		if err != nil {
 			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "invalid_source", "requested source change is invalid")
 		}
@@ -394,7 +399,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if report.ToolkitID != record.ToolkitID {
 			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "toolkit_identity_changed", "source changes must retain the toolkit identifier")
 		}
-		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdateAvailable)
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, result.UpdateAvailable)
 	}
 	update := s.validation.ValidateUpdate(ctx, options, installed)
 	if len(update.Report.Problems) != 0 {
@@ -416,7 +421,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandUpdate, report)
 	}
-	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
+	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
 }
 
 func (s *lifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.SelectionOptions, allowDirty bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -437,11 +442,11 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandSync, report)
 	}
-	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
+	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, options, selection, policy, result.UpdateNotChecked)
 }
 
-func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, selection cli.SelectionOptions, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
-	desired, document, err := s.recordForSelection(report, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
+func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.SelectionOptions, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
+	desired, document, err := s.recordForSelection(report, sourceOptions, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
 	}

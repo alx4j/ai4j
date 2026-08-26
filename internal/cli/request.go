@@ -258,18 +258,14 @@ func (r ListRequest) Scope() Scope           { return r.scope }
 func (r ListRequest) HasScope() bool         { return r.hasScope }
 
 type StatusRequest struct {
-	installation    domain.InstallationID
-	hasInstallation bool
-	checkUpdates    bool
-	output          OutputMode
+	installation domain.InstallationID
+	output       OutputMode
 }
 
 func (StatusRequest) request()                                {}
 func (StatusRequest) Command() Command                        { return CommandStatus }
 func (r StatusRequest) OutputMode() OutputMode                { return r.output }
-func (r StatusRequest) CheckUpdates() bool                    { return r.checkUpdates }
 func (r StatusRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r StatusRequest) HasInstallationID() bool               { return r.hasInstallation }
 
 type DoctorRequest struct {
 	installation domain.InstallationID

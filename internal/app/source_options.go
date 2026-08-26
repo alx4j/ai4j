@@ -4,6 +4,7 @@ import (
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
+	githubsource "github.com/alx4j/ai4j/internal/source/github"
 )
 
 func updateSourceOptions(record installstate.Record) (cli.SourceOptions, error) {
@@ -39,5 +40,16 @@ func storedSourceRepository(record installstate.Record) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	return "https://" + identity.String() + ".git", true, nil
+	transport := domain.HTTPSGitTransport()
+	if record.Source.Transport != "" {
+		transport, err = domain.NewGitTransport(record.Source.Transport)
+		if err != nil {
+			return "", false, err
+		}
+	}
+	remote, err := githubsource.ReconstructRemote(identity, transport)
+	if err != nil {
+		return "", false, err
+	}
+	return remote.Endpoint(), true, nil
 }

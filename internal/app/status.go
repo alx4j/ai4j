@@ -23,6 +23,7 @@ const maximumStatusFileBytes = 16 << 20
 type statusValidation interface {
 	InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem)
 	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
+	SelectLifecycle(context.Context, cli.SourceOptions, bool, []string, []string) validation.LifecycleSelection
 	ValidateUpdate(context.Context, cli.SourceOptions, domain.CommitOID) validation.UpdateReport
 }
 
@@ -37,14 +38,7 @@ type statusService struct {
 }
 
 func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (cli.Response, error) {
-	var record installstate.Record
-	var installed bool
-	var stateErr error
-	if request.HasInstallationID() {
-		record, installed, stateErr = s.state.LoadByID(request.InstallationID().String())
-	} else {
-		record, installed, stateErr = s.state.Load()
-	}
+	record, installed, stateErr := s.state.LoadByID(request.InstallationID().String())
 	_, markerPresent, markerErr := s.state.LoadMarker()
 	recovery := recoveryFromState(stateErr, markerPresent, markerErr)
 
@@ -66,47 +60,60 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 			return cli.Response{}, valueErr
 		}
 		installation = &value
-		summaryValue, valueErr := summaryFromRecord(record)
+		if record.Lifecycle == "active" {
+			drift, err = s.inspectDrift(record)
+			if err != nil {
+				return cli.Response{}, err
+			}
+			var observation validation.NativeStatus
+			var problem *result.Problem
+			if record.MarketplaceID == "" {
+				observation, problem = s.validation.InspectNativeStatus(ctx)
+			} else {
+				observation, problem = s.validation.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
+			}
+			if problem != nil {
+				native, err = unknownNative()
+				warning, warningErr := result.NewWarning(problem.Code(), problem.Message(), nil)
+				if warningErr != nil {
+					return cli.Response{}, warningErr
+				}
+				warnings = append(warnings, warning)
+			} else {
+				if record.Scope == "project-shared" && inspectProjectMarketplaceDrift(record) == cli.DriftUnchanged {
+					observation.MarketplaceRegistered = true
+				}
+				native, err = observedNative(observation)
+			}
+			if err != nil {
+				return cli.Response{}, err
+			}
+		}
+		current := record
+		current.Health = observedStatusHealth(record, native, drift, recovery)
+		summaryValue, valueErr := summaryFromRecord(current)
 		if valueErr != nil {
 			return cli.Response{}, valueErr
 		}
 		summary = &summaryValue
-		drift, err = s.inspectDrift(record)
-		if err != nil {
-			return cli.Response{}, err
-		}
-		var observation validation.NativeStatus
-		var problem *result.Problem
-		if record.MarketplaceID == "" {
-			observation, problem = s.validation.InspectNativeStatus(ctx)
-		} else {
-			observation, problem = s.validation.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-		}
-		if problem != nil {
-			native, err = unknownNative()
-			warning, warningErr := result.NewWarning(problem.Code(), problem.Message(), nil)
-			if warningErr != nil {
-				return cli.Response{}, warningErr
-			}
-			warnings = append(warnings, warning)
-		} else {
-			if record.Scope == "project-shared" && inspectProjectMarketplaceDrift(record) == cli.DriftUnchanged {
-				observation.MarketplaceRegistered = true
-			}
-			native, err = observedNative(observation)
-		}
-		if err != nil {
-			return cli.Response{}, err
-		}
 	}
 
 	var updateProblem *result.Problem
-	if request.CheckUpdates() && installed && recovery.State() == cli.RecoveryStateNone {
+	if installed && record.Lifecycle == "active" && recovery.State() == cli.RecoveryStateNone {
 		disposition, updateProblem = s.checkUpdates(ctx, record)
 	}
 	data, err := cli.NewDetailedStatusData(installation, summary, native, drift, recovery, disposition)
 	if err != nil {
 		return cli.Response{}, err
+	}
+	if !installed && recovery.State() == cli.RecoveryStateNone {
+		return statusNotFoundResponse(data, request.InstallationID())
+	}
+	if record.Lifecycle == "active" {
+		warnings, err = appendStatusWarnings(warnings, data)
+		if err != nil {
+			return cli.Response{}, err
+		}
 	}
 	return statusResponse(data, warnings, updateProblem)
 }
@@ -286,7 +293,23 @@ func inspectFileDrift(path, expectedChecksum string) cli.DriftState {
 
 func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem) {
 	if record.Source.Mode == "development_source" {
-		return result.UpdateUnknown, statusProblem("update_check_unavailable", "use update --dry-run to compare the current local development checkout")
+		options, err := cli.NewDevelopmentSourceOptions(record.Source.Checkout, true)
+		if err != nil {
+			return result.UpdateUnknown, statusProblem("update_check_failed", "stored local source could not be checked")
+		}
+		selection := selectionFromRecord(record)
+		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		if len(report.Problems) != 0 {
+			problem := report.Problems[0]
+			return result.UpdateUnknown, &problem
+		}
+		if !report.HasSource() {
+			return result.UpdateUnknown, statusProblem("update_check_failed", "local source could not be checked")
+		}
+		if report.Source.SourceDigest().String() == record.Source.SourceDigest {
+			return result.UpdateUpToDate, nil
+		}
+		return result.UpdateAvailable, nil
 	}
 	if record.Source.RefKind == cli.RefCommit.String() {
 		return result.UpdatePinned, nil
@@ -300,6 +323,10 @@ func (s statusService) checkUpdates(ctx context.Context, record installstate.Rec
 		return result.UpdateUnknown, statusProblem("update_check_failed", "installed source selection is invalid")
 	}
 	update := s.validation.ValidateUpdate(ctx, options, installed)
+	if len(update.Report.Problems) != 0 {
+		problem := update.Report.Problems[0]
+		return result.UpdateUnknown, &problem
+	}
 	if update.Report.Failure != validation.FailureNone || !update.Report.HasSource() {
 		return result.UpdateUnknown, statusProblem("update_check_failed", "public GitHub source could not be checked")
 	}
@@ -336,6 +363,10 @@ func statusResponse(data cli.StatusData, warnings []result.Warning, updateProble
 		status = result.StatusError
 		failure = result.FailureSource
 		problems = []result.Problem{*updateProblem}
+	case statusIsArchived(data):
+		status = result.StatusNoChange
+	case len(warnings) != 0:
+		status = result.StatusDegraded
 	case data.UpdateDisposition() == result.UpdatePinned || data.UpdateDisposition() == result.UpdateUpToDate:
 		status = result.StatusNoChange
 	}
@@ -348,6 +379,94 @@ func statusResponse(data cli.StatusData, warnings []result.Warning, updateProble
 		return cli.Response{}, err
 	}
 	return cli.NewResponse(cli.CommandStatus, commandResult, nil, data)
+}
+
+func observedStatusHealth(record installstate.Record, native cli.NativeState, drift []cli.Drift, recovery cli.RecoveryState) string {
+	if recovery.State() != cli.RecoveryStateNone {
+		return "recovery_required"
+	}
+	if record.Lifecycle == "archived" {
+		return "healthy"
+	}
+	for _, item := range drift {
+		if item.State() != cli.DriftUnchanged {
+			return "drifted"
+		}
+	}
+	if native.Registration() == cli.NativeNotRegistered || native.Installation() == cli.NativeNotInstalled || native.Enablement() == cli.NativeDisabled {
+		return "drifted"
+	}
+	if native.Registration() != cli.NativeRegistered || native.Installation() != cli.NativeInstalled || native.Enablement() != cli.NativeEnabled {
+		return "unknown"
+	}
+	return "healthy"
+}
+
+func statusIsArchived(data cli.StatusData) bool {
+	summary, ok := data.Summary()
+	return ok && summary.Lifecycle() == "archived"
+}
+
+func statusNotFoundResponse(data cli.StatusData, installationID domain.InstallationID) (cli.Response, error) {
+	context, err := result.NewContext("installation", installationID.String())
+	if err != nil {
+		return cli.Response{}, err
+	}
+	problem, err := result.NewProblem("installation_not_found", "selected installation was not found", []result.Context{context})
+	if err != nil {
+		return cli.Response{}, err
+	}
+	commandResult, err := result.New(result.Facts{
+		Status: result.StatusError, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
+		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
+		Failure: result.FailureConflict, UpdateDisposition: data.UpdateDisposition(), Errors: []result.Problem{problem},
+	})
+	if err != nil {
+		return cli.Response{}, err
+	}
+	return cli.NewResponse(cli.CommandStatus, commandResult, nil, data)
+}
+
+func appendStatusWarnings(warnings []result.Warning, data cli.StatusData) ([]result.Warning, error) {
+	for _, drift := range data.Drift() {
+		if drift.State() == cli.DriftUnchanged {
+			continue
+		}
+		resource, err := result.NewContext("resource", drift.Resource())
+		if err != nil {
+			return nil, err
+		}
+		state, err := result.NewContext("state", string(drift.State()))
+		if err != nil {
+			return nil, err
+		}
+		warning, err := result.NewWarning("managed_resource_drift", "managed installation content needs attention", []result.Context{resource, state})
+		if err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, warning)
+	}
+	native := data.NativeState()
+	checks := []struct {
+		unhealthy bool
+		code      string
+		message   string
+	}{
+		{native.Registration() == cli.NativeNotRegistered, "native_registration_missing", "Claude does not have the toolkit marketplace registered"},
+		{native.Installation() == cli.NativeNotInstalled, "native_plugin_missing", "Claude does not have the toolkit plugin installed"},
+		{native.Enablement() == cli.NativeDisabled, "native_plugin_disabled", "Claude has the toolkit plugin disabled"},
+	}
+	for _, check := range checks {
+		if !check.unhealthy {
+			continue
+		}
+		warning, err := result.NewWarning(check.code, check.message, nil)
+		if err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, warning)
+	}
+	return warnings, nil
 }
 
 func statusProblem(code, message string) *result.Problem {

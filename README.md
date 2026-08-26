@@ -42,7 +42,8 @@ Before you begin, install Homebrew.
    ai4j version
    ```
 
-A successful check reports `status: ok` and `target: darwin/arm64`.
+A successful check prints the AI4J version and its build target, for example
+`AI4J 1.0.1 (darwin/arm64)`.
 
 ### Windows
 
@@ -81,7 +82,8 @@ You do not need an administrator PowerShell window.
    ai4j.exe version
    ```
 
-A successful check reports `status: ok` and `target: windows/amd64`.
+A successful check prints the AI4J version and its build target, for example
+`AI4J 1.0.1 (windows/amd64)`.
 
 ## Install the toolkit in Claude Code
 
@@ -106,17 +108,18 @@ claude --version
 3. Read the plan shown by AI4J. It names the exact Git commit and every item
    that will become active. Confirm the prompt to continue.
 
-4. Copy the `installation-id` printed after the installation. In the commands
+4. Copy the installation ID shown after the installation. In the commands
    below, `<INSTALLATION_ID>` means that value.
 
 5. Check the installation:
 
    ```sh
-   ai4j status --installation <INSTALLATION_ID>
+   ai4j status <INSTALLATION_ID>
    ```
 
 You are ready when the command succeeds, shows the Claude plugin as
-registered, installed, and enabled, and reports no drift or pending recovery.
+registered, installed, and enabled, reports no drift or pending recovery, and
+checks whether the toolkit source has an update.
 
 Start a new Claude Code session, then ask:
 
@@ -185,14 +188,20 @@ the plugin through `/plugins`.
 
 ## Manage a Claude installation
 
-`<INSTALLATION_ID>` is the value returned by `install` or shown by
-`ai4j list`.
+An **installation** is one AI4J-managed placement of a toolkit. Its record ties
+together the target and scope, exact source revision, selected toolkit content,
+and files owned by AI4J. The installation ID lets AI4J distinguish multiple
+user or project installations and safely direct status checks, updates,
+rollbacks, and removal to the right one.
+
+`<INSTALLATION_ID>` is the value returned by `install` or shown by `ai4j list`.
+The `status` command always checks both the current installation health and its
+source for available updates.
 
 | Task | Command |
 |---|---|
 | List installations | `ai4j list` |
-| Check health | `ai4j status --installation <INSTALLATION_ID>` |
-| Check for updates | `ai4j status --installation <INSTALLATION_ID> --check-updates` |
+| Check health and updates | `ai4j status <INSTALLATION_ID>` |
 | Update the toolkit | `ai4j update <INSTALLATION_ID>` |
 | Select a different bundle | `ai4j sync <INSTALLATION_ID> --bundle default` |
 | Inspect history | `ai4j history <INSTALLATION_ID>` |

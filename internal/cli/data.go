@@ -460,21 +460,30 @@ func (s FinalState) Native() StatePresence       { return s.native }
 func (s FinalState) OwnedState() StatePresence   { return s.owned }
 
 type UsageData struct {
-	issue  UsageIssue
-	option string
+	issue   UsageIssue
+	option  string
+	command Command
 }
 
 func NewUsageData(issue UsageIssue, option string) (UsageData, error) {
-	value := UsageData{issue: issue, option: option}
+	return NewDetailedUsageData(issue, option, "")
+}
+
+func NewDetailedUsageData(issue UsageIssue, option string, command Command) (UsageData, error) {
+	value := UsageData{issue: issue, option: option, command: command}
 	if !value.valid() {
 		return UsageData{}, fmt.Errorf("usage data is invalid")
 	}
 	return value, nil
 }
-func (UsageData) cliData()            {}
-func (d UsageData) Issue() UsageIssue { return d.issue }
-func (d UsageData) Option() string    { return d.option }
+func (UsageData) cliData()                   {}
+func (d UsageData) Issue() UsageIssue        { return d.issue }
+func (d UsageData) Option() string           { return d.option }
+func (d UsageData) Command() (Command, bool) { return d.command, d.command.Valid() }
 func (d UsageData) valid() bool {
+	if d.command != "" && !d.command.Valid() {
+		return false
+	}
 	if d.option != "" && !isKnownOption(d.option) {
 		return false
 	}

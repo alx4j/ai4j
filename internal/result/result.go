@@ -173,8 +173,8 @@ func validatePresentation(facts Facts) error {
 		if len(facts.Warnings) == 0 {
 			return fmt.Errorf("degraded result requires a warning")
 		}
-		if facts.UpdateDisposition == UpdatePinned {
-			return fmt.Errorf("pinned disposition requires no_change status")
+		if facts.UpdateDisposition == UpdatePinned && facts.Phase != PhaseNone {
+			return fmt.Errorf("degraded pinned result requires a neutral lifecycle")
 		}
 	case StatusCancelled:
 		if facts.Failure != FailureCancellation || len(facts.Errors) == 0 {
