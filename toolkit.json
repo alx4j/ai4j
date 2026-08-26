@@ -14,14 +14,14 @@
     {
       "id": "repository-review",
       "type": "skill",
-      "path": "plugins/ai4j-default/skills/repository-review",
+      "path": "plugins/ai4j-review/skills/repository-review",
       "ownership": "package",
       "dependencies": ["review-checklist", "check-diff"]
     },
     {
       "id": "repository-reviewer",
       "type": "agent",
-      "path": "plugins/ai4j-default/agents/repository-reviewer.md",
+      "path": "plugins/ai4j-review/agents/repository-reviewer.md",
       "ownership": "package"
     },
     {
@@ -33,7 +33,7 @@
     {
       "id": "review-checklist",
       "type": "reference",
-      "path": "plugins/ai4j-default/skills/repository-review/references/checklist.md",
+      "path": "plugins/ai4j-review/skills/repository-review/references/checklist.md",
       "ownership": "package"
     },
     {
@@ -43,21 +43,21 @@
       "variants": [
         {
           "id": "darwin-arm64",
-          "path": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.sh",
+          "path": "plugins/ai4j-review/skills/repository-review/scripts/check-diff.sh",
           "targets": ["claude", "codex"],
           "hosts": ["darwin-arm64"],
           "executable": {
-            "command": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.sh",
+            "command": "plugins/ai4j-review/skills/repository-review/scripts/check-diff.sh",
             "dependency": "optional"
           }
         },
         {
           "id": "windows-amd64",
-          "path": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.ps1",
+          "path": "plugins/ai4j-review/skills/repository-review/scripts/check-diff.ps1",
           "targets": ["claude", "codex"],
           "hosts": ["windows-amd64"],
           "executable": {
-            "command": "plugins/ai4j-default/skills/repository-review/scripts/check-diff.ps1",
+            "command": "plugins/ai4j-review/skills/repository-review/scripts/check-diff.ps1",
             "dependency": "optional"
           }
         }
@@ -66,38 +66,56 @@
     {
       "id": "claude-tools",
       "type": "mcp",
-      "path": "plugins/ai4j-default/.mcp.json",
+      "path": "plugins/ai4j-tools/.mcp.json",
       "ownership": "package",
       "executable": {
         "command": "claude",
         "args": ["mcp", "serve"],
-        "dependency": "required",
-        "environment": ["AI4J_TOKEN"]
+        "dependency": "required"
       }
     }
   ],
   "bundles": [
     {
+      "id": "review",
+      "packages": ["ai4j-review"],
+      "assets": ["ai4j-rules"]
+    },
+    {
+      "id": "tools",
+      "packages": ["ai4j-tools"]
+    },
+    {
       "id": "default",
-      "assets": ["repository-review", "repository-reviewer", "ai4j-rules", "claude-tools"]
+      "bundles": ["review", "tools"]
     }
   ],
   "targets": {
     "claude": {
       "packages": [
         {
-          "id": "ai4j-default",
-          "path": "plugins/ai4j-default",
-          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff", "claude-tools"]
+          "id": "ai4j-review",
+          "path": "plugins/ai4j-review",
+          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff"]
+        },
+        {
+          "id": "ai4j-tools",
+          "path": "plugins/ai4j-tools",
+          "assets": ["claude-tools"]
         }
       ]
     },
     "codex": {
       "packages": [
         {
-          "id": "ai4j-default",
-          "path": "plugins/ai4j-default",
-          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff", "claude-tools"]
+          "id": "ai4j-review",
+          "path": "plugins/ai4j-review",
+          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff"]
+        },
+        {
+          "id": "ai4j-tools",
+          "path": "plugins/ai4j-tools",
+          "assets": ["claude-tools"]
         }
       ]
     }

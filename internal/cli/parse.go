@@ -62,9 +62,9 @@ var commandOptions = map[Command]map[string]optionKind{
 	CommandInit:         {"target": valueOption, "output": valueOption, "examples": booleanOption, "json": booleanOption},
 	CommandValidate:     {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
 	CommandBuild:        {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "host": valueOption, "output": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
-	CommandInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandUpdate:       {"repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
-	CommandSync:         {"all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandSync:         {"bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandList:         {"target": valueOption, "scope": valueOption, "json": booleanOption},
 	CommandStatus:       {"json": booleanOption},
 	CommandDoctor:       {"test-mcp": valueOption, "yes": booleanOption, "json": booleanOption},
@@ -155,11 +155,11 @@ func (p Parser) Parse(argv []string) (Request, error) {
 		}
 		return BuildRequest{source: source, target: options.targets[0], host: options.host, output: options.output, all: options.all, assets: append([]string(nil), options.assets...), bundles: append([]string(nil), options.bundles...), mode: output}, nil
 	case CommandInstall:
-		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: bundleSelection(options), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandUpdate:
 		return UpdateRequest{installation: options.installation, source: source, policy: conflictPolicy(options), expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandSync:
-		return SyncRequest{installation: options.installation, selection: selectionOptions(options), allowDirty: options.allowDirty, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return SyncRequest{installation: options.installation, selection: bundleSelection(options), allowDirty: options.allowDirty, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandDoctor:
 		return DoctorRequest{installation: options.installation, testMCP: options.testMCP, yes: options.yes, output: output}, nil
 	case CommandRollback:
@@ -271,7 +271,7 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 			}
 			return parsedOptions{}, newUsageError(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
 		}
-		repeatable := name == "asset" || name == "bundle" || (command == CommandInit || command == CommandValidate) && name == "target"
+		repeatable := command == CommandBuild && (name == "asset" || name == "bundle") || (command == CommandInit || command == CommandValidate) && name == "target"
 		if _, duplicate := seen[name]; duplicate && !repeatable {
 			return parsedOptions{}, newUsageError(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
 		}
@@ -436,8 +436,11 @@ func firstTarget(values []BuildTarget) BuildTarget {
 	return values[0]
 }
 
-func selectionOptions(options parsedOptions) SelectionOptions {
-	return SelectionOptions{all: options.all, assets: append([]string(nil), options.assets...), bundles: append([]string(nil), options.bundles...)}
+func bundleSelection(options parsedOptions) BundleSelection {
+	if len(options.bundles) == 0 {
+		return BundleSelection{}
+	}
+	return BundleSelection{bundle: options.bundles[0]}
 }
 
 func conflictPolicy(options parsedOptions) ConflictPolicy {
@@ -523,8 +526,8 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if !options.hasScope {
 			return missing("scope")
 		}
-		if !hasSelection {
-			return missing("all")
+		if len(options.bundles) != 1 {
+			return missing("bundle")
 		}
 		if options.allowDirty && !options.hasSource {
 			return invalid("allow-dirty")
@@ -537,8 +540,8 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if !options.hasInstallation {
 			return missing("installation")
 		}
-		if !hasSelection {
-			return missing("all")
+		if len(options.bundles) != 1 {
+			return missing("bundle")
 		}
 	case CommandStatus, CommandDoctor:
 		if !options.hasInstallation {

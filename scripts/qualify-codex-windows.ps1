@@ -152,7 +152,7 @@ try {
 
     $build = Invoke-AI4J -EvidenceName 'build.json' -Arguments @(
         'build', '--repo', 'alx4j/ai4j', '--ref', $qualificationSourceRef,
-        '--target', 'codex', '--host', 'windows-amd64', '--output', $buildRoot, '--all'
+        '--target', 'codex', '--host', 'windows-amd64', '--output', $buildRoot, '--bundle', 'default'
     )
     if ($build.data.target -ne 'codex' -or $build.data.host -ne 'windows-amd64' -or -not $build.data.reproducible -or -not $build.data.validation.valid) {
         throw 'Codex build report did not confirm a reproducible Windows package'
@@ -165,10 +165,11 @@ try {
         'ai4j-build.json',
         'configuration\AGENTS.md',
         'configuration\.codex\agents\repository-reviewer.toml',
-        'plugin\.codex-plugin\plugin.json',
-        'plugin\.mcp.json',
-        'plugin\skills\repository-review\SKILL.md',
-        'plugin\skills\repository-review\scripts\check-diff.ps1'
+        'plugins\ai4j-review\.codex-plugin\plugin.json',
+        'plugins\ai4j-review\skills\repository-review\SKILL.md',
+        'plugins\ai4j-review\skills\repository-review\scripts\check-diff.ps1',
+        'plugins\ai4j-tools\.codex-plugin\plugin.json',
+        'plugins\ai4j-tools\.mcp.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $buildRoot $relativePath) -PathType Leaf)) {
             throw "Codex package is missing $relativePath"
@@ -189,7 +190,7 @@ try {
 
     $stateRoot = Join-Path $env:LOCALAPPDATA 'AI4J'
     $stateExisted = Test-Path -LiteralPath $stateRoot
-    $handoffLines = & $script:AI4J install --repo alx4j/ai4j --ref $qualificationSourceRef --target codex --scope user --all --yes --json 2>&1
+    $handoffLines = & $script:AI4J install --repo alx4j/ai4j --ref $qualificationSourceRef --target codex --scope user --bundle default --yes --json 2>&1
     $handoffExit = $LASTEXITCODE
     $handoffText = ($handoffLines -join [Environment]::NewLine)
     Write-Evidence -Name 'native-handoff.json' -Text $handoffText

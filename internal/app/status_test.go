@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,7 +27,8 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	second := first
 	second.InstallationID = "installation-002"
 	second.ToolkitID = "zeta-toolkit"
-	second.PluginID = "zeta-plugin"
+	second.Packages = []installstate.NativePackage{{ID: "zeta-plugin", Path: "plugins/zeta-plugin"}}
+	second.NativeResources = []string{"claude:marketplace:ai4j", "claude:zeta-plugin@ai4j"}
 	if err := store.SaveNew(second); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +81,7 @@ func TestStatusReportsInstalledSourceNativeAndOwnedStateWithoutMutation(t *testi
 	}
 	data := response.Data().(cli.StatusData)
 	installation, installed := data.Installation()
-	if !installed || installation.ID().String() != record.InstallationID || installation.ToolkitID() != "ai4j" || installation.NativePluginID() != "ai4j-default" {
+	if !installed || installation.ID().String() != record.InstallationID || installation.ToolkitID() != "ai4j" || !slices.Equal(installation.NativePluginIDs(), []string{"ai4j-default"}) {
 		t.Fatalf("installation = %#v, installed=%t", installation, installed)
 	}
 	if installation.Source().Repository().String() != record.Source.Repository || installation.Source().RequestedRef() != *record.Source.RequestedRef || installation.Source().RefKind() != cli.RefBranch || installation.Source().Commit().String() != record.Source.Commit {
@@ -243,7 +245,10 @@ func TestStatusTreatsArchivedInstallationAsIntentionallyInactive(t *testing.T) {
 func TestStatusReportsInterruptedOperationWithoutRepair(t *testing.T) {
 	t.Parallel()
 	home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
-	marker, err := installstate.NewInstallMarker("operation-002", record.InstallationID, record.Source.Commit)
+	marker, err := installstate.NewResourceMarker("install", "operation-002", record.InstallationID, record.Source.Commit, append(record.NativeResources,
+		"owned:"+record.Catalog.Path,
+		"owned:state/installation.json",
+	))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +492,7 @@ func (s *statusValidationStub) ValidateUpdate(context.Context, cli.SourceOptions
 	return s.update
 }
 
-func (s *statusValidationStub) SelectLifecycle(context.Context, cli.SourceOptions, bool, []string, []string) validation.LifecycleSelection {
+func (s *statusValidationStub) SelectLifecycle(context.Context, cli.SourceOptions, string) validation.LifecycleSelection {
 	s.selectionCalls++
 	if s.selection.HasSource() || len(s.selection.Problems) != 0 {
 		return s.selection

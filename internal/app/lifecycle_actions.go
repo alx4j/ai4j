@@ -95,6 +95,30 @@ func diffActiveContent(installed, desired []cli.ContentItem) ([]cli.ContentItem,
 	return items, nil
 }
 
+// recordedTransitionContent reports only content that can be described from
+// the newly validated bundle. Earlier state retained asset identifiers, but not the
+// type, path, checksum, or execution metadata needed to construct truthful
+// removal disclosures for assets that are no longer selected.
+func recordedTransitionContent(recordedAssets []string, desired []cli.ContentItem) ([]cli.ContentItem, error) {
+	recorded := make(map[string]struct{}, len(recordedAssets))
+	for _, asset := range recordedAssets {
+		recorded[asset] = struct{}{}
+	}
+	content := make([]cli.ContentItem, 0, len(desired))
+	for _, item := range desired {
+		change := cli.ContentAdded
+		if _, present := recorded[item.Identifier()]; present {
+			change = cli.ContentChanged
+		}
+		converted, err := contentItemWithChange(item, change)
+		if err != nil {
+			return nil, err
+		}
+		content = append(content, converted)
+	}
+	return content, nil
+}
+
 func contentKey(item cli.ContentItem) string {
 	return string(item.ComponentType()) + "\x00" + item.Identifier()
 }

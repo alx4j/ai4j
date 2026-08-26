@@ -17,7 +17,7 @@ import (
 func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 	t.Setenv("AI4J_TOKEN", "SECRET_CANARY")
 	harness := newLifecycleHarness(t)
-	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--all", "--yes")
+	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 	installed, err := harness.service.Install(context.Background(), install, CommandIO{})
 	if err != nil || installed.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("install = %#v, %v", installed.Result(), err)
@@ -75,7 +75,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 
 func TestDoctorRejectsUnknownMCPBeforeExecution(t *testing.T) {
 	harness := newLifecycleHarness(t)
-	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--all", "--yes")
+	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 	_, _ = harness.service.Install(context.Background(), install, CommandIO{})
 	record, _, _ := harness.store.Load()
 	runner := &doctorRunnerStub{paths: map[string]string{"git": "/usr/bin/git", "claude": "/usr/bin/claude"}}

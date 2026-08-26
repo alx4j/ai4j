@@ -52,12 +52,14 @@ func projectMarketplaceEntry(record installstate.Record) ([]byte, error) {
 			Path   string `json:"path"`
 			SHA    string `json:"sha"`
 		} `json:"source"`
-	}, 1)
-	entry.Source.Plugins[0].Name = record.PluginID
-	entry.Source.Plugins[0].Source.Source = "git-subdir"
-	entry.Source.Plugins[0].Source.URL = "https://github.com/" + repository + ".git"
-	entry.Source.Plugins[0].Source.Path = record.PackagePath
-	entry.Source.Plugins[0].Source.SHA = record.Source.Commit
+	}, len(record.Packages))
+	for index, pkg := range record.Packages {
+		entry.Source.Plugins[index].Name = pkg.ID
+		entry.Source.Plugins[index].Source.Source = "git-subdir"
+		entry.Source.Plugins[index].Source.URL = "https://github.com/" + repository + ".git"
+		entry.Source.Plugins[index].Source.Path = pkg.Path
+		entry.Source.Plugins[index].Source.SHA = record.Source.Commit
+	}
 	return json.Marshal(entry)
 }
 
@@ -455,6 +457,97 @@ func projectMarketplaceAbsent(record installstate.Record) bool {
 	return err == nil && !present
 }
 
+func (s *lifecycleService) inspectProjectSharedNativeCatalogDrift(record installstate.Record) cli.DriftState {
+	owned, err := projectSharedNativeCatalogFile(record)
+	if err != nil {
+		return cli.DriftConflicting
+	}
+	return inspectFileDrift(s.projectSharedNativeCatalogPath(record), owned.Checksum)
+}
+
+func (s *lifecycleService) projectSharedNativeCatalogAbsent(record installstate.Record) bool {
+	_, err := os.Lstat(s.projectSharedNativeCatalogPath(record))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// preflightProjectSharedTransition proves every AI4J-owned project-shared
+// input before Claude or project settings can be mutated. Project marketplace
+// declarations are never replaced when they drift, even under replace-owned;
+// the surrounding file belongs to the project and may contain unrelated data.
+func (s *lifecycleService) preflightProjectSharedTransition(before, desired *installstate.Record, policy cli.ConflictPolicy) error {
+	if desired == nil || desired.Scope != "project-shared" {
+		return nil
+	}
+	newInstallation := before == nil || before.Lifecycle == "archived"
+	if newInstallation {
+		if desired.Lifecycle != "active" {
+			return errors.New("project-shared transition has no active endpoint")
+		}
+		if _, err := projectSharedNativeCatalogFile(*desired); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(s.projectSharedNativeCatalogPath(*desired)); err == nil {
+			return errors.New("project-shared native catalog destination is occupied")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return errors.New("project-shared native catalog destination cannot be inspected")
+		}
+		contents, present, err := readProjectSettings(projectSettingsPath(*desired))
+		if err != nil {
+			return err
+		}
+		if present {
+			_, declared, declarationErr := projectMarketplaceFromSettings(contents, desired.DeclarationID)
+			if declarationErr != nil {
+				return declarationErr
+			}
+			if declared {
+				return errors.New("project marketplace declaration destination is occupied")
+			}
+		}
+		return s.preflightProjectSharedRules(nil, *desired, policy)
+	}
+
+	if before.Scope != "project-shared" || inspectProjectMarketplaceDrift(*before) != cli.DriftUnchanged {
+		return errors.New("project marketplace does not match installation state")
+	}
+	if desired.Lifecycle == "active" {
+		if _, err := projectSharedNativeCatalogFile(*desired); err != nil {
+			return err
+		}
+	}
+	if _, err := projectSharedNativeCatalogFile(*before); err != nil {
+		return err
+	}
+	drift := s.inspectProjectSharedNativeCatalogDrift(*before)
+	if drift == cli.DriftUnchanged {
+		return s.preflightProjectSharedRules(before, *desired, policy)
+	}
+	if policy == cli.ConflictReplaceOwned && (drift == cli.DriftMissing || drift == cli.DriftModified) {
+		return s.preflightProjectSharedRules(before, *desired, policy)
+	}
+	return errors.New("project-shared native catalog does not match installation state")
+}
+
+func (s *lifecycleService) preflightProjectSharedRules(before *installstate.Record, desired installstate.Record, policy cli.ConflictPolicy) error {
+	if before == nil || before.Lifecycle == "archived" || before.Rules == (installstate.OwnedFile{}) {
+		if desired.Rules == (installstate.OwnedFile{}) {
+			return nil
+		}
+		if _, err := os.Lstat(s.rulesPath(desired)); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return errors.New("project-shared rules destination is occupied or cannot be inspected")
+	}
+	drift := inspectFileDrift(s.rulesPath(*before), before.Rules.Checksum)
+	if drift == cli.DriftUnchanged {
+		return nil
+	}
+	if policy == cli.ConflictReplaceOwned && (drift == cli.DriftMissing || drift == cli.DriftModified) {
+		return nil
+	}
+	return errors.New("project-shared rules do not match installation state")
+}
+
 func (s *lifecycleService) planProjectShared(record *installstate.Record, previous *installstate.Record) ([]byte, []byte, error) {
 	if record.Scope != "project-shared" {
 		return nil, nil, nil
@@ -465,6 +558,11 @@ func (s *lifecycleService) planProjectShared(record *installstate.Record, previo
 	if previous != nil && previous.Lifecycle == "active" && previous.DeclarationID != record.DeclarationID {
 		return nil, nil, errors.New("project declaration identity is immutable")
 	}
+	nativeCatalog, err := projectSharedNativeCatalogFile(*record)
+	if err != nil {
+		return nil, nil, err
+	}
+	record.NativeCatalog = nativeCatalog
 	record.Catalog.Path = ".claude/settings.json"
 	before, present, err := readProjectSettings(projectSettingsPath(*record))
 	if err != nil {
@@ -530,10 +628,15 @@ func (s *lifecycleService) planProjectSharedRollback(current installstate.Record
 				return nil, nil, digestErr
 			}
 			desired.Catalog = installstate.OwnedFile{Path: ".claude/settings.json", Checksum: checksum}
+			desired.NativeCatalog, digestErr = projectSharedNativeCatalogFile(*desired)
+			if digestErr != nil {
+				return nil, nil, digestErr
+			}
 		}
 	} else {
 		after, err = projectSettingsWithoutMarketplace(before, current.DeclarationID, desired.SettingsCreated)
 		desired.Catalog = installstate.OwnedFile{}
+		desired.NativeCatalog = installstate.OwnedFile{}
 	}
 	if err != nil {
 		return nil, nil, err
@@ -561,21 +664,48 @@ func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	document, err := catalog.RenderPackage(record.MarketplaceID, record.PluginID, record.PackagePath, "AI4J toolkit package "+record.PluginID, repository, commit)
+	packages := make([]catalog.Package, len(record.Packages))
+	for index, pkg := range record.Packages {
+		packages[index] = catalog.Package{ID: pkg.ID, Path: pkg.Path, Description: "AI4J toolkit package " + pkg.ID}
+	}
+	document, err := catalog.RenderPackages(record.MarketplaceID, packages, repository, commit)
 	if err != nil {
 		return nil, err
 	}
 	return document.Bytes(), nil
 }
 
+func projectSharedNativeCatalogFile(record installstate.Record) (installstate.OwnedFile, error) {
+	contents, err := projectSharedNativeCatalog(record)
+	if err != nil {
+		return installstate.OwnedFile{}, err
+	}
+	file := installstate.OwnedFile{
+		Path:     "state/catalogs/" + record.InstallationID + "/.claude-plugin/marketplace.json",
+		Checksum: sha256Digest(contents),
+	}
+	if record.NativeCatalog != (installstate.OwnedFile{}) && record.NativeCatalog != file {
+		return installstate.OwnedFile{}, errors.New("project-shared native catalog does not match installation state")
+	}
+	return file, nil
+}
+
 func (s *lifecycleService) projectSharedNativeCatalogPath(record installstate.Record) string {
-	return filepath.Join(s.state.DataRoot(), "state", "catalogs", record.InstallationID, ".claude-plugin", "marketplace.json")
+	relative := record.NativeCatalog.Path
+	if relative == "" {
+		relative = "state/catalogs/" + record.InstallationID + "/.claude-plugin/marketplace.json"
+	}
+	return filepath.Join(s.state.DataRoot(), filepath.FromSlash(relative))
 }
 
 func (s *lifecycleService) writeProjectSharedNativeCatalog(before, desired *installstate.Record, policy cli.ConflictPolicy) (string, error) {
 	contents, err := projectSharedNativeCatalog(*desired)
 	if err != nil {
 		return "", err
+	}
+	owned, err := projectSharedNativeCatalogFile(*desired)
+	if err != nil || sha256Digest(contents) != owned.Checksum {
+		return "", errors.New("project-shared native catalog provenance is invalid")
 	}
 	path := s.projectSharedNativeCatalogPath(*desired)
 	if before == nil || before.Lifecycle == "archived" {
@@ -588,19 +718,26 @@ func (s *lifecycleService) writeProjectSharedNativeCatalog(before, desired *inst
 	if err != nil {
 		return "", err
 	}
-	if err := mutateOwned(s.state.DataRoot(), path, sha256Digest(previous), contents, policy); err != nil {
+	previousOwned, err := projectSharedNativeCatalogFile(*before)
+	if err != nil || sha256Digest(previous) != previousOwned.Checksum {
+		return "", errors.New("existing project-shared native catalog provenance is invalid")
+	}
+	if err := mutateOwned(s.state.DataRoot(), path, previousOwned.Checksum, contents, policy); err != nil {
 		return "", err
 	}
 	return filepath.Dir(filepath.Dir(path)), nil
 }
 
 func (s *lifecycleService) removeProjectSharedNativeCatalog(record installstate.Record, policy cli.ConflictPolicy) error {
-	contents, err := projectSharedNativeCatalog(record)
+	if record.NativeCatalog == (installstate.OwnedFile{}) {
+		return nil
+	}
+	owned, err := projectSharedNativeCatalogFile(record)
 	if err != nil {
 		return err
 	}
 	path := s.projectSharedNativeCatalogPath(record)
-	if err := mutateOwned(s.state.DataRoot(), path, sha256Digest(contents), nil, policy); err != nil {
+	if err := mutateOwned(s.state.DataRoot(), path, owned.Checksum, nil, policy); err != nil {
 		return err
 	}
 	for _, directory := range []string{filepath.Dir(path), filepath.Dir(filepath.Dir(path))} {
@@ -611,13 +748,31 @@ func (s *lifecycleService) removeProjectSharedNativeCatalog(record installstate.
 	return nil
 }
 
-func replaceProjectMarketplace(record installstate.Record, entry []byte, replace bool) error {
+func replaceProjectMarketplace(record installstate.Record, entry []byte, expectedChecksum, expectedDirectory string) error {
 	path := projectSettingsPath(record)
 	before, _, err := readProjectSettings(path)
 	if err != nil {
 		return err
 	}
-	after, err := projectSettingsWithMarketplace(before, record.DeclarationID, entry, replace)
+	current, present, err := projectMarketplaceFromSettings(before, record.DeclarationID)
+	if err != nil || !present {
+		return errors.New("project marketplace declaration changed before replacement")
+	}
+	switch {
+	case expectedChecksum != "" && expectedDirectory == "":
+		digest, digestErr := canonicalJSONDigest(current)
+		if digestErr != nil || digest != expectedChecksum {
+			return errors.New("project marketplace declaration changed before replacement")
+		}
+	case expectedChecksum == "" && expectedDirectory != "":
+		expected := []byte(`{"source":{"source":"directory","path":` + quotedJSON(expectedDirectory) + `}}`)
+		if !jsonEqual(current, expected) {
+			return errors.New("native project marketplace declaration is not the catalog AI4J registered")
+		}
+	default:
+		return errors.New("project marketplace replacement expectation is invalid")
+	}
+	after, err := projectSettingsWithMarketplace(before, record.DeclarationID, entry, true)
 	if err != nil {
 		return err
 	}
@@ -674,14 +829,19 @@ func removeCreatedProjectSettingsIfEmpty(record installstate.Record) error {
 }
 
 func (s *lifecycleService) applyProjectSharedTransition(ctx context.Context, before, desired *installstate.Record, settingsBefore, rules []byte, policy cli.ConflictPolicy) error {
+	if err := s.preflightProjectSharedTransition(before, desired, policy); err != nil {
+		return err
+	}
 	if desired.Lifecycle == "archived" {
 		if before == nil || before.Lifecycle != "active" {
 			return nil
 		}
-		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(*before), "--scope", nativeScope(*before), "--keep-data"}); err != nil && policy != cli.ConflictKeep {
-			return err
+		for _, pluginID := range nativePluginIDs(*before) {
+			if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", pluginID, "--scope", nativeScope(*before), "--keep-data"}); err != nil {
+				return err
+			}
 		}
-		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil && policy != cli.ConflictKeep {
+		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil {
 			return err
 		}
 		if !projectMarketplaceAbsent(*before) {
@@ -714,29 +874,44 @@ func (s *lifecycleService) applyProjectSharedTransition(ctx context.Context, bef
 	} else if inspectProjectMarketplaceDrift(*before) != cli.DriftUnchanged {
 		return errors.New("project marketplace does not match installation state")
 	}
-	catalogRoot, err := s.writeProjectSharedNativeCatalog(before, desired, policy)
-	if err != nil {
-		return err
-	}
 	if newInstallation {
+		catalogRoot, err := s.writeProjectSharedNativeCatalog(before, desired, policy)
+		if err != nil {
+			return err
+		}
+		if !projectMarketplaceAbsent(*desired) {
+			return errors.New("project marketplace declaration appeared before native registration")
+		}
 		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", catalogRoot, "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
-		if err := replaceProjectMarketplace(*desired, entry, true); err != nil {
+		if err := replaceProjectMarketplace(*desired, entry, "", catalogRoot); err != nil {
 			return err
 		}
-		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
+		for _, pluginID := range nativePluginIDs(*desired) {
+			if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", pluginID, "--scope", nativeScope(*desired)}); err != nil {
+				return err
+			}
+		}
+	} else if catalogTransitionNeeded(s, *before, *desired) {
+		for _, pkg := range before.Packages {
+			if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(pkg, before.MarketplaceID), "--scope", nativeScope(*before), "--keep-data"}); err != nil {
+				return err
+			}
+		}
+		if _, err := s.writeProjectSharedNativeCatalog(before, desired, policy); err != nil {
 			return err
 		}
-	} else {
+		if err := replaceProjectMarketplace(*desired, entry, before.Catalog.Checksum, ""); err != nil {
+			return err
+		}
 		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "update", desired.MarketplaceID, "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
-		if err := replaceProjectMarketplace(*desired, entry, true); err != nil {
-			return err
-		}
-		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "update", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
-			return err
+		for _, pkg := range desired.Packages {
+			if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", nativePluginID(pkg, desired.MarketplaceID), "--scope", nativeScope(*desired)}); err != nil {
+				return err
+			}
 		}
 	}
 	switch {

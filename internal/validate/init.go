@@ -89,7 +89,7 @@ func renderScaffold(root string, request cli.InitRequest) error {
 			native = []byte("{\n  \"name\": \"example-toolkit\",\n  \"description\": \"Example AI4J toolkit\"\n}\n")
 		} else {
 			manifestPath = path + "/.codex-plugin/plugin.json"
-			native = []byte("{\n  \"name\": \"example-toolkit\",\n  \"version\": \"0.1.0\",\n  \"description\": \"Example AI4J toolkit\",\n  \"skills\": \"./skills/\"\n}\n")
+			native = []byte("{\n  \"name\": \"example-toolkit\",\n  \"version\": \"0.1.0\",\n  \"description\": \"Example AI4J toolkit\"\n}\n")
 		}
 		if err := writeBuildFile(root, manifestPath, native, 0o644); err != nil {
 			return err
@@ -108,7 +108,7 @@ func renderScaffold(root string, request cli.InitRequest) error {
 			manifest.Targets[string(targetName)] = targetConfig
 		}
 		manifest.Assets = []asset{{ID: "example-skill", Type: "skill", Ownership: "package", Variants: variants}}
-		manifest.Bundles = []bundle{{ID: "examples", Assets: []string{"example-skill"}}}
+		manifest.Bundles = []bundle{{ID: "examples", Packages: []string{"example-toolkit"}}}
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

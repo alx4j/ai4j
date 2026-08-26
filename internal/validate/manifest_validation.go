@@ -3,6 +3,7 @@ package validate
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"slices"
 	"strings"
 
@@ -11,10 +12,12 @@ import (
 )
 
 type validatedManifest struct {
-	manifest toolkitManifest
-	assets   map[string]asset
-	bundles  map[string]bundle
-	tracked  map[string]gitsource.TreeEntry
+	manifest      toolkitManifest
+	assets        map[string]asset
+	bundles       map[string]bundle
+	packages      map[string]map[string]nativePackage
+	packageOwners map[string]map[string]string
+	tracked       map[string]gitsource.TreeEntry
 }
 
 func validatePackage(root string, inventory gitsource.TreeInventory) (packageResult, error) {
@@ -26,7 +29,7 @@ func validatePackage(root string, inventory gitsource.TreeInventory) (packageRes
 	if manifest.SchemaVersion != 1 {
 		return packageResult{}, validationError("unsupported_schema", "toolkit schema version is not supported")
 	}
-	model, err := validateManifest(manifest, tracked)
+	model, err := validateManifest(root, manifest, tracked)
 	if err != nil {
 		return packageResult{}, err
 	}
@@ -115,13 +118,16 @@ func validateMCPAssets(root string, model validatedManifest) error {
 	return nil
 }
 
-func validateManifest(manifest toolkitManifest, tracked map[string]gitsource.TreeEntry) (validatedManifest, error) {
+func validateManifest(root string, manifest toolkitManifest, tracked map[string]gitsource.TreeEntry) (validatedManifest, error) {
 	if manifest.SchemaVersion != 1 || !validManifestID(manifest.Toolkit.ID) || !boundedValue(manifest.Toolkit.Version, 64) ||
 		!boundedValue(manifest.Toolkit.DisplayName, 128) || !boundedValue(manifest.Toolkit.Compatibility.MinimumCLI, 64) ||
 		(manifest.Toolkit.DeclarationID != "" && !validManifestID(manifest.Toolkit.DeclarationID)) || len(manifest.Assets) > 4096 || len(manifest.Bundles) > 1024 || len(manifest.Targets) == 0 || len(manifest.Targets) > 2 {
 		return validatedManifest{}, validationError("invalid_toolkit_manifest", "toolkit metadata is incomplete or exceeds supported bounds")
 	}
-	model := validatedManifest{manifest: manifest, assets: make(map[string]asset, len(manifest.Assets)), bundles: make(map[string]bundle, len(manifest.Bundles)), tracked: tracked}
+	model := validatedManifest{
+		manifest: manifest, assets: make(map[string]asset, len(manifest.Assets)), bundles: make(map[string]bundle, len(manifest.Bundles)),
+		packages: make(map[string]map[string]nativePackage, len(manifest.Targets)), packageOwners: make(map[string]map[string]string, len(manifest.Targets)), tracked: tracked,
+	}
 	for _, asset := range manifest.Assets {
 		if !validManifestID(asset.ID) || !validAssetType(asset.Type) || (asset.Ownership != "package" && asset.Ownership != "configuration") || len(asset.Dependencies) > 256 || len(asset.Variants) > 16 {
 			return validatedManifest{}, validationError("invalid_asset", "asset declaration is invalid")
@@ -156,11 +162,15 @@ func validateManifest(manifest toolkitManifest, tracked map[string]gitsource.Tre
 	for _, asset := range manifest.Assets {
 		seen := map[string]struct{}{}
 		for _, dependency := range asset.Dependencies {
-			if _, ok := model.assets[dependency]; !ok {
+			declared, ok := model.assets[dependency]
+			if !ok {
 				return validatedManifest{}, validationError("missing_dependency", "asset dependency does not exist")
 			}
 			if _, duplicate := seen[dependency]; duplicate {
 				return validatedManifest{}, validationError("duplicate_dependency", "asset dependency is duplicated")
+			}
+			if declared.Ownership != asset.Ownership {
+				return validatedManifest{}, validationError("invalid_dependency_ownership", "asset dependency crosses an ownership boundary")
 			}
 			seen[dependency] = struct{}{}
 		}
@@ -168,16 +178,122 @@ func validateManifest(manifest toolkitManifest, tracked map[string]gitsource.Tre
 	if cycleInAssets(model.assets) {
 		return validatedManifest{}, validationError("dependency_cycle", "asset dependency graph contains a cycle")
 	}
+	assetIDs := make([]string, 0, len(model.assets))
+	for assetID := range model.assets {
+		assetIDs = append(assetIDs, assetID)
+	}
+	slices.Sort(assetIDs)
+	packageIDs := map[string]struct{}{}
+	targetNames := make([]string, 0, len(manifest.Targets))
+	for targetName := range manifest.Targets {
+		targetNames = append(targetNames, targetName)
+	}
+	slices.Sort(targetNames)
+	for _, targetName := range targetNames {
+		targetConfig := manifest.Targets[targetName]
+		if !validTargetName(targetName) || len(targetConfig.Packages) == 0 || len(targetConfig.Packages) > 256 {
+			return validatedManifest{}, validationError("invalid_target", "target package declaration is invalid")
+		}
+		packages := make(map[string]nativePackage, len(targetConfig.Packages))
+		owners := map[string]string{}
+		roots := make([]string, 0, len(targetConfig.Packages))
+		for _, unit := range targetConfig.Packages {
+			if !validManifestID(unit.ID) || !safeRelative(unit.Path) || len(filesUnder(tracked, unit.Path)) == 0 || len(unit.Assets) > 4096 {
+				return validatedManifest{}, validationError("invalid_native_package", "target native package is invalid")
+			}
+			if _, duplicate := packages[unit.ID]; duplicate {
+				return validatedManifest{}, validationError("duplicate_native_package", "target native package identifiers must be unique")
+			}
+			for _, root := range roots {
+				if packagePathsOverlap(root, unit.Path) {
+					return validatedManifest{}, validationError("overlapping_native_package", "target native package roots must not overlap")
+				}
+			}
+			members := map[string]struct{}{}
+			for _, assetID := range unit.Assets {
+				declared, ok := model.assets[assetID]
+				if !ok {
+					return validatedManifest{}, validationError("missing_native_asset", "target native package references an unknown asset")
+				}
+				if _, duplicate := members[assetID]; duplicate {
+					return validatedManifest{}, validationError("duplicate_native_asset", "target native package repeats an asset")
+				}
+				if declared.Ownership != "package" || !assetSupportsTarget(declared, targetName) {
+					return validatedManifest{}, validationError("invalid_native_asset", "target native package must contain compatible package-owned assets")
+				}
+				for _, assetPath := range assetPathsForTarget(declared, targetName) {
+					if !pathWithinPackage(assetPath, unit.Path) {
+						return validatedManifest{}, validationError("native_asset_outside_package", "package-owned asset is outside its native package root")
+					}
+				}
+				if _, assigned := owners[assetID]; assigned {
+					return validatedManifest{}, validationError("ambiguous_native_asset", "package-owned asset belongs to multiple native packages")
+				}
+				members[assetID] = struct{}{}
+				owners[assetID] = unit.ID
+			}
+			packages[unit.ID] = unit
+			packageIDs[unit.ID] = struct{}{}
+			roots = append(roots, unit.Path)
+		}
+		for _, assetID := range assetIDs {
+			declared := model.assets[assetID]
+			if !assetSupportsTarget(declared, targetName) {
+				continue
+			}
+			if declared.Ownership == "package" {
+				if _, assigned := owners[assetID]; !assigned {
+					return validatedManifest{}, validationError("unassigned_native_asset", "compatible package-owned asset has no native package")
+				}
+				continue
+			}
+			for _, assetPath := range assetPathsForTarget(declared, targetName) {
+				for _, root := range roots {
+					if pathWithinPackage(assetPath, root) {
+						return validatedManifest{}, validationError("configuration_asset_inside_package", "configuration-owned asset must be outside native package roots")
+					}
+				}
+			}
+		}
+		model.packages[targetName] = packages
+		model.packageOwners[targetName] = owners
+	}
+	for _, assetID := range assetIDs {
+		declared := model.assets[assetID]
+		if declared.Ownership != "package" {
+			continue
+		}
+		for _, dependency := range declared.Dependencies {
+			for _, targetName := range targetNames {
+				owner, selected := model.packageOwners[targetName][assetID]
+				if !selected {
+					continue
+				}
+				if model.packageOwners[targetName][dependency] != owner {
+					return validatedManifest{}, validationError("cross_package_dependency", "package-owned asset dependency crosses a native package boundary")
+				}
+			}
+		}
+	}
 	for _, bundle := range manifest.Bundles {
-		if !validManifestID(bundle.ID) || len(bundle.Assets)+len(bundle.Bundles) == 0 || len(bundle.Assets) > 4096 || len(bundle.Bundles) > 1024 {
+		if !validManifestID(bundle.ID) || len(bundle.Assets)+len(bundle.Packages)+len(bundle.Bundles) == 0 || len(bundle.Assets) > 4096 || len(bundle.Packages) > 256 || len(bundle.Bundles) > 1024 || hasDuplicate(bundle.Assets) || hasDuplicate(bundle.Packages) || hasDuplicate(bundle.Bundles) {
 			return validatedManifest{}, validationError("invalid_bundle", "bundle declaration is invalid")
 		}
 		if _, duplicate := model.bundles[bundle.ID]; duplicate {
 			return validatedManifest{}, validationError("duplicate_bundle", "bundle identifiers must be unique")
 		}
-		for _, asset := range bundle.Assets {
-			if _, ok := model.assets[asset]; !ok {
+		for _, assetID := range bundle.Assets {
+			declared, ok := model.assets[assetID]
+			if !ok {
 				return validatedManifest{}, validationError("missing_bundle_asset", "bundle asset does not exist")
+			}
+			if declared.Ownership != "configuration" {
+				return validatedManifest{}, validationError("invalid_bundle_asset", "bundle assets must be configuration-owned")
+			}
+		}
+		for _, packageID := range bundle.Packages {
+			if _, ok := packageIDs[packageID]; !ok {
+				return validatedManifest{}, validationError("missing_bundle_package", "bundle native package does not exist")
 			}
 		}
 		model.bundles[bundle.ID] = bundle
@@ -192,27 +308,129 @@ func validateManifest(manifest toolkitManifest, tracked map[string]gitsource.Tre
 	if cycleInBundles(model.bundles) {
 		return validatedManifest{}, validationError("bundle_cycle", "bundle graph contains a cycle")
 	}
-	for targetName, target := range manifest.Targets {
-		if !validTargetName(targetName) || len(target.Packages) == 0 || len(target.Packages) > 256 {
-			return validatedManifest{}, validationError("invalid_target", "target package declaration is invalid")
-		}
-		packageIDs := map[string]struct{}{}
-		for _, unit := range target.Packages {
-			if !validManifestID(unit.ID) || !safeRelative(unit.Path) || len(filesUnder(tracked, unit.Path)) == 0 || len(unit.Assets) > 4096 {
-				return validatedManifest{}, validationError("invalid_native_package", "target native package is invalid")
+	for _, targetName := range targetNames {
+		for _, unit := range manifest.Targets[targetName].Packages {
+			coveredFiles := make(map[string]struct{})
+			coveringAssets := make(map[string][]string)
+			for _, assetID := range unit.Assets {
+				for _, assetPath := range assetPathsForTarget(model.assets[assetID], targetName) {
+					for _, file := range assetFiles(assetPath, tracked) {
+						coveredFiles[file] = struct{}{}
+						coveringAssets[file] = append(coveringAssets[file], assetID)
+					}
+				}
 			}
-			if _, duplicate := packageIDs[unit.ID]; duplicate {
-				return validatedManifest{}, validationError("duplicate_native_package", "target native package identifiers must be unique")
-			}
-			packageIDs[unit.ID] = struct{}{}
-			for _, asset := range unit.Assets {
-				if _, ok := model.assets[asset]; !ok {
-					return validatedManifest{}, validationError("missing_native_asset", "target native package references an unknown asset")
+			for _, file := range filesUnder(tracked, unit.Path) {
+				if nativePluginMetadataPath(file, unit.Path) {
+					if err := validateNativePluginMetadata(root, file, tracked); err != nil {
+						return validatedManifest{}, err
+					}
+					continue
+				}
+				if _, covered := coveredFiles[file]; !covered {
+					return validatedManifest{}, undeclaredPackageContent()
+				}
+				if err := validateNativePathDisclosure(file, unit.Path, coveringAssets[file], model.assets); err != nil {
+					return validatedManifest{}, err
 				}
 			}
 		}
 	}
 	return model, nil
+}
+
+type nativePluginMetadata struct {
+	Schema      json.RawMessage `json:"$schema,omitempty"`
+	Name        json.RawMessage `json:"name,omitempty"`
+	DisplayName json.RawMessage `json:"displayName,omitempty"`
+	Version     json.RawMessage `json:"version,omitempty"`
+	Description json.RawMessage `json:"description,omitempty"`
+	Author      json.RawMessage `json:"author,omitempty"`
+	Homepage    json.RawMessage `json:"homepage,omitempty"`
+	Repository  json.RawMessage `json:"repository,omitempty"`
+	License     json.RawMessage `json:"license,omitempty"`
+	Keywords    json.RawMessage `json:"keywords,omitempty"`
+}
+
+func nativePluginMetadataPath(path, packageRoot string) bool {
+	return path == packageRoot+"/.claude-plugin/plugin.json" || path == packageRoot+"/.codex-plugin/plugin.json"
+}
+
+func validateNativePluginMetadata(root, path string, tracked map[string]gitsource.TreeEntry) error {
+	var metadata nativePluginMetadata
+	if err := readStrictJSON(root, path, tracked, &metadata); err != nil {
+		return undeclaredPackageContent()
+	}
+	return nil
+}
+
+func validateNativePathDisclosure(path, packageRoot string, covering []string, assets map[string]asset) error {
+	relative := strings.TrimPrefix(path, strings.TrimSuffix(packageRoot, "/")+"/")
+	switch {
+	case relative == ".mcp.json":
+		if !coveringAssetType(covering, assets, "mcp") {
+			return undeclaredPackageContent()
+		}
+	case strings.HasPrefix(relative, "agents/"):
+		if !coveringAssetType(covering, assets, "agent") {
+			return undeclaredPackageContent()
+		}
+	case strings.HasPrefix(relative, "commands/"):
+		if !coveringAssetType(covering, assets, "prompt") {
+			return undeclaredPackageContent()
+		}
+	case strings.HasPrefix(relative, "skills/"):
+		if !skillDisclosureCovers(covering, assets) {
+			return undeclaredPackageContent()
+		}
+	case relative == ".lsp.json", relative == "settings.json", relative == "settings.local.json",
+		strings.HasPrefix(relative, "hooks/"), strings.HasPrefix(relative, "bin/"),
+		strings.HasPrefix(relative, "monitors/"), strings.HasPrefix(relative, "output-styles/"),
+		strings.HasPrefix(relative, "outputStyles/"):
+		return undeclaredPackageContent()
+	}
+	return nil
+}
+
+func coveringAssetType(covering []string, assets map[string]asset, expected string) bool {
+	for _, assetID := range covering {
+		if assets[assetID].Type == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func skillDisclosureCovers(covering []string, assets map[string]asset) bool {
+	var skills []asset
+	for _, assetID := range covering {
+		if assets[assetID].Type == "skill" {
+			skills = append(skills, assets[assetID])
+		}
+	}
+	if len(skills) == 0 {
+		return false
+	}
+	for _, assetID := range covering {
+		if assets[assetID].Type == "skill" {
+			continue
+		}
+		declared := false
+		for _, skill := range skills {
+			if slices.Contains(skill.Dependencies, assetID) {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			return false
+		}
+	}
+	return true
+}
+
+func undeclaredPackageContent() error {
+	return validationError("undeclared_package_content", "native package contains content not covered by its declared assets")
 }
 
 func contentForManifest(root string, model validatedManifest) ([]cli.ContentItem, error) {
@@ -366,6 +584,40 @@ func componentType(value string) (cli.ComponentType, error) {
 func validAssetType(value string) bool {
 	_, err := componentType(value)
 	return err == nil
+}
+
+func assetSupportsTarget(value asset, target string) bool {
+	if value.Path != "" {
+		return true
+	}
+	for _, variant := range value.Variants {
+		if slices.Contains(variant.Targets, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func assetPathsForTarget(value asset, target string) []string {
+	if value.Path != "" {
+		return []string{value.Path}
+	}
+	var paths []string
+	for _, variant := range value.Variants {
+		if slices.Contains(variant.Targets, target) {
+			paths = append(paths, variant.Path)
+		}
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths)
+}
+
+func packagePathsOverlap(left, right string) bool {
+	return pathWithinPackage(left, right) || pathWithinPackage(right, left)
+}
+
+func pathWithinPackage(candidate, root string) bool {
+	return candidate == root || strings.HasPrefix(candidate, strings.TrimSuffix(root, "/")+"/")
 }
 
 func assetFiles(path string, tracked map[string]gitsource.TreeEntry) []string {

@@ -26,8 +26,8 @@ func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 		{name: "init", argv: []string{"ai4j", "init", "--target", "claude", "--target=codex", "--output", "new-toolkit", "--examples", "--json"}, command: cli.CommandInit, typeOf: cli.InitRequest{}},
 		{name: "validate", argv: []string{"ai4j", "validate", "--repo", "alx4j/ai4j", "--ref=main", "--target", "claude", "--json"}, command: cli.CommandValidate, typeOf: cli.ValidateRequest{}},
 		{name: "build", argv: []string{"ai4j", "build", "--target", "codex", "--host=darwin-arm64", "--output", "dist/codex", "--all", "--json"}, command: cli.CommandBuild, typeOf: cli.BuildRequest{}},
-		{name: "dry-run install", argv: []string{"/usr/local/bin/ai4j", "install", "--ref", "tag", "--target", "claude", "--scope", "user", "--all", "--dry-run", "--json"}, command: cli.CommandInstall, typeOf: cli.InstallRequest{}},
-		{name: "install", argv: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--expected-commit", commitOID, "--yes", "--json"}, command: cli.CommandInstall, typeOf: cli.InstallRequest{}},
+		{name: "dry-run install", argv: []string{"/usr/local/bin/ai4j", "install", "--ref", "tag", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run", "--json"}, command: cli.CommandInstall, typeOf: cli.InstallRequest{}},
+		{name: "install", argv: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--expected-commit", commitOID, "--yes", "--json"}, command: cli.CommandInstall, typeOf: cli.InstallRequest{}},
 		{name: "dry-run update", argv: []string{"ai4j", "update", "installation-001", "--dry-run", "--json"}, command: cli.CommandUpdate, typeOf: cli.UpdateRequest{}},
 		{name: "update", argv: []string{"ai4j", "update", "installation-001", "--yes", "--expected-commit=" + commitOID}, command: cli.CommandUpdate, typeOf: cli.UpdateRequest{}},
 		{name: "list", argv: []string{"ai4j", "list", "--target", "claude", "--scope=user", "--json"}, command: cli.CommandList, typeOf: cli.ListRequest{}},
@@ -60,13 +60,13 @@ func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 	}{
 		{cli.CommandValidate, []string{"ai4j", "validate", "--source", ".", "--target", "claude", "--allow-dirty", "--json"}},
 		{cli.CommandBuild, []string{"ai4j", "build", "--source", ".", "--target", "codex", "--host", "windows-amd64", "--output", "dist", "--bundle", "default", "--allow-dirty"}},
-		{cli.CommandInstall, []string{"ai4j", "install", "--repo", "alx4j/ai4j", "--target", "claude", "--scope", "user", "--all", "--dry-run"}},
-		{cli.CommandInstall, []string{"ai4j", "install", "--source", ".", "--target", "codex", "--scope", "project-local", "--project", ".", "--asset", "review-skill", "--expected-source-digest", digest, "--allow-dirty", "--yes"}},
+		{cli.CommandInstall, []string{"ai4j", "install", "--repo", "alx4j/ai4j", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run"}},
+		{cli.CommandInstall, []string{"ai4j", "install", "--source", ".", "--target", "codex", "--scope", "project-local", "--project", ".", "--bundle", "review", "--expected-source-digest", digest, "--allow-dirty", "--yes"}},
 		{cli.CommandInstall, []string{"ai4j", "install", "--installation", "installation-001", "--allow-dirty", "--yes"}},
 		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--repo", "alx4j/ai4j", "--conflict-policy", "keep", "--dry-run"}},
 		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--expected-source-digest", digest, "--conflict-policy", "replace-owned", "--yes"}},
 		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--bundle", "default", "--conflict-policy", "fail", "--dry-run"}},
-		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--all", "--expected-source-digest", digest, "--yes"}},
+		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--bundle", "review", "--expected-source-digest", digest, "--yes"}},
 		{cli.CommandStatus, []string{"ai4j", "status", "installation-001", "--json"}},
 		{cli.CommandDoctor, []string{"ai4j", "doctor", "installation-001", "--test-mcp", "server-id", "--yes"}},
 		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--operation", "operation-001", "--conflict-policy", "fail", "--dry-run"}},
@@ -96,9 +96,8 @@ func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 		{"ai4j", "validate", "--repo", "alx4j/ai4j", "--source", ".", "--target", "claude"},
 		{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist", "--all", "--allow-dirty"},
 		{"ai4j", "install", "--installation", "installation-001", "--target", "claude", "--yes"},
-		{"ai4j", "install", "--source", ".", "--target", "claude", "--scope", "user", "--all", "--expected-commit", commitOID},
-		{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--expected-source-digest", digest},
-		{"ai4j", "sync", "installation-001", "--all", "--asset", "skill-id"},
+		{"ai4j", "install", "--source", ".", "--target", "claude", "--scope", "user", "--bundle", "default", "--expected-commit", commitOID},
+		{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--expected-source-digest", digest},
 		{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--dry-run"},
 		{"ai4j", "rollback", "installation-001", "--conflict-policy", "interactive", "--json"},
 		{"ai4j", "install", "--dry-run", "--yes"},
@@ -117,13 +116,13 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 	t.Parallel()
 
 	parser := cli.NewParser("darwin")
-	request, err := parser.Parse([]string{"ai4j", "install", "--ref", "main", "--repo=alx4j/ai4j", "--target", "claude", "--scope", "user", "--all", "--yes", "--expected-commit", commitOID, "--json"})
+	request, err := parser.Parse([]string{"ai4j", "install", "--ref", "main", "--repo=alx4j/ai4j", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes", "--expected-commit", commitOID, "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	install := request.(cli.InstallRequest)
 	commit, present := install.ExpectedCommit()
-	if install.Source().Repository() != "alx4j/ai4j" || !install.Source().HasRepository() || install.Source().Reference() != "main" || !install.Source().HasReference() ||
+	if install.Source().Repository() != "alx4j/ai4j" || !install.Source().HasRepository() || install.Source().Reference() != "main" || !install.Source().HasReference() || install.Selection().Bundle() != "default" ||
 		!install.Approved() || install.OutputMode() != cli.OutputJSON || !present || commit.String() != commitOID {
 		t.Fatalf("install request lost options: %#v", install)
 	}
@@ -166,6 +165,78 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 	}
 }
 
+func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	accepted := []struct {
+		argv   []string
+		bundle func(cli.Request) string
+	}{
+		{
+			argv:   []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default"},
+			bundle: func(request cli.Request) string { return request.(cli.InstallRequest).Selection().Bundle() },
+		},
+		{
+			argv:   []string{"ai4j", "sync", "installation-001", "--bundle", "review"},
+			bundle: func(request cli.Request) string { return request.(cli.SyncRequest).Selection().Bundle() },
+		},
+	}
+	for _, test := range accepted {
+		request, err := parser.Parse(test.argv)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", test.argv, err)
+		}
+		if got := test.bundle(request); got != test.argv[len(test.argv)-1] {
+			t.Fatalf("Parse(%q) bundle = %q", test.argv, got)
+		}
+	}
+
+	rejected := []struct {
+		argv   []string
+		issue  cli.UsageIssue
+		option string
+	}{
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user"}, cli.UsageMissingOptionValue, "bundle"},
+		{[]string{"ai4j", "sync", "installation-001"}, cli.UsageMissingOptionValue, "bundle"},
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all"}, cli.UsageInapplicableOption, "all"},
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--asset", "review-skill"}, cli.UsageInapplicableOption, "asset"},
+		{[]string{"ai4j", "sync", "installation-001", "--all"}, cli.UsageInapplicableOption, "all"},
+		{[]string{"ai4j", "sync", "installation-001", "--asset", "review-skill"}, cli.UsageInapplicableOption, "asset"},
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--bundle", "review"}, cli.UsageDuplicateOption, "bundle"},
+		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--bundle", "review"}, cli.UsageDuplicateOption, "bundle"},
+	}
+	for _, test := range rejected {
+		_, err := parser.Parse(test.argv)
+		var usage *cli.UsageError
+		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
+			t.Fatalf("Parse(%q) = %v, want %s for %q", test.argv, err, test.issue, test.option)
+		}
+	}
+}
+
+func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	request, err := parser.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist", "--asset", "review-skill", "--bundle", "review", "--bundle", "tools"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := request.(cli.BuildRequest)
+	if build.SelectAll() || !slices.Equal(build.Assets(), []string{"review-skill"}) || !slices.Equal(build.Bundles(), []string{"review", "tools"}) {
+		t.Fatalf("build selection = assets %v bundles %v", build.Assets(), build.Bundles())
+	}
+
+	request, err = parser.Parse([]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := request.(cli.HistoryPurgeRequest).Selection(); got != cli.HistoryPurgeAll {
+		t.Fatalf("history purge selection = %q", got)
+	}
+}
+
 func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 	t.Parallel()
 
@@ -174,9 +245,9 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 		argv   []string
 		dryRun func(cli.Request) bool
 	}{
-		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.InstallRequest).DryRun() }},
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run"}, func(request cli.Request) bool { return request.(cli.InstallRequest).DryRun() }},
 		{[]string{"ai4j", "update", "installation-001", "--dry-run"}, func(request cli.Request) bool { return request.(cli.UpdateRequest).DryRun() }},
-		{[]string{"ai4j", "sync", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.SyncRequest).DryRun() }},
+		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--dry-run"}, func(request cli.Request) bool { return request.(cli.SyncRequest).DryRun() }},
 		{[]string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) bool { return request.(cli.RollbackRequest).DryRun() }},
 		{[]string{"ai4j", "uninstall", "installation-001", "--dry-run"}, func(request cli.Request) bool { return request.(cli.UninstallRequest).DryRun() }},
 		{[]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.HistoryPurgeRequest).DryRun() }},
@@ -201,7 +272,7 @@ func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.
 		id   func(cli.Request) string
 	}{
 		{[]string{"ai4j", "update", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UpdateRequest).InstallationID().String() }},
-		{[]string{"ai4j", "sync", "installation-001", "--all", "--dry-run"}, func(request cli.Request) string { return request.(cli.SyncRequest).InstallationID().String() }},
+		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--dry-run"}, func(request cli.Request) string { return request.(cli.SyncRequest).InstallationID().String() }},
 		{[]string{"ai4j", "doctor", "installation-001"}, func(request cli.Request) string { return request.(cli.DoctorRequest).InstallationID().String() }},
 		{[]string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.RollbackRequest).InstallationID().String() }},
 		{[]string{"ai4j", "uninstall", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UninstallRequest).InstallationID().String() }},
@@ -250,7 +321,7 @@ func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 	parser := cli.NewParser("darwin")
 	tests := [][]string{
 		{"ai4j", "update"},
-		{"ai4j", "sync", "--all"},
+		{"ai4j", "sync", "--bundle", "default"},
 		{"ai4j", "status"},
 		{"ai4j", "doctor"},
 		{"ai4j", "rollback"},
@@ -355,7 +426,7 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 		options []option
 	}{
 		{name: "validate", command: []string{"validate", "--target", "claude"}, options: []option{{[]string{"--repo", "alx4j/ai4j"}, []string{"--repo=alx4j/ai4j"}}, {[]string{"--ref", "main"}, []string{"--ref=main"}}, {[]string{"--json"}, []string{"--json"}}}},
-		{name: "install", command: []string{"install", "--target", "claude", "--scope", "user", "--all"}, options: []option{{[]string{"--repo", "alx4j/ai4j"}, []string{"--repo=alx4j/ai4j"}}, {[]string{"--ref", "main"}, []string{"--ref=main"}}, {[]string{"--expected-commit", commitOID}, []string{"--expected-commit=" + commitOID}}, {[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
+		{name: "install", command: []string{"install", "--target", "claude", "--scope", "user", "--bundle", "default"}, options: []option{{[]string{"--repo", "alx4j/ai4j"}, []string{"--repo=alx4j/ai4j"}}, {[]string{"--ref", "main"}, []string{"--ref=main"}}, {[]string{"--expected-commit", commitOID}, []string{"--expected-commit=" + commitOID}}, {[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "update", command: []string{"update", "installation-001"}, options: []option{{[]string{"--expected-commit", commitOID}, []string{"--expected-commit=" + commitOID}}, {[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "list", command: []string{"list"}, options: []option{{[]string{"--target", "claude"}, []string{"--target=claude"}}, {[]string{"--scope", "user"}, []string{"--scope=user"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "status", command: []string{"status", "installation-001"}, options: []option{{[]string{"--json"}, []string{"--json"}}}},
@@ -464,9 +535,9 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 		options []option
 	}{
 		{name: "validate", command: []string{"validate"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "target", value: "claude"}, {name: "allow-dirty", boolean: true}, {name: "json", boolean: true}}},
-		{name: "install", command: []string{"install"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "installation", value: "installation-001"}, {name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "project", value: "."}, {name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "install", command: []string{"install"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "installation", value: "installation-001"}, {name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "project", value: "."}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "update", command: []string{"update", "installation-001"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
-		{name: "sync", command: []string{"sync", "installation-001"}, options: []option{{name: "all", boolean: true}, {name: "asset", value: "skill-id"}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "sync", command: []string{"sync", "installation-001"}, options: []option{{name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "list", command: []string{"list"}, options: []option{{name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "json", boolean: true}}},
 		{name: "status", command: []string{"status", "installation-001"}, options: []option{{name: "json", boolean: true}}},
 		{name: "doctor", command: []string{"doctor", "installation-001"}, options: []option{{name: "test-mcp", value: "server-id"}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
@@ -488,7 +559,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 					token += "=" + candidate.value
 				}
 				duplicateIssue := cli.UsageDuplicateOption
-				if candidate.name == "asset" || candidate.name == "bundle" || test.name == "validate" && candidate.name == "target" {
+				if test.name == "build" && (candidate.name == "asset" || candidate.name == "bundle") || test.name == "validate" && candidate.name == "target" {
 					duplicateIssue = cli.UsageInvalidOptionValue
 				}
 				assertUsageIssue(t, parser, appendCommand(test.command, token, token), duplicateIssue)

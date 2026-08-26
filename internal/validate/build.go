@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -130,21 +131,26 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 	report.Source = source
 	report.Reproducible = !source.Dirty()
 	selection := selection{target: request.Target(), host: request.Host(), all: request.SelectAll(), assets: request.Assets(), bundles: request.Bundles()}
-	resolved, err := resolveSelection(validated.model, selection)
+	resolved, err := resolveCanonicalSelection(validated.model, selection)
 	if err != nil {
 		code, message := packageProblem(err)
 		return buildFailure(report, FailureValidation, code, message)
 	}
-	if err = validateSelectedExecutableFormats(workspacePath, resolved, request.Host(), validated.model); err != nil {
-		code, message := packageProblem(err)
-		return buildFailure(report, FailureValidation, code, message)
-	}
-	validated.content, err = selectedContent(workspacePath, validated.model, resolved)
+	codexAgents, err := codexAgentOutputs(validated.model, resolved, request.Target())
 	if err != nil {
 		code, message := packageProblem(err)
 		return buildFailure(report, FailureValidation, code, message)
 	}
-	report.Selection, err = cliSelections(resolved)
+	if err = validateSelectedExecutableFormats(workspacePath, resolved.assets, request.Host(), validated.model); err != nil {
+		code, message := packageProblem(err)
+		return buildFailure(report, FailureValidation, code, message)
+	}
+	validated.content, err = selectedContent(workspacePath, validated.model, resolved.assets)
+	if err != nil {
+		code, message := packageProblem(err)
+		return buildFailure(report, FailureValidation, code, message)
+	}
+	report.Selection, err = cliSelections(resolved.assets)
 	if err != nil {
 		return buildFailure(report, FailureInternal, "internal_error", "build selection result could not be constructed")
 	}
@@ -181,7 +187,7 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 		report.Failure = FailureValidation
 		return report
 	}
-	artifacts, err := renderBuildOutput(workspacePath, acquired, validated, resolved, source, request, validateOutput, s.config.Capacity)
+	artifacts, err := renderBuildOutput(workspacePath, acquired, validated, resolved, codexAgents, source, request, validateOutput, s.config.Capacity)
 	if err != nil {
 		if code, message, ok := diskCapacityProblem(err); ok {
 			return buildFailure(report, FailureEnvironment, code, message)
@@ -235,7 +241,7 @@ var (
 	errNativeBuildValidation = errors.New("native build validation failed")
 )
 
-func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved []resolvedAsset, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
+func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved resolvedSelection, codexAgents map[string]codexAgentOutput, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
 	output, err := filepath.Abs(request.Output())
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize output: %w", err)
@@ -262,7 +268,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 	defer func() { _ = stageWorkspace.Close() }()
 	stage := stageWorkspace.Path()
 
-	mappings, err := renderBuild(stage, workspacePath, validated.model, resolved, request.Target())
+	mappings, err := renderBuild(stage, workspacePath, validated.model, resolved, codexAgents, request.Target())
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +292,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 		SchemaVersion: 1, SourceMode: source.Mode(), SourceCommit: sourceCommit, SourceDigest: sourceDigest,
 		CLIBuild: source.CLIBuildCommit().String(), Target: request.Target(), Host: request.Host(),
 		TargetProfile: buildTargetProfile(request.Target()), Reproducible: !source.Dirty(),
-		Artifacts: manifestArtifacts, Mappings: mappings, Selection: buildSelections(resolved),
+		Artifacts: manifestArtifacts, Mappings: mappings, Selection: buildSelections(resolved.assets),
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -394,7 +400,19 @@ func writeBuildFile(root, relative string, content []byte, mode os.FileMode) err
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(destination, content, mode)
+	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	written, writeErr := file.Write(content)
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if written != len(content) {
+		return io.ErrShortWrite
+	}
+	return closeErr
 }
 
 func buildFailure(report BuildReport, failure Failure, code, message string) BuildReport {

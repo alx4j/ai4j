@@ -15,28 +15,54 @@ type renderedUnit struct {
 	destination string
 }
 
-func renderBuild(stage, workspace string, model validatedManifest, resolved []resolvedAsset, target cli.BuildTarget) ([]buildMapping, error) {
-	targetConfig, ok := model.manifest.Targets[string(target)]
-	if !ok {
-		return nil, errors.New("selected target is not declared")
+type codexAgentOutput struct {
+	source      string
+	destination string
+	name        string
+}
+
+func codexAgentOutputs(model validatedManifest, resolved resolvedSelection, target cli.BuildTarget) (map[string]codexAgentOutput, error) {
+	outputs := make(map[string]codexAgentOutput)
+	if target != cli.BuildTargetCodex {
+		return outputs, nil
 	}
-	selected := map[string]resolvedAsset{}
-	for _, asset := range resolved {
-		selected[asset.asset.ID] = asset
-	}
-	units := []nativePackage{}
-	for _, unit := range targetConfig.Packages {
-		include := len(resolved) == 0
-		for _, id := range unit.Assets {
-			if _, ok := selected[id]; ok {
-				include = true
-				break
-			}
+	destinations := make(map[string]string)
+	for _, selected := range resolved.assets {
+		if selected.asset.Ownership != "package" || selected.asset.Type != "agent" {
+			continue
 		}
-		if include {
-			units = append(units, unit)
+		owner, ok := model.packageOwners[string(cli.BuildTargetCodex)][selected.asset.ID]
+		if !ok {
+			return nil, validationError("invalid_codex_agent", "Codex agent has no native package")
 		}
+		unit, ok := model.packages[string(cli.BuildTargetCodex)][owner]
+		if !ok {
+			return nil, validationError("invalid_codex_agent", "Codex agent has no native package")
+		}
+		if _, native := model.tracked[unit.Path+"/.codex-plugin/plugin.json"]; native {
+			continue
+		}
+		sources := assetFiles(selected.path, model.tracked)
+		if len(sources) != 1 || filepath.Ext(sources[0]) != ".md" {
+			return nil, validationError("invalid_codex_agent", "Codex agent assets must resolve to one Markdown file")
+		}
+		name := strings.TrimSuffix(filepath.Base(sources[0]), ".md")
+		if name == "" {
+			return nil, validationError("invalid_codex_agent", "Codex agent filename is invalid")
+		}
+		destination := "configuration/.codex/agents/" + name + ".toml"
+		collisionKey := strings.ToLower(filepath.ToSlash(destination))
+		if previous, collision := destinations[collisionKey]; collision && previous != selected.asset.ID {
+			return nil, validationError("codex_agent_output_collision", "Codex agent filenames must be unique across selected packages")
+		}
+		destinations[collisionKey] = selected.asset.ID
+		outputs[selected.asset.ID] = codexAgentOutput{source: sources[0], destination: destination, name: name}
 	}
+	return outputs, nil
+}
+
+func renderBuild(stage, workspace string, model validatedManifest, resolved resolvedSelection, codexAgents map[string]codexAgentOutput, target cli.BuildTarget) ([]buildMapping, error) {
+	units := append([]nativePackage(nil), resolved.packages...)
 	slices.SortFunc(units, func(left, right nativePackage) int { return strings.Compare(left.ID, right.ID) })
 	rendered := make([]renderedUnit, 0, len(units))
 	for _, unit := range units {
@@ -53,9 +79,14 @@ func renderBuild(stage, workspace string, model validatedManifest, resolved []re
 		}
 		rendered = append(rendered, renderedUnit{unit: unit, destination: destination})
 	}
-	mappings := make([]buildMapping, 0, len(resolved))
+	if target == cli.BuildTargetCodex {
+		if err := renderCodexAgents(stage, workspace, model, resolved.assets, codexAgents); err != nil {
+			return nil, err
+		}
+	}
+	mappings := make([]buildMapping, 0, len(resolved.assets))
 	instructionCount := 0
-	for _, selectedAsset := range resolved {
+	for _, selectedAsset := range resolved.assets {
 		native := ""
 		if selectedAsset.asset.Ownership == "configuration" {
 			destination := "configuration/assets/" + selectedAsset.asset.ID + "/" + filepath.Base(selectedAsset.path)
@@ -74,7 +105,7 @@ func renderBuild(stage, workspace string, model validatedManifest, resolved []re
 			}
 			native = destination
 		} else {
-			native = mappedPackagePath(selectedAsset, rendered, target)
+			native = mappedPackagePath(selectedAsset, rendered, codexAgents, target)
 			if native == "" {
 				return nil, errors.New("selected package asset has no native unit")
 			}
@@ -143,16 +174,20 @@ func renderCodexUnit(stage, destination, workspace string, unit nativePackage, m
 	if err := writeBuildFile(stage, destination+"/.codex-plugin/plugin.json", append(content, '\n'), 0o644); err != nil {
 		return err
 	}
-	for _, source := range filesUnder(model.tracked, unit.Path+"/agents") {
-		if filepath.Ext(source) != ".md" {
-			return errors.New("Codex agent source must be Markdown")
+	return nil
+}
+
+func renderCodexAgents(stage, workspace string, model validatedManifest, selected []resolvedAsset, outputs map[string]codexAgentOutput) error {
+	for _, asset := range selected {
+		output, ok := outputs[asset.asset.ID]
+		if !ok {
+			continue
 		}
-		body, err := readTrackedFile(workspace, source, model.tracked)
+		body, err := readTrackedFile(workspace, output.source, model.tracked)
 		if err != nil {
 			return err
 		}
-		name := strings.TrimSuffix(filepath.Base(source), ".md")
-		if err := writeBuildFile(stage, "configuration/.codex/agents/"+name+".toml", codexAgentNamed(body, name), 0o644); err != nil {
+		if err := writeBuildFile(stage, output.destination, codexAgentNamed(body, output.name), 0o644); err != nil {
 			return err
 		}
 	}
@@ -173,13 +208,15 @@ func copyAsset(stage, destination, workspace, source string, model validatedMani
 	return nil
 }
 
-func mappedPackagePath(asset resolvedAsset, units []renderedUnit, target cli.BuildTarget) string {
+func mappedPackagePath(asset resolvedAsset, units []renderedUnit, codexAgents map[string]codexAgentOutput, target cli.BuildTarget) string {
 	for _, rendered := range units {
 		if !slices.Contains(rendered.unit.Assets, asset.asset.ID) {
 			continue
 		}
 		if target == cli.BuildTargetCodex && asset.asset.Type == "agent" {
-			return "configuration/.codex/agents/" + asset.asset.ID + ".toml"
+			if output, ok := codexAgents[asset.asset.ID]; ok {
+				return output.destination
+			}
 		}
 		if target == cli.BuildTargetCodex && asset.asset.Type == "mcp" {
 			return rendered.destination + "/.mcp.json"

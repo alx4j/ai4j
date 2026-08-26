@@ -56,6 +56,14 @@ assert_success() {
   jq -e '(.status == "ok" or .status == "no_change") and .exitCode == 0 and (.errors | length == 0)' "$document" >/dev/null
 }
 
+assert_default_bundle_status() {
+  local document="$1"
+  jq -e '.data.installation.nativePluginIds == ["ai4j-review", "ai4j-tools"] and
+    .data.summary.requestedBundle == "default" and
+    .data.summary.resolvedBundles == ["default", "review", "tools"] and
+    .data.summary.packages == ["ai4j-review", "ai4j-tools"]' "$document" >/dev/null
+}
+
 run_ai4j() {
   local evidence_name="$1"
   shift
@@ -67,7 +75,6 @@ run_project_journey() {
   local scope="$1"
   local project_root="$work_root/project-$scope"
   local prefix="project-$scope"
-  local native_plugin_id
   local marketplace_id
 
   git clone --quiet --no-hardlinks "$repo_root" "$project_root"
@@ -84,15 +91,16 @@ run_project_journey() {
   jq -e '.data.nativeState.registration == "registered" and
     .data.nativeState.installation == "installed" and
     .data.nativeState.enablement == "enabled"' "$evidence_root/$prefix-status.json" >/dev/null
-  native_plugin_id="$(jq -er '.data.installation.nativePluginId' "$evidence_root/$prefix-status.json")"
+  assert_default_bundle_status "$evidence_root/$prefix-status.json"
   marketplace_id="$(jq -er '.data.actions[] | select(.kind == "register_marketplace") | .resource' "$evidence_root/$prefix-plan.json")"
-  native_plugin_id="${native_plugin_id}@${marketplace_id}"
   (
     cd "$project_root"
     claude plugin list --json
   ) | tee "$evidence_root/$prefix-plugin-list.json"
-  jq -e --arg id "$native_plugin_id" '[.. | strings] | index($id) != null' \
-    "$evidence_root/$prefix-plugin-list.json" >/dev/null
+  while IFS= read -r native_plugin_id; do
+    jq -e --arg id "${native_plugin_id}@${marketplace_id}" '[.. | strings] | index($id) != null' \
+      "$evidence_root/$prefix-plugin-list.json" >/dev/null
+  done < <(jq -er '.data.installation.nativePluginIds[]' "$evidence_root/$prefix-status.json")
   (
     cd "$project_root"
     claude plugin marketplace list --json
@@ -111,8 +119,11 @@ run_project_journey() {
       | tee "$evidence_root/$prefix-settings.json" >/dev/null
     jq -e --arg id "$marketplace_id" --arg sha "$qualification_ref" \
       '.extraKnownMarketplaces[$id].source.source == "settings" and
-       .extraKnownMarketplaces[$id].source.plugins[0].source.source == "git-subdir" and
-       .extraKnownMarketplaces[$id].source.plugins[0].source.sha == $sha' \
+       (.extraKnownMarketplaces[$id].source.plugins | map(.name)) == ["ai4j-review", "ai4j-tools"] and
+       all(.extraKnownMarketplaces[$id].source.plugins[];
+         .source.source == "git-subdir" and
+         .source.sha == $sha and
+         .source.path == ("plugins/" + .name))' \
       "$evidence_root/$prefix-settings.json" >/dev/null
   fi
 
@@ -149,10 +160,12 @@ go test -mod=readonly ./internal/host/darwin/installlock \
   -run 'TestLock(BlocksConcurrentMutationAndReleases|IsReleasedWhenOwnerProcessExits)$' \
   -count=1 | tee "$evidence_root/darwin-lock-tests.txt"
 
-(
-  cd plugins/ai4j-default
-  claude plugin validate . --strict
-) 2>&1 | tee "$evidence_root/native-plugin-validate.txt"
+for package in ai4j-review ai4j-tools; do
+  (
+    cd "plugins/$package"
+    claude plugin validate . --strict
+  ) 2>&1 | tee "$evidence_root/native-plugin-validate-$package.txt"
+done
 
 bash scripts/build-release.sh "$ai4j" | tee "$evidence_root/release-build.txt"
 (
@@ -179,23 +192,25 @@ run_ai4j user-status.json status "$active_installation"
 jq -e '.data.nativeState.registration == "registered" and
   .data.nativeState.installation == "installed" and
   .data.nativeState.enablement == "enabled"' "$evidence_root/user-status.json" >/dev/null
-native_plugin_id="$(jq -er '.data.installation.nativePluginId' "$evidence_root/user-status.json")"
+assert_default_bundle_status "$evidence_root/user-status.json"
 marketplace_id="ai4j-${active_installation#install-}"
-native_plugin_id="${native_plugin_id}@${marketplace_id}"
-[[ "$native_plugin_id" == *@* ]]
 
 claude plugin marketplace list --json | tee "$evidence_root/user-marketplace-list.json"
 jq -e --arg id "$marketplace_id" '[.. | strings] | index($id) != null' \
   "$evidence_root/user-marketplace-list.json" >/dev/null
 claude plugin list --json | tee "$evidence_root/user-plugin-list.json"
-jq -e --arg id "$native_plugin_id" '[.. | strings] | index($id) != null' \
-  "$evidence_root/user-plugin-list.json" >/dev/null
+while IFS= read -r native_plugin_id; do
+  jq -e --arg id "${native_plugin_id}@${marketplace_id}" '[.. | strings] | index($id) != null' \
+    "$evidence_root/user-plugin-list.json" >/dev/null
+done < <(jq -er '.data.installation.nativePluginIds[]' "$evidence_root/user-status.json")
 
 claude plugin marketplace update "$marketplace_id" | tee "$evidence_root/user-marketplace-update.txt"
-claude plugin update "$native_plugin_id" --scope user | tee "$evidence_root/user-plugin-update.txt"
+while IFS= read -r native_plugin_id; do
+  claude plugin update "${native_plugin_id}@${marketplace_id}" --scope user \
+    | tee "$evidence_root/user-plugin-update-$native_plugin_id.txt"
+done < <(jq -er '.data.installation.nativePluginIds[]' "$evidence_root/user-status.json")
 run_ai4j user-status-after-refresh.json status "$active_installation"
 
-export AI4J_TOKEN=qualification-presence-only
 run_ai4j user-doctor.json doctor "$active_installation"
 set +e
 "$ai4j" doctor "$active_installation" --test-mcp claude-tools --json \
@@ -217,8 +232,10 @@ claude plugin marketplace list --json | tee "$evidence_root/user-post-uninstall-
 jq -e --arg id "$marketplace_id" '[.. | strings] | index($id) == null' \
   "$evidence_root/user-post-uninstall-marketplace-list.json" >/dev/null
 claude plugin list --json | tee "$evidence_root/user-post-uninstall-plugin-list.json"
-jq -e --arg id "$native_plugin_id" '[.. | strings] | index($id) == null' \
-  "$evidence_root/user-post-uninstall-plugin-list.json" >/dev/null
+while IFS= read -r native_plugin_id; do
+  jq -e --arg id "${native_plugin_id}@${marketplace_id}" '[.. | strings] | index($id) == null' \
+    "$evidence_root/user-post-uninstall-plugin-list.json" >/dev/null
+done < <(jq -er '.data.installation.nativePluginIds[]' "$evidence_root/user-status.json")
 
 run_project_journey project-local
 run_project_journey project-shared

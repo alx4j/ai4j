@@ -5,9 +5,14 @@
   },
   "plugins": [
     {
-      "name": "ai4j-default",
-      "source": "./plugins/ai4j-default",
-      "description": "A small default toolkit for repository work with Claude Code"
+      "name": "ai4j-review",
+      "source": "./plugins/ai4j-review",
+      "description": "Repository review guidance and a focused review agent"
+    },
+    {
+      "name": "ai4j-tools",
+      "source": "./plugins/ai4j-tools",
+      "description": "Claude-backed tools for AI4J workflows"
     }
   ]
 }

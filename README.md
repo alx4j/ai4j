@@ -117,9 +117,9 @@ claude --version
    ai4j status <INSTALLATION_ID>
    ```
 
-You are ready when the command succeeds, shows the Claude plugin as
-registered, installed, and enabled, reports no drift or pending recovery, and
-checks whether the toolkit source has an update.
+You are ready when the command succeeds, shows both selected Claude plugins as
+installed and enabled, reports no drift or pending recovery, and checks whether
+the toolkit source has an update.
 
 Start a new Claude Code session, then ask:
 
@@ -133,30 +133,25 @@ command.
 ## Install the toolkit in Codex
 
 These steps show the primary Windows workflow. Install Codex Desktop first.
-The included plugin also contains a Claude-backed MCP server, so Git, Claude
-Code, and AI4J must be on `PATH`.
+The review bundle only needs Git and AI4J on `PATH`.
 
-1. Start Claude Code once so it creates its configuration directory. AI4J
-   needs that directory even when it is building for Codex.
-
-2. Open PowerShell and check the prerequisites:
+1. Open PowerShell and check the prerequisites:
 
    ```powershell
    git --version
-   claude --version
    ai4j.exe version
    ```
 
-3. Build the plugin into a new directory:
+2. Build the review plugin into a new directory:
 
    ```powershell
    ai4j.exe build --target codex --host windows-amd64 `
-       --output codex-build --bundle default
+       --output codex-build --bundle review
    ```
 
    The `codex-build` directory must not already exist.
 
-4. Verify the package:
+3. Verify the package:
 
    ```powershell
    Test-Path .\codex-build\plugin\.codex-plugin\plugin.json
@@ -164,7 +159,7 @@ Code, and AI4J must be on `PATH`.
 
    PowerShell should print `True`.
 
-5. Open Codex and ask:
+4. Open Codex and ask:
 
    ```text
    Use $plugin-creator to add C:\full\path\to\codex-build\plugin to my personal marketplace.
@@ -173,14 +168,18 @@ Code, and AI4J must be on `PATH`.
    Replace the example path with the absolute path to your generated
    `codex-build\plugin` directory.
 
-6. Refresh the plugin list in Codex Desktop.
+5. Refresh the plugin list in Codex Desktop.
 
-7. Open the Plugins tab and install `ai4j-default`.
+6. Open the Plugins tab and install `ai4j-review`.
 
-8. Start a new Codex session.
+7. Start a new Codex session.
 
-The plugin is ready when Codex shows `ai4j-default` as installed and the
+The plugin is ready when Codex shows `ai4j-review` as installed and the
 `repository-review` skill is available.
+
+To add the Claude-backed MCP server later, repeat the build with
+`--bundle tools`, use a different output directory, and install the generated
+`ai4j-tools` plugin. That optional plugin also requires Claude Code on `PATH`.
 
 AI4J builds the plugin but does not install or manage it inside Codex. Use
 Codex to update or remove it. If you use Codex CLI instead of Desktop, manage
@@ -197,6 +196,17 @@ rollbacks, and removal to the right one.
 `<INSTALLATION_ID>` is the value returned by `install` or shown by `ai4j list`.
 The `status` command always checks both the current installation health and its
 source for available updates.
+
+A **bundle** is a named toolkit selection. Bundles may include other bundles.
+AI4J expands the selected top-level bundle, removes duplicates, and records the
+resulting package and asset lists. Packages remain separate native plugins;
+AI4J does not merge their files.
+
+| Included bundle | Content |
+|---|---|
+| `review` | Repository review skill, review agent, helper script, and rules |
+| `tools` | Claude-backed MCP tools |
+| `default` | Both `review` and `tools` |
 
 | Task | Command |
 |---|---|
@@ -260,7 +270,7 @@ To work from GitHub, replace `OWNER/REPOSITORY` with the toolkit repository:
 ```sh
 ai4j validate --repo OWNER/REPOSITORY --ref main --target claude
 ai4j install --repo OWNER/REPOSITORY --ref main \
-  --target claude --scope user --all
+  --target claude --scope user --bundle BUNDLE_ID
 ```
 
 `--repo` accepts GitHub repositories. Use it with Claude installation or with

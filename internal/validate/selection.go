@@ -23,105 +23,176 @@ type selection struct {
 	bundles []string
 }
 
+type resolvedSelection struct {
+	bundles  []string
+	packages []nativePackage
+	assets   []resolvedAsset
+}
+
+type bundleExpansion struct {
+	bundles  []string
+	packages []string
+	assets   []string
+}
+
 func resolveSelection(model validatedManifest, request selection) ([]resolvedAsset, error) {
+	resolved, err := resolveCanonicalSelection(model, request)
+	if err != nil {
+		return nil, err
+	}
+	return resolved.assets, nil
+}
+
+func resolveCanonicalSelection(model validatedManifest, request selection) (resolvedSelection, error) {
 	target := string(request.target)
 	host := string(request.host)
-	targetConfig, ok := model.manifest.Targets[target]
+	packages, ok := model.packages[target]
 	if !ok {
-		return nil, validationError("unsupported_capability", "toolkit does not declare the selected target")
+		return resolvedSelection{}, validationError("unsupported_capability", "toolkit does not declare the selected target")
 	}
 	selected := map[string]resolvedAsset{}
-	add := func(id, reason, requestedBy string) error {
-		asset, ok := model.assets[id]
+	selectedPackages := map[string]nativePackage{}
+	selectedBundles := map[string]struct{}{}
+	var addAsset func(string, string, string) error
+	addAsset = func(id, reason, requestedBy string) error {
+		declared, ok := model.assets[id]
 		if !ok {
 			return validationError("unknown_asset", "selected asset does not exist")
 		}
 		if _, exists := selected[id]; exists {
 			return nil
 		}
-		if asset.Type == "hook" {
+		if declared.Type == "hook" {
 			return validationError("unsupported_capability", "target-native hooks are declared but not emitted by the target renderers")
 		}
-		path, variant, executable, err := selectVariant(asset, target, host)
+		path, variant, executable, err := selectVariant(declared, target, host)
 		if err != nil {
 			return err
 		}
-		selected[id] = resolvedAsset{asset: asset, path: path, variant: variant, executable: executable, reason: reason, requestedBy: requestedBy}
+		selected[id] = resolvedAsset{asset: declared, path: path, variant: variant, executable: executable, reason: reason, requestedBy: requestedBy}
+		dependencies := append([]string(nil), declared.Dependencies...)
+		slices.Sort(dependencies)
+		for _, dependency := range dependencies {
+			dependencyReason := "dependency"
+			dependencyRequester := "asset:" + id
+			if reason == "all" {
+				dependencyReason = "all"
+				dependencyRequester = "--all"
+			}
+			if err := addAsset(dependency, dependencyReason, dependencyRequester); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	addPackage := func(id, reason, requestedBy string) error {
+		unit, ok := packages[id]
+		if !ok {
+			return validationError("unsupported_capability", "selected bundle package is unavailable for the selected target")
+		}
+		if _, exists := selectedPackages[id]; exists {
+			return nil
+		}
+		selectedPackages[id] = unit
+		members := append([]string(nil), unit.Assets...)
+		slices.Sort(members)
+		for _, member := range members {
+			if err := addAsset(member, reason, requestedBy); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	addExplicitAsset := func(id string) error {
+		declared, ok := model.assets[id]
+		if !ok {
+			return validationError("unknown_asset", "selected asset does not exist")
+		}
+		if err := addAsset(id, "explicit", "asset:"+id); err != nil {
+			return err
+		}
+		if declared.Ownership == "package" {
+			packageID, assigned := model.packageOwners[target][id]
+			if !assigned {
+				return validationError("unsupported_capability", "selected package asset is unavailable for the selected target")
+			}
+			return addPackage(packageID, "native_unit", "package:"+packageID)
+		}
 		return nil
 	}
 	if request.all {
-		ids := make([]string, 0, len(model.assets))
-		for id := range model.assets {
-			ids = append(ids, id)
+		packageIDs := make([]string, 0, len(packages))
+		for id := range packages {
+			packageIDs = append(packageIDs, id)
 		}
-		slices.Sort(ids)
-		for _, id := range ids {
-			if err := add(id, "all", "--all"); err != nil {
-				return nil, err
+		slices.Sort(packageIDs)
+		for _, id := range packageIDs {
+			if err := addPackage(id, "all", "--all"); err != nil {
+				return resolvedSelection{}, err
+			}
+		}
+		assetIDs := make([]string, 0, len(model.assets))
+		for id, declared := range model.assets {
+			if declared.Ownership == "configuration" {
+				assetIDs = append(assetIDs, id)
+			}
+		}
+		slices.Sort(assetIDs)
+		for _, id := range assetIDs {
+			if err := addAsset(id, "all", "--all"); err != nil {
+				return resolvedSelection{}, err
 			}
 		}
 	} else {
-		for _, id := range request.assets {
-			if err := add(id, "explicit", "asset:"+id); err != nil {
-				return nil, err
+		assets := append([]string(nil), request.assets...)
+		slices.Sort(assets)
+		for _, id := range assets {
+			if err := addExplicitAsset(id); err != nil {
+				return resolvedSelection{}, err
 			}
 		}
-		for _, id := range request.bundles {
-			if _, ok := model.bundles[id]; !ok {
-				return nil, validationError("unknown_bundle", "selected bundle does not exist")
-			}
-			assets, err := expandBundle(model.bundles, id)
+		bundles := append([]string(nil), request.bundles...)
+		slices.Sort(bundles)
+		for _, id := range bundles {
+			expanded, err := expandBundle(model.bundles, id)
 			if err != nil {
-				return nil, err
+				return resolvedSelection{}, err
 			}
-			for _, asset := range assets {
-				if err := add(asset, "bundle", "bundle:"+id); err != nil {
-					return nil, err
+			for _, included := range expanded.bundles {
+				selectedBundles[included] = struct{}{}
+			}
+			for _, packageID := range expanded.packages {
+				if err := addPackage(packageID, "native_unit", "package:"+packageID); err != nil {
+					return resolvedSelection{}, err
+				}
+			}
+			for _, assetID := range expanded.assets {
+				if err := addAsset(assetID, "bundle", "bundle:"+id); err != nil {
+					return resolvedSelection{}, err
 				}
 			}
 		}
 	}
-	for {
-		before := len(selected)
-		ids := selectedIDs(selected)
-		for _, id := range ids {
-			dependencies := append([]string(nil), model.assets[id].Dependencies...)
-			slices.Sort(dependencies)
-			for _, dependency := range dependencies {
-				if err := add(dependency, "dependency", "asset:"+id); err != nil {
-					return nil, err
-				}
-			}
-		}
-		for _, unit := range targetConfig.Packages {
-			containsSelected := false
-			for _, id := range unit.Assets {
-				if _, ok := selected[id]; ok {
-					containsSelected = true
-					break
-				}
-			}
-			if !containsSelected {
-				continue
-			}
-			members := append([]string(nil), unit.Assets...)
-			slices.Sort(members)
-			for _, id := range members {
-				if err := add(id, "native_unit", "package:"+unit.ID); err != nil {
-					return nil, err
-				}
-			}
-		}
-		if len(selected) == before {
-			break
-		}
+	assetIDs := selectedIDs(selected)
+	resolvedAssets := make([]resolvedAsset, len(assetIDs))
+	for index, id := range assetIDs {
+		resolvedAssets[index] = selected[id]
 	}
-	ids := selectedIDs(selected)
-	resolved := make([]resolvedAsset, len(ids))
-	for index, id := range ids {
-		resolved[index] = selected[id]
+	packageIDs := make([]string, 0, len(selectedPackages))
+	for id := range selectedPackages {
+		packageIDs = append(packageIDs, id)
 	}
-	return resolved, nil
+	slices.Sort(packageIDs)
+	resolvedPackages := make([]nativePackage, len(packageIDs))
+	for index, id := range packageIDs {
+		resolvedPackages[index] = selectedPackages[id]
+	}
+	bundleIDs := make([]string, 0, len(selectedBundles))
+	for id := range selectedBundles {
+		bundleIDs = append(bundleIDs, id)
+	}
+	slices.Sort(bundleIDs)
+	return resolvedSelection{bundles: bundleIDs, packages: resolvedPackages, assets: resolvedAssets}, nil
 }
 
 func selectedIDs(values map[string]resolvedAsset) []string {
@@ -152,40 +223,58 @@ func selectVariant(asset asset, target, host string) (string, string, *executabl
 	return compatible[0].Path, compatible[0].ID, compatible[0].Executable, nil
 }
 
-func expandBundle(bundles map[string]bundle, root string) ([]string, error) {
+func expandBundle(bundles map[string]bundle, root string) (bundleExpansion, error) {
 	assets := map[string]struct{}{}
-	visited := map[string]struct{}{}
+	packages := map[string]struct{}{}
+	visited := map[string]uint8{}
 	var visit func(string) error
 	visit = func(id string) error {
-		if _, ok := visited[id]; ok {
+		if visited[id] == 1 {
+			return validationError("bundle_cycle", "bundle graph contains a cycle")
+		}
+		if visited[id] == 2 {
 			return nil
 		}
-		bundle, ok := bundles[id]
+		declared, ok := bundles[id]
 		if !ok {
 			return validationError("unknown_bundle", "selected bundle does not exist")
 		}
-		visited[id] = struct{}{}
-		for _, asset := range bundle.Assets {
+		visited[id] = 1
+		for _, asset := range declared.Assets {
 			assets[asset] = struct{}{}
 		}
-		nested := append([]string(nil), bundle.Bundles...)
+		for _, packageID := range declared.Packages {
+			packages[packageID] = struct{}{}
+		}
+		nested := append([]string(nil), declared.Bundles...)
 		slices.Sort(nested)
 		for _, child := range nested {
 			if err := visit(child); err != nil {
 				return err
 			}
 		}
+		visited[id] = 2
 		return nil
 	}
 	if err := visit(root); err != nil {
-		return nil, err
+		return bundleExpansion{}, err
 	}
-	result := make([]string, 0, len(assets))
+	resultAssets := make([]string, 0, len(assets))
 	for id := range assets {
-		result = append(result, id)
+		resultAssets = append(resultAssets, id)
 	}
-	slices.Sort(result)
-	return result, nil
+	slices.Sort(resultAssets)
+	resultPackages := make([]string, 0, len(packages))
+	for id := range packages {
+		resultPackages = append(resultPackages, id)
+	}
+	slices.Sort(resultPackages)
+	resultBundles := make([]string, 0, len(visited))
+	for id := range visited {
+		resultBundles = append(resultBundles, id)
+	}
+	slices.Sort(resultBundles)
+	return bundleExpansion{bundles: resultBundles, packages: resultPackages, assets: resultAssets}, nil
 }
 
 func selectedContent(root string, model validatedManifest, resolved []resolvedAsset) ([]cli.ContentItem, error) {

@@ -95,3 +95,20 @@ func TestActiveContentDiffReportsEveryChange(t *testing.T) {
 		t.Fatalf("changes = %v, want %v", got, want)
 	}
 }
+
+func TestSameCurrentStateRejectsDifferentTopLevelBundle(t *testing.T) {
+	t.Parallel()
+	current := testInstallationRecord("branch", strings.Repeat("a", 40))
+	current.Selection = installstate.Selection{
+		RequestedBundle: "review",
+		ResolvedBundles: []string{"review", "shared"},
+		ResolvedAssets:  []string{"ai4j-rules", "repository-review"},
+	}
+	expected := cloneRecord(current)
+	expected.Selection.RequestedBundle = "default"
+	expected.Selection.ResolvedBundles = []string{"default", "review", "shared"}
+
+	if sameCurrentState(current, expected) {
+		t.Fatal("states with different authoritative bundle selections matched")
+	}
+}

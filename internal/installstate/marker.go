@@ -15,7 +15,10 @@ import (
 	"github.com/alx4j/ai4j/internal/host/privatepath"
 )
 
-const MarkerSchemaVersion = 1
+const (
+	MarkerSchemaVersion    = 1
+	maximumMarkerResources = 1024
+)
 
 var (
 	ErrUnsupportedMarkerSchema = errors.New("operation marker schema is unsupported")
@@ -39,7 +42,7 @@ func (m Marker) Validate() error {
 	if _, err := domain.NewCommitOID(m.Commit); err != nil && !digestPattern.MatchString(m.Commit) {
 		return ErrMalformedMarker
 	}
-	if len(m.Resources) == 0 || len(m.Resources) > 256 || !slices.IsSorted(m.Resources) {
+	if len(m.Resources) == 0 || len(m.Resources) > maximumMarkerResources || !slices.IsSorted(m.Resources) {
 		return ErrMalformedMarker
 	}
 	for index, resource := range m.Resources {
@@ -54,16 +57,6 @@ func validMarkerOperation(operation string) bool {
 	return operation == "install" || operation == "update" || operation == "sync" || operation == "rollback" || operation == "uninstall" || operation == "history_purge"
 }
 
-func NewOperationMarker(operation, operationID, installationID, commit string) (Marker, error) {
-	return NewResourceMarker(operation, operationID, installationID, commit, []string{
-		"claude:ai4j-default@ai4j",
-		"claude:marketplace:ai4j",
-		"owned:.claude/rules/ai4j.md",
-		"owned:state/catalog/.claude-plugin/marketplace.json",
-		"owned:state/installation.json",
-	})
-}
-
 func NewResourceMarker(operation, operationID, installationID, commit string, resources []string) (Marker, error) {
 	resources = slices.Clone(resources)
 	slices.Sort(resources)
@@ -76,10 +69,6 @@ func NewResourceMarker(operation, operationID, installationID, commit string, re
 		return Marker{}, err
 	}
 	return marker, nil
-}
-
-func NewInstallMarker(operationID, installationID, commit string) (Marker, error) {
-	return NewOperationMarker("install", operationID, installationID, commit)
 }
 
 func (s Store) MarkerPath() string { return filepath.Join(s.root, "operation.json") }

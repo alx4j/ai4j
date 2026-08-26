@@ -51,10 +51,14 @@ type Source struct {
 }
 
 type Selection struct {
-	All      bool     `json:"all"`
-	Assets   []string `json:"assets"`
-	Bundles  []string `json:"bundles"`
-	Resolved []string `json:"resolved"`
+	RequestedBundle string   `json:"requestedBundle"`
+	ResolvedBundles []string `json:"resolvedBundles"`
+	ResolvedAssets  []string `json:"resolvedAssets"`
+}
+
+type NativePackage struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
 }
 
 type OwnedFile struct {
@@ -68,29 +72,29 @@ type LastOperation struct {
 }
 
 type Record struct {
-	SchemaVersion   int           `json:"schemaVersion"`
-	InstallationID  string        `json:"installationId"`
-	ToolkitID       string        `json:"toolkitId"`
-	DeclarationID   string        `json:"declarationId,omitempty"`
-	SettingsCreated bool          `json:"settingsCreated,omitempty"`
-	ToolkitVersion  string        `json:"toolkitVersion,omitempty"`
-	PluginID        string        `json:"pluginId"`
-	PackagePath     string        `json:"packagePath,omitempty"`
-	MarketplaceID   string        `json:"marketplaceId,omitempty"`
-	Source          Source        `json:"source"`
-	Target          string        `json:"target"`
-	Host            string        `json:"host,omitempty"`
-	Scope           string        `json:"scope"`
-	ScopeRoot       string        `json:"scopeRoot,omitempty"`
-	Lifecycle       string        `json:"lifecycle,omitempty"`
-	Selection       Selection     `json:"selection,omitempty"`
-	NativeResources []string      `json:"nativeResources,omitempty"`
-	History         []string      `json:"history,omitempty"`
-	Health          string        `json:"health,omitempty"`
-	AI4JVersion     string        `json:"ai4jVersion"`
-	Catalog         OwnedFile     `json:"catalog"`
-	Rules           OwnedFile     `json:"rules"`
-	LastOperation   LastOperation `json:"lastOperation"`
+	SchemaVersion   int             `json:"schemaVersion"`
+	InstallationID  string          `json:"installationId"`
+	ToolkitID       string          `json:"toolkitId"`
+	DeclarationID   string          `json:"declarationId,omitempty"`
+	SettingsCreated bool            `json:"settingsCreated,omitempty"`
+	ToolkitVersion  string          `json:"toolkitVersion,omitempty"`
+	Packages        []NativePackage `json:"packages"`
+	MarketplaceID   string          `json:"marketplaceId,omitempty"`
+	Source          Source          `json:"source"`
+	Target          string          `json:"target"`
+	Host            string          `json:"host,omitempty"`
+	Scope           string          `json:"scope"`
+	ScopeRoot       string          `json:"scopeRoot,omitempty"`
+	Lifecycle       string          `json:"lifecycle,omitempty"`
+	Selection       Selection       `json:"selection,omitempty"`
+	NativeResources []string        `json:"nativeResources,omitempty"`
+	History         []string        `json:"history,omitempty"`
+	Health          string          `json:"health,omitempty"`
+	AI4JVersion     string          `json:"ai4jVersion"`
+	Catalog         OwnedFile       `json:"catalog"`
+	NativeCatalog   OwnedFile       `json:"nativeCatalog,omitempty"`
+	Rules           OwnedFile       `json:"rules"`
+	LastOperation   LastOperation   `json:"lastOperation"`
 }
 
 func (r Record) Validate() error {
@@ -98,7 +102,6 @@ func (r Record) Validate() error {
 		return ErrMalformedState
 	}
 	if !identifierPattern.MatchString(r.InstallationID) || !identifierPattern.MatchString(r.ToolkitID) ||
-		!identifierPattern.MatchString(r.PluginID) ||
 		r.AI4JVersion == "" || len(r.AI4JVersion) > 128 {
 		return ErrMalformedState
 	}
@@ -120,23 +123,37 @@ func (r Record) Validate() error {
 		(r.Scope != "user" && r.Scope != "project-local" && r.Scope != "project-shared") || !filepath.IsAbs(r.ScopeRoot) ||
 		(r.Lifecycle != "active" && r.Lifecycle != "archived") ||
 		(r.Health != "healthy" && r.Health != "drifted" && r.Health != "unknown" && r.Health != "recovery_required") ||
-		(!r.Selection.All && len(r.Selection.Assets) == 0 && len(r.Selection.Bundles) == 0) ||
-		(r.Selection.All && (len(r.Selection.Assets) != 0 || len(r.Selection.Bundles) != 0)) ||
-		!validIdentifiers(r.Selection.Assets) || !validIdentifiers(r.Selection.Bundles) || !validIdentifiers(r.Selection.Resolved) ||
+		!validStoredSelection(r.Selection) || !validNativePackages(r.Packages) ||
 		!sortedUnique(r.NativeResources) || !validIdentifiers(r.History) ||
-		(r.MarketplaceID != "" && !identifierPattern.MatchString(r.MarketplaceID)) || (r.DeclarationID != "" && !identifierPattern.MatchString(r.DeclarationID)) || len(r.ToolkitVersion) > 64 || len(r.PackagePath) > 1024 || (r.PackagePath != "" && (path.Clean(r.PackagePath) != r.PackagePath || path.IsAbs(r.PackagePath) || path.Clean(r.PackagePath) == ".." || strings.HasPrefix(path.Clean(r.PackagePath), "../"))) {
+		(r.MarketplaceID != "" && !identifierPattern.MatchString(r.MarketplaceID)) || (r.DeclarationID != "" && !identifierPattern.MatchString(r.DeclarationID)) || len(r.ToolkitVersion) > 64 {
+		return ErrMalformedState
+	}
+	if r.Target == "claude" && (!identifierPattern.MatchString(r.MarketplaceID) || !validClaudeNativeResources(r)) {
 		return ErrMalformedState
 	}
 	ownedEmpty := r.Catalog == (OwnedFile{}) && r.Rules == (OwnedFile{})
 	catalogValid := validCatalogFile(r.Catalog, r.InstallationID) || r.Scope == "project-shared" && validOwnedFile(r.Catalog, ".claude/settings.json")
+	nativeCatalogValid := r.NativeCatalog == (OwnedFile{})
+	if r.Scope == "project-shared" && r.Lifecycle == "active" {
+		nativeCatalogValid = validCatalogFile(r.NativeCatalog, r.InstallationID)
+	}
 	ownedClaude := catalogValid && (r.Rules == (OwnedFile{}) || validRulesFile(r.Rules, r.InstallationID, r.DeclarationID))
 	if r.SettingsCreated && r.Scope != "project-shared" {
+		return ErrMalformedState
+	}
+	if !nativeCatalogValid {
 		return ErrMalformedState
 	}
 	if r.Target == "claude" && r.Lifecycle == "active" && !ownedClaude || r.Lifecycle == "archived" && !ownedEmpty && !ownedClaude {
 		return ErrMalformedState
 	}
 	return nil
+}
+
+func validStoredSelection(selection Selection) bool {
+	return identifierPattern.MatchString(selection.RequestedBundle) && len(selection.ResolvedBundles) != 0 &&
+		slices.Contains(selection.ResolvedBundles, selection.RequestedBundle) &&
+		validIdentifiers(selection.ResolvedBundles) && validIdentifiers(selection.ResolvedAssets)
 }
 
 func validStateSource(source Source) bool {
@@ -173,6 +190,36 @@ func validIdentifiers(values []string) bool {
 		}
 	}
 	return true
+}
+
+func validNativePackages(packages []NativePackage) bool {
+	if len(packages) == 0 || len(packages) > 256 {
+		return false
+	}
+	for index, unit := range packages {
+		if !identifierPattern.MatchString(unit.ID) || !validPackagePath(unit.Path) || index > 0 && packages[index-1].ID >= unit.ID {
+			return false
+		}
+	}
+	return true
+}
+
+func validPackagePath(value string) bool {
+	return value != "" && len(value) <= 1024 && path.Clean(value) == value && !path.IsAbs(value) &&
+		value != ".." && !strings.HasPrefix(value, "../") && !strings.Contains(value, `\`)
+}
+
+func validClaudeNativeResources(record Record) bool {
+	if record.Lifecycle == "archived" {
+		return len(record.NativeResources) == 0
+	}
+	expected := make([]string, 0, len(record.Packages)+1)
+	for _, unit := range record.Packages {
+		expected = append(expected, "claude:"+unit.ID+"@"+record.MarketplaceID)
+	}
+	expected = append(expected, "claude:marketplace:"+record.MarketplaceID)
+	slices.Sort(expected)
+	return slices.Equal(record.NativeResources, expected)
 }
 
 func sortedUnique(values []string) bool {
@@ -423,9 +470,11 @@ func normalizeRecord(record *Record) error {
 	if record.SchemaVersion != SchemaVersion {
 		return ErrMalformedState
 	}
-	slices.Sort(record.Selection.Assets)
-	slices.Sort(record.Selection.Bundles)
-	slices.Sort(record.Selection.Resolved)
+	slices.Sort(record.Selection.ResolvedBundles)
+	slices.Sort(record.Selection.ResolvedAssets)
+	slices.SortFunc(record.Packages, func(left, right NativePackage) int {
+		return strings.Compare(left.ID, right.ID)
+	})
 	slices.Sort(record.NativeResources)
 	slices.Sort(record.History)
 	return record.Validate()

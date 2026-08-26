@@ -49,7 +49,13 @@ func TestListResponseValidatesAgainstPublishedSchema(t *testing.T) {
 	t.Parallel()
 	id, _ := domain.NewInstallationID("installation_001")
 	root, _ := filepath.Abs(".")
-	summary, err := cli.NewInstallationSummary(id, "ai4j", cli.BuildTargetClaude, cli.ScopeUser, root, "active", testRecordedSource(t), true, nil, nil, []string{"repository-review"}, "healthy")
+	summary, err := cli.NewInstallationSummary(
+		id, "ai4j", cli.BuildTargetClaude, cli.ScopeUser, root, "active", testRecordedSource(t), "default",
+		[]string{"tools", "default", "review", "review"},
+		[]string{"ai4j-tools", "ai4j-review", "ai4j-review"},
+		[]string{"repository-review", "claude-tools", "repository-review"},
+		"healthy",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +74,66 @@ func TestListResponseValidatesAgainstPublishedSchema(t *testing.T) {
 	schema := compileSchemas(t)["list.json"]
 	validateJSON(t, schema, encoded)
 	document := decodeDocument(t, encoded)
-	document["data"].(map[string]any)["installations"].([]any)[0].(map[string]any)["health"] = "future"
+	item := document["data"].(map[string]any)["installations"].([]any)[0].(map[string]any)
+	wantFields := map[string]any{
+		"requestedBundle": "default",
+		"resolvedBundles": []any{"default", "review", "tools"},
+		"packages":        []any{"ai4j-review", "ai4j-tools"},
+		"resolvedAssets":  []any{"claude-tools", "repository-review"},
+	}
+	for name, want := range wantFields {
+		if got := item[name]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s = %#v, want %#v", name, got, want)
+		}
+	}
+	for _, obsolete := range []string{"all", "assets", "bundles", "resolved"} {
+		if _, present := item[obsolete]; present {
+			t.Fatalf("obsolete %s was emitted: %#v", obsolete, item)
+		}
+	}
+	delete(item, "requestedBundle")
+	if err := schema.Validate(document); err == nil {
+		t.Fatal("response without requestedBundle was accepted")
+	}
+	item["requestedBundle"] = "default"
+	item["health"] = "future"
 	if err := schema.Validate(document); err == nil {
 		t.Fatal("unknown installation health was accepted")
+	}
+}
+
+func TestStatusResponseUsesSortedPluralNativePluginIDs(t *testing.T) {
+	t.Parallel()
+
+	id, _ := domain.NewInstallationID("installation_001")
+	installation, err := cli.NewInstallation(
+		id, "ai4j", []string{"ai4j-tools", "ai4j-review", "ai4j-review"}, testRecordedSource(t), "1.0.0", "1.0.0", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
+	data, err := cli.NewStatusData(&installation, native, nil, recovery, result.UpdateNotChecked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := cli.NewResponse(cli.CommandStatus, successResult(t), nil, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := jsonwire.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateJSON(t, compileSchemas(t)["status.json"], encoded)
+	document := decodeDocument(t, encoded)
+	record := document["data"].(map[string]any)["installation"].(map[string]any)
+	if got, want := record["nativePluginIds"], []any{"ai4j-review", "ai4j-tools"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("nativePluginIds = %#v, want %#v", got, want)
+	}
+	if _, present := record["nativePluginId"]; present {
+		t.Fatalf("obsolete nativePluginId was emitted: %#v", record)
 	}
 }
 
@@ -711,7 +774,7 @@ func TestConstructorsRejectMalformedUTFAndOutOfRangeBuildTime(t *testing.T) {
 	commit, _ := domain.NewBuildCommit(strings.Repeat("b", 40))
 	defaultSource, _ := cli.NewDefaultSource(repository, "", cli.DefaultRepositoryBranch)
 	id, _ := domain.NewInstallationID("installation_001")
-	if _, err := cli.NewInstallation(id, "ai4j", "ai4j_default", testRecordedSource(t), c1Control, "1.0.0", "2.0.0"); err == nil {
+	if _, err := cli.NewInstallation(id, "ai4j", []string{"ai4j_default"}, testRecordedSource(t), c1Control, "1.0.0", "2.0.0"); err == nil {
 		t.Fatal("C1 control in toolkit version was accepted")
 	}
 	if _, err := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, c1Control, cli.NativeVersionMatches); err == nil {
@@ -800,7 +863,7 @@ func TestNativeVersionObservationSemantics(t *testing.T) {
 	t.Parallel()
 
 	id, _ := domain.NewInstallationID("installation_001")
-	installation, err := cli.NewInstallation(id, "ai4j", "ai4j_default", testRecordedSource(t), "1.0.0", "1.0.0", "2.0.0")
+	installation, err := cli.NewInstallation(id, "ai4j", []string{"ai4j_default"}, testRecordedSource(t), "1.0.0", "1.0.0", "2.0.0")
 	if err != nil {
 		t.Fatalf("NewInstallation() error = %v", err)
 	}
@@ -918,7 +981,7 @@ func TestStatusInstallationDispositionSemantics(t *testing.T) {
 	}
 
 	id, _ := domain.NewInstallationID("installation_001")
-	installation, _ := cli.NewInstallation(id, "ai4j", "ai4j_default", testRecordedSource(t), "1.0.0", "1.0.0", "2.0.0")
+	installation, _ := cli.NewInstallation(id, "ai4j", []string{"ai4j_default"}, testRecordedSource(t), "1.0.0", "1.0.0", "2.0.0")
 	nativePresent, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "2.0.0", cli.NativeVersionMatches)
 	presentData, err := cli.NewStatusData(&installation, nativePresent, nil, recoveryNone, result.UpdateNotChecked)
 	if err != nil {

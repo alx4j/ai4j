@@ -18,8 +18,8 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 		target   string
 		expected []string
 	}{
-		{name: "claude", target: "claude", expected: []string{"plugin/.claude-plugin/plugin.json", "plugin/.mcp.json", "plugin/agents/repository-reviewer.md", "plugin/skills/repository-review/SKILL.md", "plugin/skills/repository-review/references/checklist.md", "plugin/skills/repository-review/scripts/check-diff.ps1", "plugin/skills/repository-review/scripts/check-diff.sh", "configuration/rules/ai4j-rules.md", "ai4j-build.json"}},
-		{name: "codex", target: "codex", expected: []string{"plugin/.codex-plugin/plugin.json", "plugin/.mcp.json", "plugin/skills/repository-review/SKILL.md", "plugin/skills/repository-review/references/checklist.md", "plugin/skills/repository-review/scripts/check-diff.ps1", "plugin/skills/repository-review/scripts/check-diff.sh", "configuration/AGENTS.md", "configuration/.codex/agents/repository-reviewer.toml", "ai4j-build.json"}},
+		{name: "claude", target: "claude", expected: []string{"plugins/ai4j-review/.claude-plugin/plugin.json", "plugins/ai4j-review/agents/repository-reviewer.md", "plugins/ai4j-review/skills/repository-review/SKILL.md", "plugins/ai4j-review/skills/repository-review/references/checklist.md", "plugins/ai4j-review/skills/repository-review/scripts/check-diff.ps1", "plugins/ai4j-review/skills/repository-review/scripts/check-diff.sh", "plugins/ai4j-tools/.claude-plugin/plugin.json", "plugins/ai4j-tools/.mcp.json", "configuration/rules/ai4j-rules.md", "ai4j-build.json"}},
+		{name: "codex", target: "codex", expected: []string{"plugins/ai4j-review/.codex-plugin/plugin.json", "plugins/ai4j-review/skills/repository-review/SKILL.md", "plugins/ai4j-review/skills/repository-review/references/checklist.md", "plugins/ai4j-review/skills/repository-review/scripts/check-diff.ps1", "plugins/ai4j-review/skills/repository-review/scripts/check-diff.sh", "plugins/ai4j-tools/.codex-plugin/plugin.json", "plugins/ai4j-tools/.mcp.json", "configuration/AGENTS.md", "configuration/.codex/agents/repository-reviewer.toml", "ai4j-build.json"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,12 +56,12 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 				}
 				if test.target == "claude" {
 					var plugin struct {
-						Version string `json:"version"`
+						Version *string `json:"version"`
 						Author  struct {
 							Name string `json:"name"`
 						} `json:"author"`
 					}
-					if err := json.Unmarshal(snapshots[len(snapshots)-1]["plugin/.claude-plugin/plugin.json"], &plugin); err != nil || plugin.Version != "1.0.0" || plugin.Author.Name != "AI4J" {
+					if err := json.Unmarshal(snapshots[len(snapshots)-1]["plugins/ai4j-review/.claude-plugin/plugin.json"], &plugin); err != nil || plugin.Version != nil || plugin.Author.Name != "AI4J" {
 						t.Fatalf("Claude plugin metadata = %#v, %v", plugin, err)
 					}
 				}
@@ -71,7 +71,7 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 			}
 			wantNativeValidations := 0
 			if test.target == "claude" {
-				wantNativeValidations = 2
+				wantNativeValidations = 4
 			}
 			if runner.claudeValidations != wantNativeValidations || runner.toolkitExecutions != 0 {
 				t.Fatalf("native validations=%d toolkit executions=%d", runner.claudeValidations, runner.toolkitExecutions)
@@ -81,6 +81,99 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 				t.Fatalf("target home was modified: entries=%v error=%v", entries, readErr)
 			}
 		})
+	}
+}
+
+func TestBuildUsesCodexAgentFilenameForOutputAndMapping(t *testing.T) {
+	files := firstPartyFiles(t)
+	const original = "plugins/ai4j-review/agents/repository-reviewer.md"
+	const renamed = "plugins/ai4j-review/agents/review-assistant.md"
+	files[renamed] = files[original]
+	delete(files, original)
+	var manifest toolkitManifest
+	if err := json.Unmarshal(files[toolkitManifestPath], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	assetByID(&manifest, "repository-reviewer").Path = renamed
+	files[toolkitManifestPath], _ = json.Marshal(manifest)
+
+	output := filepath.Join(t.TempDir(), "codex-build")
+	service, err := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: &fixtureRunner{files: files}, TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--bundle", "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := service.Build(context.Background(), request.(cli.BuildRequest))
+	if report.Failure != FailureNone || len(report.Problems) != 0 {
+		t.Fatalf("build failure=%s problems=%v", report.Failure, report.Problems)
+	}
+
+	tree := readBuildTree(t, output)
+	const expected = "configuration/.codex/agents/review-assistant.toml"
+	if _, ok := tree[expected]; !ok {
+		t.Fatalf("build output is missing %s", expected)
+	}
+	if _, ok := tree["configuration/.codex/agents/repository-reviewer.toml"]; ok {
+		t.Fatal("build emitted an agent path derived from the asset ID")
+	}
+	var built buildManifest
+	if err := json.Unmarshal(tree["ai4j-build.json"], &built); err != nil {
+		t.Fatal(err)
+	}
+	for _, mapping := range built.Mappings {
+		if mapping.Canonical == "agent:repository-reviewer" {
+			if mapping.Native != expected {
+				t.Fatalf("agent mapping = %q, want %q", mapping.Native, expected)
+			}
+			return
+		}
+	}
+	t.Fatal("agent mapping is missing")
+}
+
+func TestBuildRejectsCrossPackageCodexAgentOutputCollisionBeforeStaging(t *testing.T) {
+	files := firstPartyFiles(t)
+	const collidingSource = "plugins/codex-review/agents/repository-reviewer.md"
+	files[collidingSource] = []byte("---\nname: tools-reviewer\n---\n\nReview tools.\n")
+	var manifest toolkitManifest
+	if err := json.Unmarshal(files[toolkitManifestPath], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Assets = append(manifest.Assets, asset{
+		ID: "tools-reviewer", Type: "agent", Ownership: "package",
+		Variants: []assetVariant{{ID: "codex", Path: collidingSource, Targets: []string{"codex"}, Hosts: []string{"darwin-arm64", "windows-amd64"}}},
+	})
+	codex := manifest.Targets["codex"]
+	codex.Packages = append(codex.Packages, nativePackage{ID: "codex-review", Path: "plugins/codex-review", Assets: []string{"tools-reviewer"}})
+	manifest.Targets["codex"] = codex
+	files[toolkitManifestPath], _ = json.Marshal(manifest)
+
+	parent := t.TempDir()
+	output := filepath.Join(parent, "codex-build")
+	outputCapacityChecked := false
+	service, err := NewService(Config{
+		GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: &fixtureRunner{files: files}, TempRoot: t.TempDir(),
+		Capacity: func(path string, _ uint64) error {
+			if filepath.Clean(path) == filepath.Clean(parent) {
+				outputCapacityChecked = true
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := service.Build(context.Background(), request.(cli.BuildRequest))
+	_, statErr := os.Lstat(output)
+	if report.Failure != FailureValidation || len(report.Problems) != 1 || report.Problems[0].Code() != "codex_agent_output_collision" || !os.IsNotExist(statErr) || outputCapacityChecked {
+		t.Fatalf("failure=%s problems=%v outputError=%v outputCapacityChecked=%t", report.Failure, report.Problems, statErr, outputCapacityChecked)
 	}
 }
 
@@ -107,7 +200,7 @@ func TestWindowsBuildRendersWindowsHostProfile(t *testing.T) {
 			}
 			wantNativeValidations := 0
 			if target == "claude" {
-				wantNativeValidations = 1
+				wantNativeValidations = 2
 			}
 			if runner.claudeValidations != wantNativeValidations || runner.toolkitExecutions != 0 {
 				t.Fatalf("native validations=%d toolkit executions=%d", runner.claudeValidations, runner.toolkitExecutions)
@@ -162,9 +255,9 @@ func TestBuildResolvesAssetsBundlesDependenciesAndNativeUnits(t *testing.T) {
 		wantPath    string
 	}{
 		{name: "single configuration asset", target: "codex", selection: []string{"--asset", "ai4j-rules"}, wantReasons: map[string]string{"ai4j-rules": "explicit"}, wantPath: "configuration/AGENTS.md"},
-		{name: "bundle dependency closure", target: "codex", selection: []string{"--bundle", "default"}, wantReasons: map[string]string{"ai4j-rules": "bundle", "check-diff": "dependency", "claude-tools": "bundle", "repository-review": "bundle", "repository-reviewer": "bundle", "review-checklist": "dependency"}, wantPath: "plugin/.codex-plugin/plugin.json"},
-		{name: "mixed selection", target: "claude", selection: []string{"--asset", "ai4j-rules", "--bundle", "default"}, wantReasons: map[string]string{"ai4j-rules": "explicit", "check-diff": "dependency", "claude-tools": "bundle", "repository-review": "bundle", "repository-reviewer": "bundle", "review-checklist": "dependency"}, wantPath: "plugin/.claude-plugin/plugin.json"},
-		{name: "native unit expansion", target: "claude", selection: []string{"--asset", "repository-review"}, wantReasons: map[string]string{"check-diff": "dependency", "claude-tools": "native_unit", "repository-review": "explicit", "repository-reviewer": "native_unit", "review-checklist": "dependency"}, wantPath: "plugin/.claude-plugin/plugin.json"},
+		{name: "bundle dependency closure", target: "codex", selection: []string{"--bundle", "default"}, wantReasons: map[string]string{"ai4j-rules": "bundle", "check-diff": "native_unit", "claude-tools": "native_unit", "repository-review": "native_unit", "repository-reviewer": "native_unit", "review-checklist": "dependency"}, wantPath: "plugins/ai4j-review/.codex-plugin/plugin.json"},
+		{name: "mixed selection", target: "claude", selection: []string{"--asset", "ai4j-rules", "--bundle", "default"}, wantReasons: map[string]string{"ai4j-rules": "explicit", "check-diff": "native_unit", "claude-tools": "native_unit", "repository-review": "native_unit", "repository-reviewer": "native_unit", "review-checklist": "dependency"}, wantPath: "plugins/ai4j-review/.claude-plugin/plugin.json"},
+		{name: "native unit expansion", target: "claude", selection: []string{"--asset", "repository-review"}, wantReasons: map[string]string{"check-diff": "dependency", "repository-review": "explicit", "repository-reviewer": "native_unit", "review-checklist": "dependency"}, wantPath: "plugin/.claude-plugin/plugin.json"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

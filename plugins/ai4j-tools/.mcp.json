@@ -6,10 +6,7 @@
       "args": [
         "mcp",
         "serve"
-      ],
-      "env": {
-        "AI4J_TOKEN": "${AI4J_TOKEN}"
-      }
+      ]
     }
   }
 }

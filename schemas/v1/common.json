@@ -743,7 +743,7 @@
       "required": [
         "installationId",
         "toolkitId",
-        "nativePluginId",
+        "nativePluginIds",
         "toolkitVersion",
         "cliVersion"
       ],
@@ -760,11 +760,17 @@
           "maxLength": 63,
           "pattern": "^[a-z][a-z0-9-]{1,62}$"
         },
-        "nativePluginId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64,
-          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        "nativePluginIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          }
         },
         "source": {"$ref": "#/$defs/recordedSource"},
         "toolkitVersion": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
@@ -1137,7 +1143,7 @@
       ],
       "properties": {
         "operation": {"$ref": "#/$defs/operation"},
-        "source": {"$ref": "#/$defs/source"},
+        "source": {"oneOf": [{"$ref": "#/$defs/source"}, {"type": "null"}]},
         "installationId": {
           "type": "string",
           "minLength": 1,
@@ -1195,6 +1201,27 @@
       },
       "additionalProperties": true
     },
+    "installationSummary": {
+      "type": "object",
+      "required": ["installationId", "toolkitId", "target", "scope", "scopeRoot", "lifecycle", "source", "requestedBundle", "resolvedBundles", "packages", "resolvedAssets", "health", "historyCount", "lastOperationId"],
+      "properties": {
+        "installationId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
+        "toolkitId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "target": {"type": "string", "enum": ["claude", "codex"]},
+        "scope": {"type": "string", "enum": ["user", "project-local", "project-shared"]},
+        "scopeRoot": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
+        "lifecycle": {"type": "string", "enum": ["active", "archived"]},
+        "source": {"$ref": "#/$defs/recordedSource"},
+        "requestedBundle": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
+        "resolvedBundles": {"type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
+        "packages": {"type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"}},
+        "resolvedAssets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
+        "health": {"type": "string", "enum": ["healthy", "drifted", "unknown", "recovery_required"]},
+        "historyCount": {"type": "integer", "minimum": 0, "maximum": 1024},
+        "lastOperationId": {"oneOf": [{"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"}, {"type": "null"}]}
+      },
+      "additionalProperties": true
+    },
     "listData": {
       "type": "object",
       "required": ["installations"],
@@ -1202,31 +1229,7 @@
         "installations": {
           "type": "array",
           "maxItems": 4096,
-          "items": {
-            "type": "object",
-            "required": ["installationId", "toolkitId", "target", "scope", "scopeRoot", "lifecycle", "source", "all", "assets", "bundles", "resolved", "health", "historyCount", "lastOperationId"],
-            "properties": {
-              "installationId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"},
-              "toolkitId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"},
-              "target": {"type": "string", "enum": ["claude", "codex"]},
-              "scope": {"type": "string", "enum": ["user", "project-local", "project-shared"]},
-              "scopeRoot": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"},
-              "lifecycle": {"type": "string", "enum": ["active", "archived"]},
-              "source": {"$ref": "#/$defs/recordedSource"},
-              "all": {"type": "boolean"},
-              "assets": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
-              "bundles": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
-              "resolved": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$"}},
-              "health": {"type": "string", "enum": ["healthy", "drifted", "unknown", "recovery_required"]},
-              "historyCount": {"type": "integer", "minimum": 0, "maximum": 1024},
-              "lastOperationId": {"oneOf": [{"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"}, {"type": "null"}]}
-            },
-            "allOf": [
-              {"if": {"properties": {"all": {"const": true}}}, "then": {"properties": {"assets": {"maxItems": 0}, "bundles": {"maxItems": 0}}}},
-              {"if": {"properties": {"all": {"const": false}}}, "then": {"anyOf": [{"properties": {"assets": {"minItems": 1}}}, {"properties": {"bundles": {"minItems": 1}}}]}}
-            ],
-            "additionalProperties": true
-          }
+          "items": {"$ref": "#/$defs/installationSummary"}
         }
       },
       "additionalProperties": true
@@ -1241,6 +1244,7 @@
             {"type": "null"}
           ]
         },
+        "summary": {"$ref": "#/$defs/installationSummary"},
         "nativeState": {"$ref": "#/$defs/nativeState"},
         "drift": {
           "type": "array",
