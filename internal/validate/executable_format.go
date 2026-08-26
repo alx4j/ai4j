@@ -9,7 +9,7 @@ import (
 	"github.com/alx4j/ai4j/internal/cli"
 )
 
-func validateSelectedExecutableFormats(root string, selected []resolvedAssetV2, host cli.BuildHost, model validatedManifestV2) error {
+func validateSelectedExecutableFormats(root string, selected []resolvedAsset, host cli.BuildHost, model validatedManifest) error {
 	for _, item := range selected {
 		if item.asset.Type != "script" && item.asset.Type != "binary" {
 			continue

@@ -148,8 +148,11 @@ func (s Store) SaveMarker(marker Marker) error {
 		_ = temporary.Close()
 		_ = os.Remove(path)
 	}()
-	if temporary.Chmod(0o600) != nil || writeAndSync(temporary, contents) != nil {
-		return fmt.Errorf("write operation marker")
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure operation marker temporary file: %w", err)
+	}
+	if err := writeAndSync(temporary, contents); err != nil {
+		return fmt.Errorf("write operation marker: %w", err)
 	}
 	if err := os.Rename(path, s.MarkerPath()); err != nil {
 		return fmt.Errorf("commit operation marker: %w", err)

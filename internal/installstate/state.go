@@ -3,8 +3,6 @@ package installstate
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,9 +21,8 @@ import (
 )
 
 const (
-	LegacySchemaVersion = 1
-	SchemaVersion       = 2
-	maximumBytes        = 1 << 20
+	SchemaVersion = 1
+	maximumBytes  = 1 << 20
 )
 
 var (
@@ -96,7 +93,7 @@ type Record struct {
 }
 
 func (r Record) Validate() error {
-	if r.SchemaVersion != LegacySchemaVersion && r.SchemaVersion != SchemaVersion {
+	if r.SchemaVersion != SchemaVersion {
 		return ErrMalformedState
 	}
 	if !identifierPattern.MatchString(r.InstallationID) || !identifierPattern.MatchString(r.ToolkitID) ||
@@ -116,12 +113,6 @@ func (r Record) Validate() error {
 	timestamp, err := time.Parse(time.RFC3339, r.LastOperation.Timestamp)
 	if err != nil || timestamp.Location() != time.UTC {
 		return ErrMalformedState
-	}
-	if r.SchemaVersion == LegacySchemaVersion {
-		if r.Target != "claude" || r.Scope != "user" || !validOwnedFile(r.Catalog, "state/catalog/.claude-plugin/marketplace.json") || !validOwnedFile(r.Rules, ".claude/rules/ai4j.md") {
-			return ErrMalformedState
-		}
-		return nil
 	}
 	if (r.Source.RenderedDigest != "" && !digestPattern.MatchString(r.Source.RenderedDigest)) ||
 		(r.Target != "claude" && r.Target != "codex") || (r.Host != "darwin-arm64" && r.Host != "windows-amd64") ||
@@ -205,9 +196,8 @@ func validRulesFile(file OwnedFile, installationID, declarationID string) bool {
 }
 
 type Snapshot struct {
-	SchemaVersion     int
-	Installations     []Record
-	MigrationRequired bool
+	SchemaVersion int
+	Installations []Record
 }
 
 type stateDocument struct {
@@ -215,16 +205,8 @@ type stateDocument struct {
 	Installations []Record `json:"installations"`
 }
 
-type migrationJournal struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	FromVersion   int    `json:"fromVersion"`
-	ToVersion     int    `json:"toVersion"`
-	SourceDigest  string `json:"sourceDigest"`
-}
-
 type Store struct {
 	root string
-	home string
 }
 
 type stateExpectation struct {
@@ -236,46 +218,19 @@ func NewStore(home string) (Store, error) {
 	if !filepath.IsAbs(home) {
 		return Store{}, fmt.Errorf("installation state home must be absolute")
 	}
-	return Store{root: filepath.Join(home, "Library", "Application Support", "ai4j", "state"), home: filepath.Clean(home)}, nil
+	return Store{root: filepath.Join(home, "Library", "Application Support", "ai4j", "state")}, nil
 }
 
-func NewStoreAt(home, dataRoot string) (Store, error) {
-	if !filepath.IsAbs(home) || !filepath.IsAbs(dataRoot) || filepath.Clean(dataRoot) != dataRoot {
-		return Store{}, fmt.Errorf("installation state paths must be absolute and clean")
+func NewStoreAt(dataRoot string) (Store, error) {
+	if !filepath.IsAbs(dataRoot) || filepath.Clean(dataRoot) != dataRoot {
+		return Store{}, fmt.Errorf("installation state path must be absolute and clean")
 	}
-	return Store{root: filepath.Join(dataRoot, "state"), home: filepath.Clean(home)}, nil
+	return Store{root: filepath.Join(dataRoot, "state")}, nil
 }
 
-func (s Store) Path() string          { return filepath.Join(s.root, "installation.json") }
-func (s Store) MigrationPath() string { return filepath.Join(s.root, "migration.json") }
-func (s Store) Root() string          { return s.root }
-func (s Store) DataRoot() string      { return filepath.Dir(s.root) }
-
-func (s Store) MigrationPending() (bool, error) {
-	_, present, err := s.loadMigration()
-	return present, err
-}
-
-func (s Store) loadMigration() (migrationJournal, bool, error) {
-	info, err := os.Lstat(s.MigrationPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return migrationJournal{}, false, nil
-	}
-	if err != nil || !info.Mode().IsRegular() {
-		return migrationJournal{}, false, ErrMalformedState
-	}
-	contents, err := os.ReadFile(s.MigrationPath())
-	if err != nil || len(contents) > maximumBytes {
-		return migrationJournal{}, false, ErrMalformedState
-	}
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-	var journal migrationJournal
-	if decoder.Decode(&journal) != nil || decoder.Decode(new(any)) != io.EOF || journal.SchemaVersion != 1 || journal.FromVersion != LegacySchemaVersion || journal.ToVersion != SchemaVersion || !digestPattern.MatchString(journal.SourceDigest) {
-		return migrationJournal{}, false, ErrMalformedState
-	}
-	return journal, true, nil
-}
+func (s Store) Path() string     { return filepath.Join(s.root, "installation.json") }
+func (s Store) Root() string     { return s.root }
+func (s Store) DataRoot() string { return filepath.Dir(s.root) }
 
 func (s Store) Snapshot() (Snapshot, error) {
 	contents, present, err := s.readState()
@@ -288,22 +243,14 @@ func (s Store) Snapshot() (Snapshot, error) {
 	if json.Unmarshal(contents, &header) != nil {
 		return Snapshot{}, ErrMalformedState
 	}
-	switch header.SchemaVersion {
-	case LegacySchemaVersion:
-		record, err := decodeRecord(contents, LegacySchemaVersion)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		return Snapshot{SchemaVersion: LegacySchemaVersion, Installations: []Record{migrateRecord(record, s.home)}, MigrationRequired: true}, nil
-	case SchemaVersion:
-		document, err := decodeDocument(contents)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		return Snapshot{SchemaVersion: SchemaVersion, Installations: slices.Clone(document.Installations)}, nil
-	default:
+	if header.SchemaVersion != SchemaVersion {
 		return Snapshot{}, ErrUnsupportedSchema
 	}
+	document, err := decodeDocument(contents)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{SchemaVersion: SchemaVersion, Installations: slices.Clone(document.Installations)}, nil
 }
 
 func (s Store) LoadAll() ([]Record, error) {
@@ -342,10 +289,10 @@ func (s Store) Load() (Record, bool, error) {
 }
 
 func (s Store) Save(record Record) error {
-	if err := normalizeRecord(&record, s.home); err != nil {
+	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
-	records, migration, expected, err := s.recordsForWrite()
+	records, expected, err := s.recordsForWrite()
 	if err != nil {
 		return err
 	}
@@ -363,14 +310,14 @@ func (s Store) Save(record Record) error {
 	if !found {
 		records = append(records, record)
 	}
-	return s.commit(records, migration, expected)
+	return s.commit(records, expected)
 }
 
 func (s Store) SaveNew(record Record) error {
-	if err := normalizeRecord(&record, s.home); err != nil {
+	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
-	records, migration, expected, err := s.recordsForWrite()
+	records, expected, err := s.recordsForWrite()
 	if err != nil {
 		return err
 	}
@@ -380,14 +327,14 @@ func (s Store) SaveNew(record Record) error {
 		}
 	}
 	records = append(records, record)
-	return s.commit(records, migration, expected)
+	return s.commit(records, expected)
 }
 
 func (s Store) Delete(record Record) error {
-	if err := normalizeRecord(&record, s.home); err != nil {
+	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
-	records, migration, expected, err := s.recordsForWrite()
+	records, expected, err := s.recordsForWrite()
 	if err != nil {
 		return err
 	}
@@ -405,9 +352,6 @@ func (s Store) Delete(record Record) error {
 	}
 	records = append(records[:index], records[index+1:]...)
 	if len(records) == 0 {
-		if migration {
-			return s.commit(records, true, expected)
-		}
 		if !s.stateMatches(expected) {
 			return ErrStateChanged
 		}
@@ -416,42 +360,19 @@ func (s Store) Delete(record Record) error {
 		}
 		return nil
 	}
-	return s.commit(records, migration, expected)
+	return s.commit(records, expected)
 }
 
-func (s Store) Migrate() (bool, error) {
-	expectedContents, expectedPresent, expectationErr := s.readState()
-	if expectationErr != nil {
-		return false, expectationErr
-	}
-	snapshot, err := s.Snapshot()
-	if err != nil {
-		return false, err
-	}
-	pending, err := s.MigrationPending()
-	if err != nil {
-		return false, err
-	}
-	if !snapshot.MigrationRequired && !pending {
-		return false, nil
-	}
-	return true, s.commit(snapshot.Installations, true, stateExpectation{contents: expectedContents, present: expectedPresent})
-}
-
-func (s Store) recordsForWrite() ([]Record, bool, stateExpectation, error) {
+func (s Store) recordsForWrite() ([]Record, stateExpectation, error) {
 	expectedContents, expectedPresent, err := s.readState()
 	if err != nil {
-		return nil, false, stateExpectation{}, err
+		return nil, stateExpectation{}, err
 	}
 	snapshot, err := s.Snapshot()
 	if err != nil {
-		return nil, false, stateExpectation{}, err
+		return nil, stateExpectation{}, err
 	}
-	pending, err := s.MigrationPending()
-	if err != nil {
-		return nil, false, stateExpectation{}, err
-	}
-	return slices.Clone(snapshot.Installations), snapshot.MigrationRequired || pending, stateExpectation{contents: expectedContents, present: expectedPresent}, nil
+	return slices.Clone(snapshot.Installations), stateExpectation{contents: expectedContents, present: expectedPresent}, nil
 }
 
 func (s Store) readState() ([]byte, bool, error) {
@@ -477,16 +398,6 @@ func (s Store) readState() ([]byte, bool, error) {
 	return contents, true, nil
 }
 
-func decodeRecord(contents []byte, version int) (Record, error) {
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-	var record Record
-	if decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF || record.SchemaVersion != version || record.Validate() != nil {
-		return Record{}, ErrMalformedState
-	}
-	return record, nil
-}
-
 func decodeDocument(contents []byte) (stateDocument, error) {
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
@@ -502,10 +413,7 @@ func decodeDocument(contents []byte) (stateDocument, error) {
 	return document, nil
 }
 
-func normalizeRecord(record *Record, home string) error {
-	if record.SchemaVersion == LegacySchemaVersion {
-		*record = migrateRecord(*record, home)
-	}
+func normalizeRecord(record *Record) error {
 	if record.SchemaVersion != SchemaVersion {
 		return ErrMalformedState
 	}
@@ -515,20 +423,6 @@ func normalizeRecord(record *Record, home string) error {
 	slices.Sort(record.NativeResources)
 	slices.Sort(record.History)
 	return record.Validate()
-}
-
-func migrateRecord(record Record, home string) Record {
-	record.SchemaVersion = SchemaVersion
-	record.Source.Mode = "github"
-	record.Host = "darwin-arm64"
-	record.ScopeRoot = filepath.Clean(home)
-	record.Lifecycle = "active"
-	record.Selection = Selection{All: true, Assets: []string{}, Bundles: []string{}, Resolved: []string{}}
-	record.NativeResources = []string{"claude:ai4j-default@ai4j", "claude:marketplace:ai4j"}
-	record.MarketplaceID = "ai4j"
-	record.ToolkitVersion = "unversioned"
-	record.Health = "unknown"
-	return record
 }
 
 func sameLogicalIdentity(left, right Record) bool {
@@ -542,9 +436,9 @@ func encodeRecord(record Record) ([]byte, error) {
 	return json.Marshal(record)
 }
 
-func (s Store) commit(records []Record, migration bool, expected stateExpectation) error {
+func (s Store) commit(records []Record, expected stateExpectation) error {
 	for index := range records {
-		if err := normalizeRecord(&records[index], s.home); err != nil {
+		if err := normalizeRecord(&records[index]); err != nil {
 			return err
 		}
 	}
@@ -566,71 +460,10 @@ func (s Store) commit(records []Record, migration bool, expected stateExpectatio
 	if err := privatepath.EnsureDirectory(s.root); err != nil {
 		return fmt.Errorf("create installation state directory: %w", err)
 	}
-	if migration {
-		journal, pending, err := s.loadMigration()
-		if err != nil {
-			return err
-		}
-		if !pending {
-			if err := s.beginMigration(); err != nil {
-				return err
-			}
-		} else if legacy, present, readErr := s.readState(); readErr != nil {
-			return readErr
-		} else if present {
-			var header struct {
-				SchemaVersion int `json:"schemaVersion"`
-			}
-			if json.Unmarshal(legacy, &header) == nil && header.SchemaVersion == LegacySchemaVersion {
-				digest := sha256.Sum256(legacy)
-				if hex.EncodeToString(digest[:]) != journal.SourceDigest {
-					return ErrStateChanged
-				}
-			}
-		}
-	}
-	if err := s.writeState(contents, false, expected); err != nil {
-		return err
-	}
-	if migration {
-		if err := os.Remove(s.MigrationPath()); err != nil {
-			return fmt.Errorf("complete installation state migration: %w", err)
-		}
-	}
-	return nil
+	return s.writeState(contents, expected)
 }
 
-func (s Store) beginMigration() error {
-	legacy, present, err := s.readState()
-	if err != nil || !present {
-		return err
-	}
-	digest := sha256.Sum256(legacy)
-	journal := migrationJournal{SchemaVersion: 1, FromVersion: LegacySchemaVersion, ToVersion: SchemaVersion, SourceDigest: hex.EncodeToString(digest[:])}
-	contents, err := json.MarshalIndent(journal, "", "  ")
-	if err != nil {
-		return err
-	}
-	contents = append(contents, '\n')
-	if err := diskcapacity.Require(s.root, uint64(len(contents))); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(s.MigrationPath(), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("begin installation state migration: %w", err)
-	}
-	if _, err := file.Write(contents); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write installation state migration: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("sync installation state migration: %w", err)
-	}
-	return file.Close()
-}
-
-func (s Store) writeState(contents []byte, createOnly bool, expected stateExpectation) error {
+func (s Store) writeState(contents []byte, expected stateExpectation) error {
 	temporary, err := os.CreateTemp(s.root, ".installation-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create installation state temporary file: %w", err)
@@ -657,12 +490,6 @@ func (s Store) writeState(contents []byte, createOnly bool, expected stateExpect
 	}
 	if !s.stateMatches(expected) {
 		return ErrStateChanged
-	}
-	if createOnly {
-		if err := os.Link(temporaryPath, s.Path()); err != nil {
-			return fmt.Errorf("commit new installation state: %w", err)
-		}
-		return nil
 	}
 	if err := os.Rename(temporaryPath, s.Path()); err != nil {
 		return fmt.Errorf("commit installation state: %w", err)

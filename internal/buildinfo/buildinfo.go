@@ -90,7 +90,7 @@ func Read() Info {
 }
 
 // FromBuildInfo converts standard Go build information into an immutable
-// AI4J snapshot. Go's vcs.time is the deterministic MVP build timestamp and
+// AI4J snapshot. Go's vcs.time is the deterministic build timestamp and
 // source epoch exposed by the version contract.
 func FromBuildInfo(build debug.BuildInfo) Info {
 	inputs := Inputs{

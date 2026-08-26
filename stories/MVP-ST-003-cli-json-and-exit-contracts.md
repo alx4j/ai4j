@@ -20,9 +20,9 @@ The canonical `ai4j` command tree, common JSON envelope, typed command data, det
 
 ## Scope
 
-- Implement only the MVP command grammar for `validate`, `plan install`, `install`, `plan update`, `update`, `status`, `plan uninstall`, `uninstall`, and `version`.
-- Reject target, scope, selection, force, generic dry-run, and alternate-executable options.
-- Implement the versioned JSON envelope and canonical command identities such as `plan.install`.
+- Implement only the MVP command grammar for `validate`, `install`, `update`, `status`, `uninstall`, and `version`, with `--dry-run` on each modifying command.
+- Reject target, scope, selection, force, and alternate-executable options.
+- Implement the versioned JSON envelope with the actual command identity for both dry-run plans and execution results.
 - Keep human output and JSON output on separate formatting paths.
 - Publish command schemas and stable error objects with code, message, and typed context.
 - Map `ok`, `no_change`, `degraded`, `cancelled`, and `error` results to the normative process exit codes.
@@ -38,7 +38,7 @@ Complete these technical substories in order. Each substory starts only after th
 **Implementation**
 
 - Create `internal/cli` request types and a parser for the exact MVP command tree, canonical subcommand identities, and command-specific options; parse arguments before constructing source, target, state, or lifecycle dependencies.
-- Reject alternate executable names, target, scope, selection, force, generic dry-run, and command-inapplicable options with typed usage faults rather than accepting ignored flags.
+- Reject alternate executable names, target, scope, selection, force, and command-inapplicable options with typed usage faults rather than accepting ignored flags; reject `--dry-run` when combined with approval or expected-revision flags.
 
 **Completion evidence**
 

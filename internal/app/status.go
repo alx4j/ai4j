@@ -22,14 +22,11 @@ const maximumStatusFileBytes = 16 << 20
 
 type statusValidation interface {
 	InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem)
+	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
 	ValidateUpdate(context.Context, cli.SourceOptions, domain.CommitOID) validation.UpdateReport
 }
 
-type scopedStatusValidation interface {
-	InspectNativeStatusFor(context.Context, string, string) (validation.NativeStatus, *result.Problem)
-}
-
-type directoryScopedStatusValidation interface {
+type nativeStatusInspector interface {
 	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
 }
 
@@ -49,8 +46,7 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 		record, installed, stateErr = s.state.Load()
 	}
 	_, markerPresent, markerErr := s.state.LoadMarker()
-	migrationPresent, migrationErr := s.state.MigrationPending()
-	recovery := recoveryFromState(stateErr, markerPresent || migrationPresent, errors.Join(markerErr, migrationErr))
+	recovery := recoveryFromState(stateErr, markerPresent, markerErr)
 
 	disposition := result.UpdateNotChecked
 	if !installed && recovery.State() == cli.RecoveryStateNone {
@@ -79,11 +75,12 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 		if err != nil {
 			return cli.Response{}, err
 		}
-		observation, problem := s.validation.InspectNativeStatus(ctx)
-		if scoped, ok := s.validation.(directoryScopedStatusValidation); ok && record.MarketplaceID != "" {
-			observation, problem = scoped.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-		} else if scoped, ok := s.validation.(scopedStatusValidation); ok && record.MarketplaceID != "" {
-			observation, problem = scoped.InspectNativeStatusFor(ctx, record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
+		var observation validation.NativeStatus
+		var problem *result.Problem
+		if record.MarketplaceID == "" {
+			observation, problem = s.validation.InspectNativeStatus(ctx)
+		} else {
+			observation, problem = s.validation.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
 		}
 		if problem != nil {
 			native, err = unknownNative()
@@ -116,8 +113,7 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 
 func (s statusService) List(_ context.Context, request cli.ListRequest) (cli.Response, error) {
 	snapshot, stateErr := s.state.Snapshot()
-	migrationPresent, migrationErr := s.state.MigrationPending()
-	recovery := recoveryFromState(stateErr, migrationPresent, migrationErr)
+	recovery := recoveryFromState(stateErr, false, nil)
 	if recovery.State() != cli.RecoveryStateNone {
 		problem := statusProblem("recovery_required", "installation state requires attention before it can be listed")
 		commandResult, err := result.New(result.Facts{Status: result.StatusError, Phase: result.PhaseNone, Outcome: result.OutcomeNone, Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone, Failure: result.FailureRecovery, UpdateDisposition: result.UpdateNotChecked, Errors: []result.Problem{*problem}})
@@ -137,17 +133,7 @@ func (s statusService) List(_ context.Context, request cli.ListRequest) (cli.Res
 		}
 		summaries = append(summaries, summary)
 	}
-	var migration *cli.StateMigration
-	if snapshot.MigrationRequired {
-		preview, err := cli.NewStateMigration(installstate.LegacySchemaVersion, installstate.SchemaVersion, []string{
-			"health=unknown", "host=darwin-arm64", "lifecycle=active", "nativeResources=claude-mvp", "record.schemaVersion=2", "scopeRoot=current-user-home", "selection=all", "source.mode=github",
-		})
-		if err != nil {
-			return cli.Response{}, err
-		}
-		migration = &preview
-	}
-	data, err := cli.NewListDataWithMigration(summaries, migration)
+	data, err := cli.NewListData(summaries)
 	if err != nil {
 		return cli.Response{}, err
 	}
@@ -300,7 +286,7 @@ func inspectFileDrift(path, expectedChecksum string) cli.DriftState {
 
 func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem) {
 	if record.Source.Mode == "development_source" {
-		return result.UpdateUnknown, statusProblem("update_check_unavailable", "use plan update to compare the current local development checkout")
+		return result.UpdateUnknown, statusProblem("update_check_unavailable", "use update --dry-run to compare the current local development checkout")
 	}
 	if record.Source.RefKind == cli.RefCommit.String() {
 		return result.UpdatePinned, nil

@@ -10,7 +10,7 @@ AI4J v1 rollback uses structural history and bounded copies of toolkit-owned nat
 
 ## Why
 
-The selected approach restores AI4J-owned structures without retaining unrelated user configuration or secrets. Whole-file snapshots would require encryption-key lifecycle, Keychain and Windows credential-vault integrations, retention rules, migration, and recovery behavior that no current acceptance criterion needs.
+The selected approach restores AI4J-owned structures without retaining unrelated user configuration or secrets. Whole-file snapshots would require encryption-key lifecycle, Keychain and Windows credential-vault integrations, retention rules, format transitions, and recovery behavior that no current acceptance criterion needs.
 
 ## Rejected alternative
 

@@ -1,8 +1,0 @@
-{
-  "github.com/alx4j/ai4j/internal/lifecycle/planning": [
-    "github.com/alx4j/ai4j/internal/target/claude"
-  ],
-  "github.com/alx4j/ai4j/internal/registry/composition": [
-    "github.com/alx4j/ai4j/internal/host/darwin"
-  ]
-}

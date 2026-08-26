@@ -69,7 +69,7 @@ func TestStoreRejectsUnsupportedMalformedAndReplacementMarkers(t *testing.T) {
 	}
 }
 
-func TestOperationMarkerSupportsEachMVPModifyingCommand(t *testing.T) {
+func TestOperationMarkerSupportsEachModifyingCommand(t *testing.T) {
 	t.Parallel()
 	for _, operation := range []string{"install", "update", "uninstall"} {
 		marker, err := NewOperationMarker(operation, "operation-001", "install-aaaaaaaaaaaa", strings.Repeat("a", 40))

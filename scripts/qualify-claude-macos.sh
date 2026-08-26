@@ -45,7 +45,7 @@ unset credential_probe
 
 cleanup() {
   if [[ -n "$active_installation" && -x "$ai4j" ]]; then
-    "$ai4j" uninstall --installation "$active_installation" --yes --json >/dev/null 2>&1 || true
+    "$ai4j" uninstall "$active_installation" --yes --json >/dev/null 2>&1 || true
   fi
   rm -rf -- "$work_root"
 }
@@ -71,7 +71,7 @@ run_project_journey() {
   local marketplace_id
 
   git clone --quiet --no-hardlinks "$repo_root" "$project_root"
-  run_ai4j "$prefix-plan.json" plan install \
+  run_ai4j "$prefix-plan.json" install --dry-run \
     --repo alx4j/ai4j --ref "$qualification_source_ref" \
     --target claude --scope "$scope" --project "$project_root" --bundle default
   run_ai4j "$prefix-install.json" install \
@@ -116,8 +116,8 @@ run_project_journey() {
       "$evidence_root/$prefix-settings.json" >/dev/null
   fi
 
-  run_ai4j "$prefix-doctor.json" doctor --installation "$active_installation"
-  run_ai4j "$prefix-uninstall.json" uninstall --installation "$active_installation" --yes
+  run_ai4j "$prefix-doctor.json" doctor "$active_installation"
+  run_ai4j "$prefix-uninstall.json" uninstall "$active_installation" --yes
   active_installation=""
   git -C "$project_root" status --short --untracked-files=all > "$evidence_root/$prefix-post-uninstall-git-status.txt"
   test ! -s "$evidence_root/$prefix-post-uninstall-git-status.txt"
@@ -166,7 +166,7 @@ run_ai4j validate.json validate \
   --repo alx4j/ai4j --ref "$qualification_source_ref" --target claude
 jq -e '.data.validation.valid == true' "$evidence_root/validate.json" >/dev/null
 
-run_ai4j user-plan.json plan install \
+run_ai4j user-plan.json install --dry-run \
   --repo alx4j/ai4j --ref "$qualification_source_ref" \
   --target claude --scope user --bundle default
 run_ai4j user-install.json install \
@@ -196,9 +196,9 @@ claude plugin update "$native_plugin_id" --scope user | tee "$evidence_root/user
 run_ai4j user-status-after-refresh.json status --installation "$active_installation"
 
 export AI4J_TOKEN=qualification-presence-only
-run_ai4j user-doctor.json doctor --installation "$active_installation"
+run_ai4j user-doctor.json doctor "$active_installation"
 set +e
-"$ai4j" doctor --installation "$active_installation" --test-mcp claude-tools --json \
+"$ai4j" doctor "$active_installation" --test-mcp claude-tools --json \
   > "$evidence_root/user-mcp-preview.json"
 preview_exit=$?
 set -e
@@ -206,12 +206,12 @@ test "$preview_exit" = "2"
 jq -e '.status == "error" and .exitCode == 2 and .data.startupCheck != null' \
   "$evidence_root/user-mcp-preview.json" >/dev/null
 
-run_ai4j user-mcp-startup.json doctor \
-  --installation "$active_installation" --test-mcp claude-tools --yes
+run_ai4j user-mcp-startup.json doctor "$active_installation" \
+  --test-mcp claude-tools --yes
 jq -e '.data.startupCheck.result == "timed_out" or .data.startupCheck.result == "exited"' \
   "$evidence_root/user-mcp-startup.json" >/dev/null
 
-run_ai4j user-uninstall.json uninstall --installation "$active_installation" --yes
+run_ai4j user-uninstall.json uninstall "$active_installation" --yes
 active_installation=""
 claude plugin marketplace list --json | tee "$evidence_root/user-post-uninstall-marketplace-list.json"
 jq -e --arg id "$marketplace_id" '[.. | strings] | index($id) == null' \

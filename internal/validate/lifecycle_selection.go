@@ -41,19 +41,6 @@ type LifecycleSelection struct {
 
 func (r LifecycleSelection) HasSource() bool { return r.Source.Valid() }
 
-type lifecycleSelectionRequest struct {
-	all     bool
-	assets  []string
-	bundles []string
-	host    cli.BuildHost
-}
-
-func (l lifecycleSelectionRequest) Target() cli.BuildTarget { return cli.BuildTargetClaude }
-func (l lifecycleSelectionRequest) Host() cli.BuildHost     { return l.host }
-func (l lifecycleSelectionRequest) SelectAll() bool         { return l.all }
-func (l lifecycleSelectionRequest) Assets() []string        { return slices.Clone(l.assets) }
-func (l lifecycleSelectionRequest) Bundles() []string       { return slices.Clone(l.bundles) }
-
 // SelectLifecycle resolves one Claude selection without writing target or
 // installation state.
 func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions, all bool, assets, bundles []string) (report LifecycleSelection) {
@@ -88,25 +75,22 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 	if err != nil {
 		return lifecycleSelectionFailure(FailureInternal, "internal_error", "lifecycle selection could not be constructed")
 	}
-	if validated.v2 == nil {
-		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("unsupported_schema", "v1 lifecycle requires a schema version 2 toolkit")}, Failure: FailureValidation}
-	}
-	request := lifecycleSelectionRequest{all: all, assets: slices.Clone(assets), bundles: slices.Clone(bundles), host: configuredBuildHost(s.config)}
-	resolved, err := resolveSelectionV2(*validated.v2, request)
+	request := selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), all: all, assets: slices.Clone(assets), bundles: slices.Clone(bundles)}
+	resolved, err := resolveSelection(validated.model, request)
 	if err != nil {
 		code, message := packageProblem(err)
 		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem(code, message)}, Failure: FailureValidation}
 	}
-	if err = validateSelectedExecutableFormats(workspacePath, resolved, request.Host(), *validated.v2); err != nil {
+	if err = validateSelectedExecutableFormats(workspacePath, resolved, request.host, validated.model); err != nil {
 		code, message := packageProblem(err)
 		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem(code, message)}, Failure: FailureValidation}
 	}
-	content, err := selectedContentV2(workspacePath, *validated.v2, resolved)
+	content, err := selectedContent(workspacePath, validated.model, resolved)
 	if err != nil {
 		code, message := packageProblem(err)
 		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem(code, message)}, Failure: FailureValidation}
 	}
-	packages := selectedPackages(validated.v2.manifest.Targets["claude"].Packages, resolved)
+	packages := selectedPackages(validated.model.manifest.Targets["claude"].Packages, resolved)
 	if len(packages) != 1 {
 		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("unsupported_selection", "Claude user lifecycle currently requires selection of exactly one native package")}, Failure: FailureValidation}
 	}
@@ -119,7 +103,7 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 		if rules != nil {
 			return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("unsupported_selection", "Claude user lifecycle currently supports one selected persistent instruction")}, Failure: FailureValidation}
 		}
-		rules, err = readTrackedFile(workspacePath, selected.path, validated.v2.tracked)
+		rules, err = readTrackedFile(workspacePath, selected.path, validated.model.tracked)
 		if err != nil {
 			return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("package_read_failed", "selected instruction could not be read")}, Failure: FailureValidation}
 		}
@@ -139,7 +123,7 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 	}
 	warning, _ := result.NewWarning("active_content_trust", "selected instructions can influence AI behavior and installed executables may later run with your permissions", nil)
 	warnings = append(warnings, warning)
-	artifact, err := archiveNativePackage(workspacePath, packages[0].Path, validated.v2.tracked)
+	artifact, err := archiveNativePackage(workspacePath, packages[0].Path, validated.model.tracked)
 	if err != nil {
 		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("native_artifact_failed", "selected native package could not be retained for rollback")}, Failure: FailureValidation}
 	}
@@ -148,13 +132,13 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 		resolvedIDs[index] = asset.asset.ID
 	}
 	return LifecycleSelection{
-		Source: source, ToolkitID: validated.v2.manifest.Toolkit.ID, DeclarationID: declarationID(validated.v2.manifest.Toolkit), ToolkitVersion: validated.v2.manifest.Toolkit.Version,
+		Source: source, ToolkitID: validated.model.manifest.Toolkit.ID, DeclarationID: declarationID(validated.model.manifest.Toolkit), ToolkitVersion: validated.model.manifest.Toolkit.Version,
 		PackageID: packages[0].ID, PackagePath: packages[0].Path, Content: content, Rules: slices.Clone(rules),
 		RulesChecksum: rulesChecksum, NativeArtifact: artifact, Resolved: resolvedIDs, Warnings: warnings,
 	}
 }
 
-func declarationID(toolkit toolkitIdentityV2) string {
+func declarationID(toolkit toolkitIdentity) string {
 	if toolkit.DeclarationID != "" {
 		return toolkit.DeclarationID
 	}
@@ -194,12 +178,12 @@ func archiveNativePackage(root, packagePath string, tracked map[string]gitsource
 	return output.Bytes(), nil
 }
 
-func selectedPackages(packages []nativePackageV2, resolved []resolvedAssetV2) []nativePackageV2 {
+func selectedPackages(packages []nativePackage, resolved []resolvedAsset) []nativePackage {
 	selected := make(map[string]struct{}, len(resolved))
 	for _, asset := range resolved {
 		selected[asset.asset.ID] = struct{}{}
 	}
-	var result []nativePackageV2
+	var result []nativePackage
 	for _, unit := range packages {
 		for _, asset := range unit.Assets {
 			if _, ok := selected[asset]; ok {

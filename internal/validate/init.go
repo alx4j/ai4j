@@ -74,17 +74,17 @@ func (s Service) Init(ctx context.Context, request cli.InitRequest) InitReport {
 func renderScaffold(root string, request cli.InitRequest) error {
 	targets := request.Targets()
 	slices.Sort(targets)
-	manifest := toolkitManifestV2{
-		SchemaVersion: 2,
-		Toolkit:       toolkitIdentityV2{ID: "example-toolkit", Version: "0.1.0", DisplayName: "Example Toolkit", Compatibility: compatibilityV2{MinimumCLI: "1.0.0"}},
-		Assets:        []assetV2{}, Bundles: []bundleV2{}, Targets: map[string]targetV2{},
+	manifest := toolkitManifest{
+		SchemaVersion: 1,
+		Toolkit:       toolkitIdentity{ID: "example-toolkit", Version: "0.1.0", DisplayName: "Example Toolkit", Compatibility: compatibility{MinimumCLI: "1.0.0"}},
+		Assets:        []asset{}, Bundles: []bundle{}, Targets: map[string]target{},
 	}
-	for _, target := range targets {
-		path := "targets/" + string(target) + "/example-toolkit"
-		manifest.Targets[string(target)] = targetV2{Packages: []nativePackageV2{{ID: "example-toolkit", Path: path, Assets: []string{}}}}
+	for _, targetName := range targets {
+		path := "targets/" + string(targetName) + "/example-toolkit"
+		manifest.Targets[string(targetName)] = target{Packages: []nativePackage{{ID: "example-toolkit", Path: path, Assets: []string{}}}}
 		var manifestPath string
 		var native []byte
-		if target == cli.BuildTargetClaude {
+		if targetName == cli.BuildTargetClaude {
 			manifestPath = path + "/.claude-plugin/plugin.json"
 			native = []byte("{\n  \"name\": \"example-toolkit\",\n  \"description\": \"Example AI4J toolkit\"\n}\n")
 		} else {
@@ -96,19 +96,19 @@ func renderScaffold(root string, request cli.InitRequest) error {
 		}
 	}
 	if request.Examples() {
-		variants := make([]assetVariantV2, 0, len(targets))
-		for _, target := range targets {
-			path := "targets/" + string(target) + "/example-toolkit/skills/example-skill"
-			variants = append(variants, assetVariantV2{ID: string(target), Path: path, Targets: []string{string(target)}, Hosts: []string{"darwin-arm64", "windows-amd64"}})
+		variants := make([]assetVariant, 0, len(targets))
+		for _, targetName := range targets {
+			path := "targets/" + string(targetName) + "/example-toolkit/skills/example-skill"
+			variants = append(variants, assetVariant{ID: string(targetName), Path: path, Targets: []string{string(targetName)}, Hosts: []string{"darwin-arm64", "windows-amd64"}})
 			if err := writeBuildFile(root, path+"/SKILL.md", []byte("---\nname: example-skill\ndescription: Demonstrates a minimal AI4J skill.\n---\n\nFollow the user's request and report the completed result.\n"), 0o644); err != nil {
 				return err
 			}
-			targetConfig := manifest.Targets[string(target)]
+			targetConfig := manifest.Targets[string(targetName)]
 			targetConfig.Packages[0].Assets = []string{"example-skill"}
-			manifest.Targets[string(target)] = targetConfig
+			manifest.Targets[string(targetName)] = targetConfig
 		}
-		manifest.Assets = []assetV2{{ID: "example-skill", Type: "skill", Ownership: "package", Variants: variants}}
-		manifest.Bundles = []bundleV2{{ID: "examples", Assets: []string{"example-skill"}}}
+		manifest.Assets = []asset{{ID: "example-skill", Type: "skill", Ownership: "package", Variants: variants}}
+		manifest.Bundles = []bundle{{ID: "examples", Assets: []string{"example-skill"}}}
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -128,11 +128,11 @@ func validateScaffold(root string) error {
 	if err != nil {
 		return err
 	}
-	var manifest toolkitManifestV2
+	var manifest toolkitManifest
 	if err := json.Unmarshal(content, &manifest); err != nil {
 		return err
 	}
-	if manifest.SchemaVersion != 2 || manifest.Toolkit.ID == "" || len(manifest.Targets) == 0 {
+	if manifest.SchemaVersion != 1 || manifest.Toolkit.ID == "" || len(manifest.Targets) == 0 {
 		return errors.New("scaffold manifest is incomplete")
 	}
 	for _, target := range manifest.Targets {

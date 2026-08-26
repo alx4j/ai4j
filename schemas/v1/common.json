@@ -10,21 +10,15 @@
         "init",
         "validate",
         "build",
-        "plan.install",
         "install",
-        "plan.update",
         "update",
-        "plan.sync",
         "sync",
         "list",
         "status",
         "doctor",
-        "plan.rollback",
         "rollback",
-        "plan.uninstall",
         "uninstall",
         "history",
-        "plan.history.purge",
         "history.purge",
         "version"
       ]
@@ -236,7 +230,7 @@
       "additionalProperties": true
     },
     "sourceCommit": {
-      "$comment": "The validated Go Source contract guarantees this commit belongs to source.repository before projection, so v1 does not duplicate the repository field.",
+      "$comment": "The validated Go Source contract guarantees this commit belongs to source.repository before projection, so the wire format does not duplicate the repository field.",
       "type": "object",
       "required": ["objectFormat", "oid"],
       "properties": {
@@ -1203,23 +1197,8 @@
     },
     "listData": {
       "type": "object",
-      "required": ["installations", "migration"],
+      "required": ["installations"],
       "properties": {
-        "migration": {
-          "oneOf": [
-            {
-              "type": "object",
-              "required": ["fromVersion", "toVersion", "changes"],
-              "properties": {
-                "fromVersion": {"type": "integer", "minimum": 1},
-                "toVersion": {"type": "integer", "minimum": 2},
-                "changes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]+$"}}
-              },
-              "additionalProperties": true
-            },
-            {"type": "null"}
-          ]
-        },
         "installations": {
           "type": "array",
           "maxItems": 4096,

@@ -226,7 +226,7 @@ func responseFixtures(t *testing.T) []namedResponse {
 	action, _ := cli.NewAction(1, cli.ActionOwnerAI4J, cli.ActionCommitState, "installation", absent, present, cli.RecoveryNone)
 	finalPresent, _ := cli.NewFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
 	planData, _ := cli.NewPlanData(cli.OperationInstall, source, id, []cli.Action{action}, []cli.ContentItem{content}, nil, finalPresent, result.UpdateNotChecked)
-	planResponse, err := cli.NewResponse(cli.CommandPlanInstall, readResult, nil, planData)
+	planResponse, err := cli.NewResponse(cli.CommandInstall, readResult, nil, planData)
 	if err != nil {
 		t.Fatalf("NewResponse(plan) error = %v", err)
 	}

@@ -68,13 +68,13 @@ The default source is the first-party AI4J toolkit at `github.com/alx4j/ai4j`.
 First validate it without installing anything:
 
 ```sh
-ai4j validate
+ai4j validate --target claude
 ```
 
-Review a complete v1 installation plan and select the content you want:
+Review a complete installation plan and select the content you want:
 
 ```sh
-ai4j plan install --target claude --scope user --bundle default
+ai4j install --dry-run --target claude --scope user --bundle default
 ```
 
 The plan shows the exact Git commit, active content, ordered actions, conflicts, and expected final state. Copy the full commit hash from the plan and bind installation to that reviewed commit:
@@ -159,22 +159,22 @@ Validation resolves an exact Git commit and checks the toolkit without installin
 Validate the first-party default:
 
 ```sh
-ai4j validate
+ai4j validate --target claude
 ```
 
 Validate a specific branch, tag, or full commit:
 
 ```sh
-ai4j validate --ref main
-ai4j validate --ref v1.0.0
-ai4j validate --ref <full-commit-hash>
+ai4j validate --ref main --target claude
+ai4j validate --ref v1.0.0 --target claude
+ai4j validate --ref <full-commit-hash> --target claude
 ```
 
 Validate another GitHub toolkit repository:
 
 ```sh
-ai4j validate --repo owner/repository
-ai4j validate --repo owner/repository --ref main
+ai4j validate --repo owner/repository --target claude
+ai4j validate --repo owner/repository --ref main --target claude
 ```
 
 `--repo` accepts canonical GitHub HTTPS or SSH forms. Private repositories use your existing system Git credential helper, SSH agent, or default SSH keys; AI4J neither accepts nor stores credentials. The short `owner/repository` form is recommended. An explicit source failure never falls back to the built-in repository.
@@ -199,26 +199,28 @@ Validation reports:
 
 Validation is static. It does not claim that toolkit instructions are trustworthy or that declared executables will start successfully.
 
-## Preview changes with `plan`
+## Preview changes with `--dry-run`
 
 Planning is read-only:
 
 ```sh
-ai4j plan install
-ai4j plan update --installation <installation-id>
-ai4j plan sync --installation <installation-id> --bundle default
-ai4j plan rollback --installation <installation-id>
-ai4j plan uninstall --installation <installation-id>
-ai4j plan history purge --installation <installation-id> --expired
+ai4j install --dry-run --target claude --scope user --bundle default
+ai4j update <installation-id> --dry-run
+ai4j sync <installation-id> --dry-run --bundle default
+ai4j rollback <installation-id> --dry-run
+ai4j uninstall <installation-id> --dry-run
+ai4j history purge <installation-id> --dry-run --expired
 ```
 
-A plan does not install, update, remove, enable, or execute content. Use it to review the exact source and actions before approving a modifying command.
+A dry run returns the command's complete plan without installing, updating, removing, enabling, or executing content. Use it when you want a separate read-only review before running the command.
 
-`plan install` accepts `--repo` and `--ref`, or the mutually exclusive `--source`. Update, sync, rollback, and uninstall use the selected installation's retained source and ownership information. Plans never mutate target state or retained history.
+`install --dry-run` accepts `--repo` and `--ref`, or the mutually exclusive `--source`. Update, sync, rollback, and uninstall use the selected installation's retained source and ownership information. `--dry-run` never mutates target state or retained history, never prompts, and cannot be combined with `--yes`, `--expected-commit`, or `--expected-source-digest`.
+
+For update, sync, doctor, rollback, uninstall, and history commands, put the installation ID immediately after the command, as shown above. `history purge` takes it immediately after `purge`. Status keeps the optional `--installation <id>` selector because plain `ai4j status` is also valid.
 
 ## Install
 
-Interactive installation displays the plan and asks for confirmation. A v1 install requires one target, scope, and selection:
+Interactive installation displays the plan and asks for confirmation. An install requires one target, scope, and selection:
 
 ```sh
 ai4j install --target claude --scope user --bundle default
@@ -230,7 +232,7 @@ Use `--yes` for explicit non-interactive approval:
 ai4j install --target claude --scope user --all --yes
 ```
 
-For stronger review-to-apply consistency, use the exact commit shown by `plan install`:
+For stronger review-to-execution consistency, use the exact commit shown by `install --dry-run`:
 
 ```sh
 ai4j install --target claude --scope user --all \
@@ -242,7 +244,7 @@ If the source resolves to another commit, installation stops without mutation. R
 For a local development install, bind apply to the digest shown by the plan:
 
 ```sh
-ai4j plan install --source /path/to/toolkit --target claude --scope user --all
+ai4j install --dry-run --source /path/to/toolkit --target claude --scope user --all
 ai4j install --source /path/to/toolkit --target claude --scope user --all \
   --expected-source-digest <sha256> --yes
 ```
@@ -256,7 +258,7 @@ Multiple toolkits can coexist. AI4J assigns independent marketplace, plugin, cat
 From anywhere inside a Git worktree, omit `--project` to use its nearest Git root, or provide the project explicitly:
 
 ```sh
-ai4j plan install --target claude --scope project-local --bundle default
+ai4j install --dry-run --target claude --scope project-local --bundle default
 ai4j install --target claude --scope project-local --project /path/to/project \
   --bundle default --yes
 ```
@@ -266,7 +268,7 @@ Project-local rules are uniquely named and added to that worktree's Git-local ex
 Use project-shared scope when the declaration should be committed by you for collaborators:
 
 ```sh
-ai4j plan install --target claude --scope project-shared --project /path/to/project \
+ai4j install --dry-run --target claude --scope project-shared --project /path/to/project \
   --bundle default
 ai4j install --target claude --scope project-shared --project /path/to/project \
   --bundle default --expected-commit <full-commit-hash> --yes
@@ -287,7 +289,7 @@ ai4j list
 ai4j list --target claude --scope user
 ```
 
-The list is ordered deterministically and shows each immutable installation ID, active or archived lifecycle, target, scope root, source commit, requested and resolved selection, health, retained-history count, and last operation. If an older MVP state record is present, `list` also previews the schema migration and its defaults without changing the file.
+The list is ordered deterministically and shows each immutable installation ID, active or archived lifecycle, target, scope root, source commit, requested and resolved selection, health, retained-history count, and last operation. Unsupported pre-release state formats fail closed and are never rewritten automatically.
 
 Inspect one installation by ID:
 
@@ -295,7 +297,7 @@ Inspect one installation by ID:
 ai4j status --installation <installation-id>
 ```
 
-For backward compatibility, plain `ai4j status` still works when zero or one record exists. An installation ID is required when several records exist. Local status does not access GitHub:
+Plain `ai4j status` works when zero or one record exists. An installation ID is required when several records exist. Local status does not access GitHub:
 
 ```sh
 ai4j status
@@ -323,7 +325,7 @@ This may access GitHub. The update result can be `available`, `up_to_date`, `pin
 Run static checks without starting any toolkit script, hook, binary, or MCP server:
 
 ```sh
-ai4j doctor --installation <installation-id>
+ai4j doctor <installation-id>
 ```
 
 The report covers the host profile, Git and target executables, state/history/journal integrity, owned-file drift, observable native state, the retained package artifact, MCP declarations, MCP executable availability, and whether referenced environment-variable names are present. Secret values are never displayed.
@@ -331,31 +333,31 @@ The report covers the host profile, Git and target executables, state/history/jo
 To test one MCP process explicitly, first preview the exact executable, argument array, working directory, ownership, referenced variable names, and side-effect warning:
 
 ```sh
-ai4j doctor --installation <installation-id> --test-mcp <server-id>
+ai4j doctor <installation-id> --test-mcp <server-id>
 ```
 
 Then approve the same check:
 
 ```sh
-ai4j doctor --installation <installation-id> --test-mcp <server-id> --yes
+ai4j doctor <installation-id> --test-mcp <server-id> --yes
 ```
 
 The command invokes the executable directly without a shell, passes only the documented baseline environment plus the selected server's referenced variables, bounds captured output, and terminates the process tree after five seconds. A `timed_out` result means the process started and was stopped at that boundary; it does not prove that the server is healthy in Claude or that it had no side effects. The process runs with your current user permissions and is not sandboxed.
 
 ## Update
 
-Without source flags, AI4J updates only the branch recorded during installation. Repository or reference migration requires explicit `--repo` and/or `--ref` options.
+Without source flags, AI4J updates only the branch recorded during installation. Changing the repository or reference requires explicit `--repo` and/or `--ref` options.
 
 Review one installation's update first:
 
 ```sh
-ai4j plan update --installation <installation-id>
+ai4j update <installation-id> --dry-run
 ```
 
 The plan classifies active content as added, removed, changed, or unchanged. Apply the reviewed exact commit with:
 
 ```sh
-ai4j update --installation <installation-id> \
+ai4j update <installation-id> \
   --expected-commit <full-commit-hash> --yes
 ```
 
@@ -369,11 +371,11 @@ Update behavior is intentionally conservative:
 
 Repeating an update when the branch has not moved returns `no_change`.
 
-To migrate an existing GitHub installation explicitly, plan with `--repo` and/or `--ref`, then apply with the exact commit shown in that plan. The toolkit and installation IDs are preserved:
+To change an existing GitHub installation's source, plan with `--repo` and/or `--ref`, then apply with the exact commit shown in that plan. The toolkit and installation IDs are preserved:
 
 ```sh
-ai4j plan update --installation <installation-id> --repo owner/new-repository --ref main
-ai4j update --installation <installation-id> --repo owner/new-repository --ref main \
+ai4j update <installation-id> --dry-run --repo owner/new-repository --ref main
+ai4j update <installation-id> --repo owner/new-repository --ref main \
   --expected-commit <full-commit-hash> --yes
 ```
 
@@ -384,11 +386,11 @@ For a local development installation, `update` reads the stored checkout. Use `-
 For GitHub installations, `sync` keeps the stored exact source commit and changes only the requested selection. For local development installations, it snapshots the stored checkout and can disclose a simultaneous source-digest change:
 
 ```sh
-ai4j plan sync --installation <installation-id> --asset review-checklist
-ai4j sync --installation <installation-id> --asset review-checklist --yes
+ai4j sync <installation-id> --dry-run --asset review-checklist
+ai4j sync <installation-id> --asset review-checklist --yes
 
-ai4j plan sync --installation <local-installation-id> --asset review-checklist --allow-dirty
-ai4j sync --installation <local-installation-id> --asset review-checklist --allow-dirty \
+ai4j sync <local-installation-id> --dry-run --asset review-checklist --allow-dirty
+ai4j sync <local-installation-id> --asset review-checklist --allow-dirty \
   --expected-source-digest <sha256> --yes
 ```
 
@@ -400,7 +402,7 @@ The default conflict policy is `fail`. Update, sync, rollback, and uninstall als
 
 - `keep`: preserve conflicting installation-owned bytes and complete with degraded status.
 - `replace-owned`: replace only resources already attributed to that installation; the prior bytes are retained privately for rollback.
-- `interactive`: choose between those safe actions in an interactive terminal. It is not accepted with JSON or non-terminal input.
+- `interactive`: choose between those safe actions in an interactive terminal. It is not accepted with `--dry-run`, JSON, or non-terminal input.
 
 `--yes` approves the displayed plan; it is never a force flag.
 
@@ -409,24 +411,24 @@ The default conflict policy is `fail`. Update, sync, rollback, and uninstall als
 List retained structural rollback points without displaying their opaque content:
 
 ```sh
-ai4j history --installation <installation-id>
+ai4j history <installation-id>
 ```
 
 Rollback uses the latest point by default, or an explicitly selected operation:
 
 ```sh
-ai4j plan rollback --installation <installation-id>
-ai4j rollback --installation <installation-id> --yes
+ai4j rollback <installation-id> --dry-run
+ai4j rollback <installation-id> --yes
 
-ai4j plan rollback --installation <installation-id> --operation <operation-id>
-ai4j rollback --installation <installation-id> --operation <operation-id> --yes
+ai4j rollback <installation-id> --dry-run --operation <operation-id>
+ai4j rollback <installation-id> --operation <operation-id> --yes
 ```
 
 Purge one point, expired points, or all points only after reviewing the purge plan:
 
 ```sh
-ai4j plan history purge --installation <installation-id> --expired
-ai4j history purge --installation <installation-id> --expired --yes
+ai4j history purge <installation-id> --dry-run --expired
+ai4j history purge <installation-id> --expired --yes
 ```
 
 History purge never changes current Claude or AI4J-owned target content. Purging the final point of an archived installation also removes its tombstone, as disclosed by the plan.
@@ -436,8 +438,8 @@ History purge never changes current Claude or AI4J-owned target content. Purging
 Review removal before applying it:
 
 ```sh
-ai4j plan uninstall --installation <installation-id>
-ai4j uninstall --installation <installation-id> --yes
+ai4j uninstall <installation-id> --dry-run
+ai4j uninstall <installation-id> --yes
 ```
 
 Uninstall:
@@ -459,12 +461,13 @@ An archived installation can be inspected, rolled back, reactivated explicitly w
 Every command supports `--json`:
 
 ```sh
-ai4j plan install --json
-ai4j install --expected-commit <full-commit-hash> --yes --json
+ai4j install --dry-run --target claude --scope user --bundle default --json
+ai4j install --target claude --scope user --bundle default \
+  --expected-commit <full-commit-hash> --yes --json
 ai4j status --json
 ```
 
-JSON mode writes one schema-versioned JSON document to standard output. It contains no prompts or human prose. Modifying commands therefore require `--yes` in JSON or other non-interactive use.
+JSON mode writes one schema-versioned JSON document to standard output. It contains no prompts or human prose. Executing a modifying command therefore requires `--yes` in JSON or other non-interactive use; `--dry-run` remains read-only and needs no approval. The JSON `command` field stays the actual command name, while `data` contains either the dry-run plan or the execution result.
 
 Exit codes are stable:
 
@@ -493,7 +496,7 @@ It also records an operation marker and a private structural history entry befor
 
 Temporary source, build, init, lifecycle, and rollback workspaces carry an AI4J sidecar marker plus a live operating-system lease. A later command removes a crash orphan only when both identify a recognized AI4J workspace and the lease proves that no process still owns it. Live and unmarked directories are retained. Completed build and init staging directories are published with one atomic directory rename, so a partial output tree is not exposed.
 
-Before another modifying command starts, AI4J now reconciles an interrupted v1 operation automatically in three exact cases: the recorded final state is already fully committed, the target exactly matches the recorded final state but the state/history commit is incomplete, or both state and target still exactly match the recorded pre-operation state. It rechecks state and target immediately before repair. Mixed state, drift, unsupported journals, history purge interruptions, and target state that cannot be observed exactly remain fail-closed as `recovery_required`.
+Before another modifying command starts, AI4J reconciles an interrupted operation automatically in three exact cases: the recorded final state is already fully committed, the target exactly matches the recorded final state but the state/history commit is incomplete, or both state and target still exactly match the recorded pre-operation state. It rechecks state and target immediately before repair. Mixed state, drift, unsupported journals, history purge interruptions, and target state that cannot be observed exactly remain fail-closed as `recovery_required`.
 
 When recovery is required:
 
@@ -527,7 +530,7 @@ Interactive commands ask before mutation. JSON and non-interactive commands requ
 
 ### `expected_commit_mismatch`
 
-The source no longer resolves to the commit you reviewed. Run the corresponding plan again and review the new exact commit before retrying.
+The source no longer resolves to the commit you reviewed. Run the corresponding command again with `--dry-run`, then review the new exact commit before retrying.
 
 ### Drift or ownership conflict
 
@@ -550,6 +553,6 @@ The following are intentionally deferred:
 - OAuth and stored credentials
 - Offline GitHub operation and persistent source caches
 - Automatic crash compensation and general repair
-- Release signing, Apple notarization, Windows Authenticode, SBOMs, and provenance attestations; v1 artifacts are explicitly unsigned and checksum-verifiable
+- Release signing, Apple notarization, Windows Authenticode, SBOMs, and provenance attestations; release artifacts are unsigned and checksum-verifiable
 
 Unsupported target, host, scope, or lifecycle combinations fail explicitly with `unsupported_capability` and exit code `3`; parsing a command does not imply that the selected combination is supported.

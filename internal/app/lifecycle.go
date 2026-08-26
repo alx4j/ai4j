@@ -1,545 +1,593 @@
 package app
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"errors"
-	"fmt"
+	"crypto/rand"
 	"io"
-	"os"
 	"path/filepath"
-	"strings"
+	"slices"
+	"time"
 
+	"github.com/alx4j/ai4j/internal/buildinfo"
 	"github.com/alx4j/ai4j/internal/cli"
-	"github.com/alx4j/ai4j/internal/cli/human"
-	"github.com/alx4j/ai4j/internal/diskcapacity"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	"github.com/alx4j/ai4j/internal/target/claude/catalog"
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
 type lifecycleValidation interface {
-	Validate(context.Context, cli.SourceOptions) validation.Report
+	SelectLifecycle(context.Context, cli.SourceOptions, bool, []string, []string) validation.LifecycleSelection
 	ValidateUpdate(context.Context, cli.SourceOptions, domain.CommitOID) validation.UpdateReport
-	InspectPlanExisting(context.Context, string, string) ([]cli.Conflict, *result.Problem)
-	InspectUninstall(context.Context, string, string) ([]cli.Conflict, *result.Problem)
-	InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem)
+	InspectNativeStatusAt(context.Context, string, string, string) (validation.NativeStatus, *result.Problem)
 }
 
 type lifecycleService struct {
-	base       *installer
 	validation lifecycleValidation
+	state      installstate.Store
+	runner     validation.ProcessRunner
+	home       string
+	claudeRoot string
+	build      buildinfo.Info
+	now        func() time.Time
+	random     io.Reader
+	acquire    func(context.Context) (func() error, error)
 }
 
-func newLifecycleService(base *installer, validationService lifecycleValidation) *lifecycleService {
-	return &lifecycleService{base: base, validation: validationService}
+type lifecycleExecution struct {
+	operation         cli.Operation
+	source            validation.LifecycleSelection
+	before            *installstate.Record
+	desired           *installstate.Record
+	catalog           []byte
+	catalogBefore     []byte
+	rules             []byte
+	artifact          []byte
+	actions           []cli.Action
+	content           []cli.ContentItem
+	conflicts         []cli.Conflict
+	degradedConflicts []cli.Conflict
+	final             cli.FinalState
+	disposition       result.UpdateDisposition
+	rollback          *installstate.HistoryEntry
 }
 
-func (l *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest, commandIO CommandIO) (cli.Response, error) {
-	release, err := l.base.acquire(ctx)
+type applyRequest struct {
+	command           cli.Command
+	output            cli.OutputMode
+	approved          bool
+	commandIO         CommandIO
+	conflictPolicy    cli.ConflictPolicy
+	expectedCommit    domain.CommitOID
+	hasExpectedCommit bool
+	expectedDigest    string
+	hasExpectedDigest bool
+	prepare           func(cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error)
+}
+
+func newLifecycleService(validationService lifecycleValidation, state installstate.Store, runner validation.ProcessRunner, home string, build buildinfo.Info, acquire func(context.Context) (func() error, error)) *lifecycleService {
+	return &lifecycleService{
+		validation: validationService,
+		state:      state,
+		runner:     runner,
+		home:       home,
+		build:      build,
+		now:        time.Now,
+		random:     rand.Reader,
+		acquire:    acquire,
+	}
+}
+
+func (s *lifecycleService) Install(ctx context.Context, request cli.InstallRequest, commandIO CommandIO) (cli.Response, error) {
+	project, hasProject := request.Project()
+	if request.DryRun() {
+		execution, response, stop, err := s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), cli.ConflictFail)
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(cli.CommandInstall, execution)
+	}
+	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
+	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
+	return s.apply(ctx, applyRequest{
+		command: cli.CommandInstall, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		conflictPolicy: cli.ConflictFail, expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
+		expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
+		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+			return s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), policy)
+		},
+	})
+}
+
+func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop, err := s.prepareUpdate(ctx, request.InstallationID(), request.Source(), request.ConflictPolicy())
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(cli.CommandUpdate, execution)
+	}
+	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
+	if request.Source().HasRepository() || request.Source().HasReference() {
+		if !hasExpectedCommit {
+			return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_required", "changing source or reference requires --expected-commit", result.UpdateNotChecked, nil)
+		}
+	}
+	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
+	return s.apply(ctx, applyRequest{
+		command: cli.CommandUpdate, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		conflictPolicy: request.ConflictPolicy(), expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
+		expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
+		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+			return s.prepareUpdate(ctx, request.InstallationID(), request.Source(), policy)
+		},
+	})
+}
+
+func (s *lifecycleService) Sync(ctx context.Context, request cli.SyncRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop, err := s.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), request.ConflictPolicy())
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(cli.CommandSync, execution)
+	}
+	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
+	return s.apply(ctx, applyRequest{
+		command: cli.CommandSync, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		conflictPolicy: request.ConflictPolicy(), expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
+		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+			return s.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), policy)
+		},
+	})
+}
+
+func (s *lifecycleService) Rollback(ctx context.Context, request cli.RollbackRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop, err := s.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), request.ConflictPolicy())
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(cli.CommandRollback, execution)
+	}
+	return s.apply(ctx, applyRequest{
+		command: cli.CommandRollback, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		conflictPolicy: request.ConflictPolicy(),
+		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+			return s.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), policy)
+		},
+	})
+}
+
+func (s *lifecycleService) Uninstall(ctx context.Context, request cli.UninstallRequest, commandIO CommandIO) (cli.Response, error) {
+	if request.DryRun() {
+		execution, response, stop, err := s.prepareUninstall(ctx, request.InstallationID(), request.ConflictPolicy())
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(cli.CommandUninstall, execution)
+	}
+	return s.apply(ctx, applyRequest{
+		command: cli.CommandUninstall, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		conflictPolicy: request.ConflictPolicy(),
+		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+			return s.prepareUninstall(ctx, request.InstallationID(), policy)
+		},
+	})
+}
+
+func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli.Response, error) {
+	release, err := s.acquire(ctx)
 	if err != nil {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "mutation_locked", "another AI4J modifying command is running", result.UpdateNotChecked, nil)
+		return mutationLockResponse(request.command, err, result.UpdateNotChecked, nil)
 	}
 	defer func() { _ = release() }()
+	if recovered, recoveryErr := s.reconcileInterrupted(ctx); recoveryErr != nil || !recovered {
+		return lifecycleFailure(request.command, result.FailureRecovery, "recovery_required", "an interrupted operation requires recovery before another mutation", result.UpdateNotChecked, nil)
+	}
+	policy, ok, err := resolveInteractivePolicy(request.conflictPolicy, request.output, request.commandIO)
+	if err != nil {
+		return cli.Response{}, err
+	}
+	if !ok {
+		return lifecycleFailure(request.command, result.FailureApproval, "interactive_terminal_required", "interactive conflict policy requires terminal input and output", result.UpdateNotChecked, nil)
+	}
+	execution, response, stop, err := request.prepare(policy)
+	if err != nil {
+		return cli.Response{}, err
+	}
+	if stop {
+		return planAsCommand(response, request.command)
+	}
+	if len(execution.conflicts) != 0 {
+		return lifecycleConflict(request.command, execution.conflicts, execution.disposition, execution.source.Warnings)
+	}
+	if request.hasExpectedCommit && execution.source.Source.Commit().OID() != request.expectedCommit {
+		return lifecycleFailure(request.command, result.FailureConflict, "expected_commit_mismatch", "resolved source commit does not match --expected-commit", execution.disposition, execution.source.Warnings)
+	}
+	if execution.source.Source.Mode() == cli.SourceDevelopment && execution.source.Source.Dirty() && !request.hasExpectedDigest {
+		return lifecycleFailure(request.command, result.FailureConflict, "expected_source_digest_required", "dirty local source apply requires --expected-source-digest", execution.disposition, execution.source.Warnings)
+	}
+	if request.hasExpectedDigest && (execution.source.Source.Mode() != cli.SourceDevelopment || execution.source.Source.SourceDigest().String() != request.expectedDigest) {
+		return lifecycleFailure(request.command, result.FailureConflict, "expected_source_digest_mismatch", "local source digest does not match --expected-source-digest", execution.disposition, execution.source.Warnings)
+	}
+	plan, err := s.planResponse(request.command, execution)
+	if err != nil {
+		return cli.Response{}, err
+	}
+	if len(execution.actions) == 0 {
+		return lifecycleNoChange(request.command, execution.operation, recordInstallation(execution.before, execution.desired), execution.final, execution.disposition, execution.source.Warnings)
+	}
+	approval, err := approveLifecycle(request.approved, request.output, request.commandIO, plan, execution.operation.String())
+	if err != nil {
+		return cli.Response{}, err
+	}
+	if approval == approvalDeclined {
+		return cancelledResponse(request.command, "operation_cancelled", "operation was declined before mutation", execution.disposition, execution.source.Warnings)
+	}
+	if approval != approvalGranted {
+		return lifecycleFailure(request.command, result.FailureApproval, "approval_required", "operation requires explicit approval", execution.disposition, execution.source.Warnings)
+	}
+	return s.commitExecution(ctx, request.command, execution, policy)
+}
 
+func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.SourceOptions, target cli.BuildTarget, scope cli.Scope, project string, hasProject bool, selection cli.SelectionOptions, installationID domain.InstallationID, reactivation bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+	var before *installstate.Record
+	scopeRoot := s.effectiveClaudeRoot()
+	if reactivation {
+		record, present, err := s.state.LoadByID(installationID.String())
+		if err != nil || !present {
+			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "installation_not_found", "the selected archived installation does not exist")
+		}
+		before = cloneRecordPtr(&record)
+		if record.Source.Mode == "development_source" {
+			source, err = cli.NewDevelopmentSourceOptions(record.Source.Checkout, source.AllowDirty())
+		} else {
+			source, err = exactSourceOptions(record)
+		}
+		if err != nil {
+			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "installation_state_invalid", "the selected archived installation source is invalid")
+		}
+		selection = selectionFromRecord(record)
+		target = cli.BuildTarget(record.Target)
+		scope = cli.Scope(record.Scope)
+		scopeRoot = record.ScopeRoot
+	} else {
+		if target != cli.BuildTargetClaude || !scope.Valid() {
+			return stopLifecycle(cli.CommandInstall, result.FailureValidation, "unsupported_scope", "the requested target or scope is unsupported")
+		}
+		if scope == cli.ScopeProjectShared && source.HasCheckout() {
+			return stopLifecycle(cli.CommandInstall, result.FailureValidation, "unsupported_scope", "local development sources cannot be installed at project-shared scope")
+		}
+		if scope != cli.ScopeUser {
+			var err error
+			scopeRoot, err = s.resolveProjectRoot(ctx, project, hasProject)
+			if err != nil {
+				return stopLifecycle(cli.CommandInstall, result.FailureEnvironment, "project_root_invalid", "a canonical Git project root could not be resolved")
+			}
+		}
+	}
+	report := s.validation.SelectLifecycle(ctx, source, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	if len(report.Problems) != 0 || !report.HasSource() {
+		return stopSelection(cli.CommandInstall, report)
+	}
+	if !reactivation {
+		installationID = installationIDFor(report, scope, scopeRoot)
+	}
+	desired, document, err := s.recordForSelection(report, selection, installationID, scope, scopeRoot)
+	if err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
+	}
+	if err := s.inspectProjectLocal(ctx, desired); err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
+	}
+	records, err := s.state.LoadAll()
+	if err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "installation_state_invalid", "installation state could not be read")
+	}
+	if !reactivation {
+		for _, record := range records {
+			if record.Target == desired.Target && record.Scope == desired.Scope && filepath.Clean(record.ScopeRoot) == filepath.Clean(desired.ScopeRoot) && record.ToolkitID == desired.ToolkitID {
+				if record.Lifecycle == "archived" {
+					return stopLifecycle(cli.CommandInstall, result.FailureConflict, "archived_installation_exists", "reactivate the archived installation by its installation ID")
+				}
+				before = cloneRecordPtr(&record)
+				desired.InstallationID = record.InstallationID
+			}
+		}
+	}
+	catalogBytes := document.Bytes()
+	var catalogBefore []byte
+	if desired.Scope == "project-shared" {
+		catalogBefore, catalogBytes, err = s.planProjectShared(&desired, before)
+		if err != nil {
+			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be changed safely")
+		}
+	}
+	conflicts := s.installConflicts(ctx, desired)
+	if before != nil && before.Lifecycle == "active" {
+		conflicts = s.existingConflicts(ctx, *before, true)
+	}
+	visible, degraded := applyConflictPolicy(conflicts, policy, before != nil)
+	actions, err := s.transitionActions(cli.OperationInstall, before, &desired, len(report.Rules) != 0)
+	if err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan actions could not be created")
+	}
+	if before != nil && recordsEquivalent(*before, desired) {
+		actions = nil
+	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
-	if response, stop, inspectErr := l.interruptedResponse(cli.CommandUpdate, cli.OperationUpdate, final, result.UpdateNotChecked); inspectErr != nil || stop {
-		return response, inspectErr
+	return lifecycleExecution{operation: cli.OperationInstall, source: report, before: before, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifact: report.NativeArtifact, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
+}
+
+func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID domain.InstallationID, requested cli.SourceOptions, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+	record, present, err := s.state.LoadByID(installationID.String())
+	if err != nil || !present || record.Lifecycle != "active" {
+		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
-	record, present, err := l.base.state.Load()
+	if record.Source.Mode == "development_source" {
+		if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() {
+			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_change_unsupported", "GitHub and local source modes cannot be changed in place")
+		}
+		options, optionErr := cli.NewDevelopmentSourceOptions(record.Source.Checkout, requested.AllowDirty())
+		if optionErr != nil {
+			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "source_invalid", "stored local source is invalid")
+		}
+		selection := selectionFromRecord(record)
+		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		if len(report.Problems) != 0 || !report.HasSource() {
+			return stopSelection(cli.CommandUpdate, report)
+		}
+		disposition := result.UpdateUpToDate
+		if report.Source.SourceDigest().String() != record.Source.SourceDigest {
+			disposition = result.UpdateAvailable
+		}
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
+	}
+	if requested.AllowDirty() || requested.HasCheckout() {
+		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a GitHub installation")
+	}
+	installed, err := domain.NewCommitOID(record.Source.Commit)
 	if err != nil {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "installation_state_invalid", "installation state could not be read", result.UpdateNotChecked, nil)
-	}
-	if !present {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "not_installed", "AI4J is not installed", result.UpdateNotInstalled, nil)
-	}
-	installationID, err := domain.NewInstallationID(record.InstallationID)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	if record.Source.RefKind == cli.RefTag.String() || record.Source.RefKind == cli.RefCommit.String() {
-		return lifecycleNoChange(cli.CommandUpdate, cli.OperationUpdate, &installationID, final, result.UpdatePinned, nil)
-	}
-	installedCommit, err := domain.NewCommitOID(record.Source.Commit)
-	if err != nil {
-		return cli.Response{}, err
+		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
 	}
 	options, err := updateSourceOptions(record)
 	if err != nil {
-		return cli.Response{}, err
+		return stopLifecycle(cli.CommandUpdate, result.FailureInternal, "source_invalid", "stored source selection is invalid")
 	}
-	update := l.validation.ValidateUpdate(ctx, options, installedCommit)
-	if len(update.Report.Problems) != 0 || !update.Report.HasSource() {
-		return lifecycleValidationUnavailable(cli.CommandUpdate, update.Report)
+	sourceChange := requested.HasRepository() || requested.HasReference()
+	if sourceChange {
+		repository := record.Source.Repository
+		if requested.HasRepository() {
+			repository = requested.Repository()
+		}
+		reference := ""
+		hasReference := false
+		if requested.HasReference() {
+			reference, hasReference = requested.Reference(), true
+		}
+		options, err = cli.NewSourceOptions(repository, true, reference, hasReference)
+		if err != nil {
+			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "invalid_source", "requested source change is invalid")
+		}
+		selection := selectionFromRecord(record)
+		report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+		if len(report.Problems) != 0 || !report.HasSource() {
+			return stopSelection(cli.CommandUpdate, report)
+		}
+		if report.ToolkitID != record.ToolkitID {
+			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "toolkit_identity_changed", "source changes must retain the toolkit identifier")
+		}
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdateAvailable)
 	}
-	switch update.Disposition {
-	case gitsource.UpdateNoChange:
-		return lifecycleNoChange(cli.CommandUpdate, cli.OperationUpdate, &installationID, final, result.UpdateUpToDate, update.Report.Warnings)
-	case gitsource.UpdateRefRewritten:
-		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "ref_rewritten", "the tracked branch is not a fast-forward update", result.UpdateRefRewritten, update.Report.Warnings)
-	case gitsource.UpdateAvailable:
+	update := s.validation.ValidateUpdate(ctx, options, installed)
+	if len(update.Report.Problems) != 0 {
+		return stopValidation(cli.CommandUpdate, update.Report)
+	}
+	disposition := result.UpdateUnknown
+	switch {
+	case update.Disposition == gitsource.UpdateNoChange:
+		disposition = result.UpdateUpToDate
+	case update.Disposition == gitsource.UpdateAvailable:
+		disposition = result.UpdateAvailable
+	case update.Disposition == gitsource.UpdateRefRewritten:
+		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "ref_rewritten", "the tracked branch is not a fast-forward update")
 	default:
-		return lifecycleFailure(cli.CommandUpdate, result.FailureSource, "update_source_failed", "the stored source could not be checked", result.UpdateUnknown, update.Report.Warnings)
+		return stopLifecycle(cli.CommandUpdate, result.FailureSource, "update_source_failed", "the stored source could not be checked")
 	}
-	conflicts, problem := l.validation.InspectPlanExisting(ctx, record.Catalog.Checksum, record.Rules.Checksum)
-	if problem != nil {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureEnvironment, problem.Code(), problem.Message(), result.UpdateAvailable, update.Report.Warnings)
+	selection := selectionFromRecord(record)
+	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	if len(report.Problems) != 0 || !report.HasSource() {
+		return stopSelection(cli.CommandUpdate, report)
 	}
-	if len(conflicts) != 0 {
-		return lifecycleConflict(cli.CommandUpdate, conflicts, result.UpdateAvailable, update.Report.Warnings)
-	}
-	if expected, supplied := request.ExpectedCommit(); supplied && expected != update.Report.Source.Commit().OID() {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_mismatch", "resolved source commit does not match --expected-commit", result.UpdateAvailable, update.Report.Warnings)
-	}
-	exactOptions, err := exactSourceOptions(record)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	installedReport := l.validation.Validate(ctx, exactOptions)
-	if len(installedReport.Problems) != 0 || !installedReport.HasSource() {
-		return lifecycleValidationUnavailable(cli.CommandUpdate, installedReport)
-	}
-	content, err := diffActiveContent(installedReport.Content, update.Report.Content)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	actions, err := updateActions(record, update.Report)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	planData, err := cli.NewPlanData(cli.OperationUpdate, update.Report.Source, installationID, actions, content, nil, final, result.UpdateAvailable)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	planResponse, err := planResponse(cli.CommandPlanUpdate, planData, update.Report.Warnings, nil, result.UpdateAvailable)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	approval, err := approveLifecycle(request.Approved(), request.OutputMode(), commandIO, planResponse, "update")
-	if err != nil {
-		return cli.Response{}, err
-	}
-	if approval == approvalDeclined {
-		return lifecycleCancelled(cli.CommandUpdate, "update_cancelled", "update was declined before mutation", result.UpdateAvailable, update.Report.Warnings)
-	}
-	if approval != approvalGranted {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureApproval, "approval_required", "update requires explicit approval", result.UpdateAvailable, update.Report.Warnings)
-	}
-
-	operationID, err := newOperationID(l.base.random)
-	if err != nil {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureInternal, "operation_id_unavailable", "update operation could not be prepared", result.UpdateAvailable, update.Report.Warnings)
-	}
-	marker, err := installstate.NewOperationMarker("update", operationID.String(), installationID.String(), update.Report.Source.Commit().OID().String())
-	if err != nil {
-		return cli.Response{}, err
-	}
-	if err := l.base.state.SaveMarker(marker); err != nil {
-		return lifecycleFailure(cli.CommandUpdate, result.FailureInternal, "operation_marker_failed", "update operation could not be prepared", result.UpdateAvailable, update.Report.Warnings)
-	}
-	newCatalog, err := catalog.Render(update.Report.Source.Repository(), update.Report.Source.Commit().OID())
-	if err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "catalog_render_failed", "update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := replaceOwnedMatching(l.base.home, l.base.catalogPath(), record.Catalog.Checksum, newCatalog.Bytes()); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "catalog_replace_failed", "update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := l.base.runClaude(ctx, []string{"plugin", "marketplace", "update", "ai4j"}); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "marketplace_update_failed", "update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := l.base.runClaude(ctx, []string{"plugin", "update", "ai4j-default@ai4j", "--scope", "user"}); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "plugin_update_failed", "update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := replaceOwnedMatching(l.base.home, l.base.rulesPath(), record.Rules.Checksum, update.Report.Rules); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "rules_replace_failed", "update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	conflicts, problem = l.validation.InspectPlanExisting(ctx, newCatalog.Digest(), update.Report.RulesChecksum)
-	if problem != nil || len(conflicts) != 0 {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "update_verification_failed", "updated state could not be verified; update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	nextRecord := l.base.newRecord(operationID, installationID, update.Report, newCatalog.Digest())
-	if err := l.base.state.Save(nextRecord); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "state_commit_failed", "update state could not be committed; update requires recovery", update.Report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := l.base.state.DeleteMarker(); err != nil {
-		return l.recovery(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, "operation_cleanup_failed", "update committed but operation cleanup is required", update.Report.Warnings, actions, result.PhaseCommittedCleanupPending)
-	}
-	return lifecycleCommitted(cli.CommandUpdate, cli.OperationUpdate, operationID, &installationID, final, result.UpdateAvailable, update.Report.Warnings, actions)
+	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
 }
 
-func (l *lifecycleService) Uninstall(ctx context.Context, request cli.UninstallRequest, commandIO CommandIO) (cli.Response, error) {
-	release, err := l.base.acquire(ctx)
+func (s *lifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.SelectionOptions, allowDirty bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+	record, present, err := s.state.LoadByID(installationID.String())
+	if err != nil || !present || record.Lifecycle != "active" {
+		return stopLifecycle(cli.CommandSync, result.FailureConflict, "installation_not_active", "the selected installation is not active")
+	}
+	options, err := exactSourceOptions(record)
+	if record.Source.Mode == "development_source" {
+		options, err = cli.NewDevelopmentSourceOptions(record.Source.Checkout, allowDirty)
+	} else if allowDirty {
+		return stopLifecycle(cli.CommandSync, result.FailureConflict, "source_mode_mismatch", "--allow-dirty is valid only for local development sources")
+	}
 	if err != nil {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureConflict, "mutation_locked", "another AI4J modifying command is running", result.UpdateNotChecked, nil)
+		return stopLifecycle(cli.CommandSync, result.FailureInternal, "source_invalid", "stored source selection is invalid")
 	}
-	defer func() { _ = release() }()
-
-	final := mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
-	if response, stop, inspectErr := l.interruptedResponse(cli.CommandUninstall, cli.OperationUninstall, final, result.UpdateNotChecked); inspectErr != nil || stop {
-		return response, inspectErr
-	}
-	record, present, err := l.base.state.Load()
-	if err != nil {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureConflict, "installation_state_invalid", "installation state could not be read", result.UpdateNotChecked, nil)
-	}
-	if !present {
-		return lifecycleNoChange(cli.CommandUninstall, cli.OperationUninstall, nil, final, result.UpdateNotChecked, nil)
-	}
-	installationID, err := domain.NewInstallationID(record.InstallationID)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	exactOptions, err := exactSourceOptions(record)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	report := l.validation.Validate(ctx, exactOptions)
+	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
 	if len(report.Problems) != 0 || !report.HasSource() {
-		return lifecycleValidationUnavailable(cli.CommandUninstall, report)
+		return stopSelection(cli.CommandSync, report)
 	}
-	conflicts, problem := l.validation.InspectUninstall(ctx, record.Catalog.Checksum, record.Rules.Checksum)
-	if problem != nil {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureEnvironment, problem.Code(), problem.Message(), result.UpdateNotChecked, report.Warnings)
-	}
-	if len(conflicts) != 0 {
-		return lifecycleConflict(cli.CommandUninstall, conflicts, result.UpdateNotChecked, report.Warnings)
-	}
-	actions, err := uninstallActions(record)
+	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
+}
+
+func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, selection cli.SelectionOptions, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
+	desired, document, err := s.recordForSelection(report, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
 	if err != nil {
-		return cli.Response{}, err
+		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
+	}
+	desired.History = slices.Clone(record.History)
+	if err := s.inspectProjectLocal(ctx, desired); err != nil {
+		return stopLifecycle(command, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
+	}
+	catalogBytes := document.Bytes()
+	var catalogBefore []byte
+	if desired.Scope == "project-shared" {
+		catalogBefore, catalogBytes, err = s.planProjectShared(&desired, &record)
+		if err != nil {
+			return stopLifecycle(command, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be changed safely")
+		}
+	}
+	conflicts := s.existingConflicts(ctx, record, true)
+	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	actions, err := s.transitionActions(operation, &record, &desired, len(report.Rules) != 0)
+	if err != nil {
+		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan actions could not be created")
+	}
+	installedContent := []cli.ContentItem{}
+	options, err := exactSourceOptions(record)
+	if err != nil {
+		return stopLifecycle(command, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
+	}
+	installedSelection := selectionFromRecord(record)
+	installed := s.validation.SelectLifecycle(ctx, options, installedSelection.SelectAll(), installedSelection.Assets(), installedSelection.Bundles())
+	if len(installed.Problems) != 0 || !installed.HasSource() {
+		return stopSelection(command, installed)
+	}
+	installedContent = installed.Content
+	content, err := diffActiveContent(installedContent, report.Content)
+	if err != nil {
+		return stopLifecycle(command, result.FailureInternal, "plan_failed", "active content changes could not be created")
+	}
+	if recordsEquivalent(record, desired) && len(conflicts) == 0 {
+		actions = nil
+		content, err = contentWithChange(report.Content, cli.ContentUnchanged)
+		if err != nil {
+			return stopLifecycle(command, result.FailureInternal, "plan_failed", "active content plan could not be created")
+		}
+	}
+	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
+	return lifecycleExecution{operation: operation, source: report, before: &record, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifact: report.NativeArtifact, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: disposition}, cli.Response{}, false, nil
+}
+
+func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID domain.InstallationID, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+	record, present, err := s.state.LoadByID(installationID.String())
+	if err != nil || !present {
+		return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
+	}
+	final := mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
+	if record.Lifecycle == "archived" {
+		return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_not_active", "the selected installation is not active")
+	}
+	options, err := exactSourceOptions(record)
+	if err != nil {
+		return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "installation_state_invalid", "the selected installation source is invalid")
+	}
+	selection := selectionFromRecord(record)
+	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	if len(report.Problems) != 0 || !report.HasSource() {
+		return stopSelection(cli.CommandUninstall, report)
+	}
+	desired := record
+	var catalogAfter []byte
+	if record.Scope == "project-shared" {
+		catalogAfter, err = s.planProjectSharedRemoval(record)
+		if err != nil {
+			return stopLifecycle(cli.CommandUninstall, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be removed safely")
+		}
+	}
+	desired.Lifecycle = "archived"
+	desired.Health = "healthy"
+	desired.Catalog = installstate.OwnedFile{}
+	desired.Rules = installstate.OwnedFile{}
+	desired.NativeResources = []string{}
+	conflicts := s.existingConflicts(ctx, record, false)
+	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	actions, err := s.transitionActions(cli.OperationUninstall, &record, &desired, false)
+	if err != nil {
+		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall plan actions could not be created")
 	}
 	content, err := contentWithChange(report.Content, cli.ContentRemoved)
 	if err != nil {
-		return cli.Response{}, err
+		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall content plan could not be created")
 	}
-	planData, err := cli.NewPlanData(cli.OperationUninstall, report.Source, installationID, actions, content, nil, final, result.UpdateNotChecked)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	planResponse, err := planResponse(cli.CommandPlanUninstall, planData, report.Warnings, nil, result.UpdateNotChecked)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	approval, err := approveLifecycle(request.Approved(), request.OutputMode(), commandIO, planResponse, "uninstall")
-	if err != nil {
-		return cli.Response{}, err
-	}
-	if approval == approvalDeclined {
-		return lifecycleCancelled(cli.CommandUninstall, "uninstall_cancelled", "uninstall was declined before mutation", result.UpdateNotChecked, report.Warnings)
-	}
-	if approval != approvalGranted {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureApproval, "approval_required", "uninstall requires explicit approval", result.UpdateNotChecked, report.Warnings)
-	}
+	return lifecycleExecution{operation: cli.OperationUninstall, source: report, before: &record, desired: &desired, catalog: catalogAfter, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
+}
 
-	operationID, err := newOperationID(l.base.random)
-	if err != nil {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureInternal, "operation_id_unavailable", "uninstall operation could not be prepared", result.UpdateNotChecked, report.Warnings)
+func (s *lifecycleService) prepareRollback(ctx context.Context, installationID domain.InstallationID, operationID domain.OperationID, selected bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+	record, present, err := s.state.LoadByID(installationID.String())
+	if err != nil || !present {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_not_found", "the selected installation does not exist")
 	}
-	marker, err := installstate.NewOperationMarker("uninstall", operationID.String(), installationID.String(), record.Source.Commit)
-	if err != nil {
-		return cli.Response{}, err
+	entries, err := s.state.LoadHistory(record.InstallationID)
+	if err != nil || len(entries) == 0 {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_unavailable", "no retained rollback point is available")
 	}
-	if err := l.base.state.SaveMarker(marker); err != nil {
-		return lifecycleFailure(cli.CommandUninstall, result.FailureInternal, "operation_marker_failed", "uninstall operation could not be prepared", result.UpdateNotChecked, report.Warnings)
-	}
-	if err := l.base.runClaude(ctx, []string{"plugin", "uninstall", "ai4j-default@ai4j", "--scope", "user", "--keep-data"}); err != nil {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "plugin_uninstall_failed", "uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
-	}
-	native, nativeProblem := l.validation.InspectNativeStatus(ctx)
-	if nativeProblem != nil || native.PluginInstalled {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "plugin_uninstall_unverified", "plugin removal could not be verified; uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
-	}
-	if native.MarketplaceRegistered {
-		if err := l.base.runClaude(ctx, []string{"plugin", "marketplace", "remove", "ai4j", "--scope", "user"}); err != nil {
-			return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "marketplace_remove_failed", "uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
+	entry := entries[len(entries)-1]
+	if selected {
+		var found bool
+		entry, found, err = s.state.LoadHistoryEntry(record.InstallationID, operationID.String())
+		if err != nil || !found {
+			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_not_found", "the selected rollback point does not exist")
 		}
 	}
-	native, nativeProblem = l.validation.InspectNativeStatus(ctx)
-	if nativeProblem != nil || native.PluginInstalled || native.MarketplaceRegistered {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "native_removal_unverified", "native removal could not be verified; uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
+	if !entry.Restorable || entry.After == nil || !sameCurrentState(record, *entry.After) {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_conflict", "current installation state no longer matches the rollback point")
 	}
-	if err := removeOwnedMatching(l.base.home, l.base.catalogPath(), record.Catalog.Checksum); err != nil {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "catalog_remove_failed", "uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
+	desired := cloneRecord(record)
+	if entry.Before != nil {
+		desired = cloneRecord(*entry.Before)
+	} else {
+		desired.Lifecycle = "archived"
+		desired.Catalog = installstate.OwnedFile{}
+		desired.Rules = installstate.OwnedFile{}
+		desired.NativeResources = []string{}
 	}
-	if err := removeOwnedMatching(l.base.home, l.base.rulesPath(), record.Rules.Checksum); err != nil {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "rules_remove_failed", "uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
-	}
-	if !ownedFileAbsent(l.base.catalogPath()) || !ownedFileAbsent(l.base.rulesPath()) {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "owned_removal_unverified", "owned-file removal could not be verified; uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := l.base.state.Delete(record); err != nil {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, &installationID, final, result.UpdateNotChecked, "state_remove_failed", "installation state could not be removed; uninstall requires recovery", report.Warnings, actions, result.PhaseApplying)
-	}
-	if err := l.base.state.DeleteMarker(); err != nil {
-		return l.recovery(cli.CommandUninstall, cli.OperationUninstall, operationID, nil, final, result.UpdateNotChecked, "operation_cleanup_failed", "uninstall committed but operation cleanup is required", report.Warnings, actions, result.PhaseCommittedCleanupPending)
-	}
-	return lifecycleCommitted(cli.CommandUninstall, cli.OperationUninstall, operationID, nil, final, result.UpdateNotChecked, report.Warnings, actions)
-}
-
-func (l *lifecycleService) interruptedResponse(command cli.Command, operation cli.Operation, final cli.FinalState, disposition result.UpdateDisposition) (cli.Response, bool, error) {
-	marker, present, err := l.base.state.LoadMarker()
+	desired.History = slices.Clone(record.History)
+	selection := selectionFromRecord(desired)
+	options, err := exactSourceOptions(desired)
 	if err != nil {
-		response, responseErr := lifecycleRecoveryWithoutIdentity(command, operation, final, disposition, "operation_marker_invalid", "an interrupted operation requires manual recovery")
-		return response, true, responseErr
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_state_invalid", "the rollback source is invalid")
 	}
-	if !present {
-		return cli.Response{}, false, nil
+	report := s.validation.SelectLifecycle(ctx, options, selection.SelectAll(), selection.Assets(), selection.Bundles())
+	if len(report.Problems) != 0 || !report.HasSource() {
+		return stopSelection(cli.CommandRollback, report)
 	}
-	operationID, _ := domain.NewOperationID(marker.OperationID)
-	installationID, _ := domain.NewInstallationID(marker.InstallationID)
-	response, responseErr := l.recovery(command, operation, operationID, &installationID, final, disposition, "recovery_required", "an interrupted operation requires manual recovery", nil, nil, result.PhaseApplying)
-	return response, true, responseErr
-}
-
-func (l *lifecycleService) recovery(command cli.Command, operation cli.Operation, operationID domain.OperationID, installationID *domain.InstallationID, final cli.FinalState, disposition result.UpdateDisposition, code, message string, warnings []result.Warning, actions []cli.Action, phase result.Phase) (cli.Response, error) {
-	problem, err := result.NewProblem(code, message, nil)
+	conflicts := s.existingConflicts(ctx, record, record.Lifecycle == "active")
+	visible, degraded := applyConflictPolicy(conflicts, policy, true)
+	actions, err := s.transitionActions(cli.OperationRollback, &record, &desired, desired.Rules != (installstate.OwnedFile{}))
 	if err != nil {
-		return cli.Response{}, err
+		return stopLifecycle(cli.CommandRollback, result.FailureInternal, "plan_failed", "rollback plan actions could not be created")
 	}
-	durable := result.DurableChangeNone
-	outcome := result.OutcomePending
-	if phase == result.PhaseCommittedCleanupPending {
-		durable = result.DurableCommittedWithDiff
-		outcome = result.OutcomeCommitted
+	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
+	if desired.Lifecycle == "archived" {
+		final = mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
 	}
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusError, Phase: phase, Outcome: outcome, Mutation: result.MutationStarted,
-		DurableChange: durable, Failure: result.FailureRecovery, UpdateDisposition: disposition,
-		Warnings: warnings, Errors: []result.Problem{problem},
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	data, err := cli.NewMutationData(operation, commandResult, installationID, actions, final, disposition)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, &operationID, data)
-}
-
-func approveLifecycle(approved bool, outputMode cli.OutputMode, commandIO CommandIO, plan cli.Response, operation string) (approvalDecision, error) {
-	if approved {
-		return approvalGranted, nil
-	}
-	if outputMode == cli.OutputJSON || !commandIO.Interactive || commandIO.Input == nil || commandIO.Output == nil {
-		return approvalMissing, nil
-	}
-	if _, err := human.Render(commandIO.Output, plan); err != nil {
-		return approvalMissing, err
-	}
-	if _, err := io.WriteString(commandIO.Output, "Proceed with "+operation+"? [y/N]: "); err != nil {
-		return approvalMissing, err
-	}
-	line, err := bufio.NewReader(io.LimitReader(commandIO.Input, 64)).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return approvalMissing, err
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer == "y" || answer == "yes" {
-		return approvalGranted, nil
-	}
-	return approvalDeclined, nil
-}
-
-func lifecycleValidationUnavailable(command cli.Command, report validation.Report) (cli.Response, error) {
-	commandResult, err := validationCommandResult(report)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
-}
-
-func lifecycleFailure(command cli.Command, failure result.Failure, code, message string, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
-	problem, err := result.NewProblem(code, message, nil)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusError, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
-		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
-		Failure: failure, UpdateDisposition: disposition, Warnings: warnings, Errors: []result.Problem{problem},
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
-}
-
-func lifecycleConflict(command cli.Command, conflicts []cli.Conflict, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
-	problems := make([]result.Problem, 0, len(conflicts))
-	for _, conflict := range conflicts {
-		item, _ := result.NewContext("resource", conflict.Resource())
-		problem, _ := result.NewProblem(conflict.Code(), conflict.Message(), []result.Context{item})
-		problems = append(problems, problem)
-	}
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusError, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
-		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
-		Failure: result.FailureConflict, UpdateDisposition: disposition, Warnings: warnings, Errors: problems,
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
-}
-
-func lifecycleCancelled(command cli.Command, code, message string, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
-	problem, err := result.NewProblem(code, message, nil)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusCancelled, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
-		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
-		Failure: result.FailureCancellation, UpdateDisposition: disposition, Warnings: warnings, Errors: []result.Problem{problem},
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
-}
-
-func lifecycleNoChange(command cli.Command, operation cli.Operation, installationID *domain.InstallationID, final cli.FinalState, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusNoChange, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
-		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
-		Failure: result.FailureNone, UpdateDisposition: disposition, Warnings: warnings,
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	data, err := cli.NewMutationData(operation, commandResult, installationID, nil, final, disposition)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, data)
-}
-
-func lifecycleCommitted(command cli.Command, operation cli.Operation, operationID domain.OperationID, installationID *domain.InstallationID, final cli.FinalState, disposition result.UpdateDisposition, warnings []result.Warning, actions []cli.Action) (cli.Response, error) {
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusOK, Phase: result.PhaseComplete, Outcome: result.OutcomeCommitted,
-		Mutation: result.MutationStarted, DurableChange: result.DurableCommittedWithDiff,
-		Failure: result.FailureNone, UpdateDisposition: disposition, Warnings: warnings,
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	data, err := cli.NewMutationData(operation, commandResult, installationID, actions, final, disposition)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, &operationID, data)
-}
-
-func lifecycleRecoveryWithoutIdentity(command cli.Command, operation cli.Operation, final cli.FinalState, disposition result.UpdateDisposition, code, message string) (cli.Response, error) {
-	problem, _ := result.NewProblem(code, message, nil)
-	commandResult, err := result.New(result.Facts{
-		Status: result.StatusError, Phase: result.PhaseApplying, Outcome: result.OutcomePending,
-		Mutation: result.MutationStarted, DurableChange: result.DurableChangeNone,
-		Failure: result.FailureRecovery, UpdateDisposition: disposition, Errors: []result.Problem{problem},
-	})
-	if err != nil {
-		return cli.Response{}, err
-	}
-	data, err := cli.NewMutationData(operation, commandResult, nil, nil, final, disposition)
-	if err != nil {
-		return cli.Response{}, err
-	}
-	return cli.NewResponse(command, commandResult, nil, data)
-}
-
-func mustFinalState(installation, native, owned cli.StatePresence) cli.FinalState {
-	final, err := cli.NewFinalState(installation, native, owned)
-	if err != nil {
-		panic(err)
-	}
-	return final
-}
-
-func replaceOwnedMatching(home, path, expectedChecksum string, contents []byte) error {
-	if err := validateOwnedPath(home, path); err != nil || inspectFileDrift(path, expectedChecksum) != cli.DriftUnchanged {
-		return errors.New("owned file does not match installation state")
-	}
-	if err := diskcapacity.Require(filepath.Dir(path), uint64(len(contents))); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".ai4j-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temporary.Write(contents); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := validateOwnedPath(home, path); err != nil || inspectFileDrift(path, expectedChecksum) != cli.DriftUnchanged {
-		return errors.New("owned file changed during replacement")
-	}
-	if err := commitOwnedReplacement(temporaryPath, path); err != nil {
-		return err
-	}
-	digest := sha256Digest(contents)
-	if inspectFileDrift(path, digest) != cli.DriftUnchanged {
-		return errors.New("owned-file replacement could not be verified")
-	}
-	return nil
-}
-
-func removeOwnedMatching(home, path, expectedChecksum string) error {
-	if err := validateOwnedPath(home, path); err != nil || inspectFileDrift(path, expectedChecksum) != cli.DriftUnchanged {
-		return errors.New("owned file does not match installation state")
-	}
-	if err := os.Remove(path); err != nil {
-		return err
-	}
-	if !ownedFileAbsent(path) {
-		return errors.New("owned-file removal could not be verified")
-	}
-	return nil
-}
-
-func validateOwnedPath(home, path string) error {
-	relative, err := filepath.Rel(home, path)
-	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return errors.New("owned path is outside the user home")
-	}
-	current := home
-	for _, component := range strings.Split(filepath.Dir(relative), string(filepath.Separator)) {
-		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || hostPathUnsafe(current) {
-			return errors.New("owned path parent is unsafe")
+	catalogBefore, catalogAfter := slices.Clone(entry.CatalogAfter), slices.Clone(entry.CatalogBefore)
+	if record.Scope == "project-shared" {
+		catalogBefore, catalogAfter, err = s.planProjectSharedRollback(record, &desired, entry.CatalogBefore)
+		if err != nil {
+			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be rolled back safely")
 		}
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || hostPathUnsafe(path) {
-		return errors.New("owned path is unsafe")
-	}
-	return nil
-}
-
-func ownedFileAbsent(path string) bool {
-	_, err := os.Lstat(path)
-	return errors.Is(err, os.ErrNotExist)
-}
-
-func sha256Digest(contents []byte) string {
-	digest := sha256.Sum256(contents)
-	return fmt.Sprintf("%x", digest)
+	return lifecycleExecution{operation: cli.OperationRollback, source: report, before: &record, desired: &desired, catalog: catalogAfter, catalogBefore: catalogBefore, rules: slices.Clone(entry.RulesBefore), artifact: slices.Clone(entry.NativeArtifactBefore), actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, rollback: &entry}, cli.Response{}, false, nil
 }

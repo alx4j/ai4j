@@ -1,5 +1,5 @@
 // Package github parses and normalizes the closed GitHub source forms accepted
-// by the MVP. It never performs authentication or repository I/O.
+// by AI4J. It never performs authentication or repository I/O.
 package github
 
 import (

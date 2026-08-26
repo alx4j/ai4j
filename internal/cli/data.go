@@ -50,25 +50,6 @@ func (o Operation) command() Command {
 	}
 }
 
-func (o Operation) planCommand() Command {
-	switch o {
-	case OperationInstall:
-		return CommandPlanInstall
-	case OperationUpdate:
-		return CommandPlanUpdate
-	case OperationSync:
-		return CommandPlanSync
-	case OperationRollback:
-		return CommandPlanRollback
-	case OperationUninstall:
-		return CommandPlanUninstall
-	case OperationHistoryPurge:
-		return CommandPlanHistoryPurge
-	default:
-		return ""
-	}
-}
-
 type RefKind = gitsource.ResolvedReferenceKind
 
 const (
@@ -175,9 +156,17 @@ func (c ContentChange) valid() bool {
 	return c == ContentUnchanged || c == ContentAdded || c == ContentChanged || c == ContentRemoved
 }
 
-var contentIdentifierPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
-var environmentNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var (
+	contentIdentifierPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	sha256Pattern               = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	environmentNamePattern      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	conflictCodePattern         = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`)
+	hyphenatedIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
+	pluginIdentifierPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	doctorCheckIDPattern        = regexp.MustCompile(`^[a-z][a-z0-9_]{1,62}$`)
+	goVersionPattern            = regexp.MustCompile(`^go[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.-]+)?$`)
+	goTargetPattern             = regexp.MustCompile(`^[a-z0-9_]{1,32}$`)
+)
 
 type ComponentType string
 
@@ -440,7 +429,7 @@ func (c Condition) valid() bool {
 type Conflict struct{ code, resource, message string }
 
 func NewConflict(code, resource, message string) (Conflict, error) {
-	if !regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,63}$`).MatchString(code) || !boundedText(resource, 256, false) || !boundedText(message, 512, false) {
+	if !conflictCodePattern.MatchString(code) || !boundedText(resource, 256, false) || !boundedText(message, 512, false) {
 		return Conflict{}, fmt.Errorf("conflict is incomplete")
 	}
 	return Conflict{code: code, resource: resource, message: message}, nil
@@ -486,8 +475,7 @@ func (UsageData) cliData()            {}
 func (d UsageData) Issue() UsageIssue { return d.issue }
 func (d UsageData) Option() string    { return d.option }
 func (d UsageData) valid() bool {
-	knownOption := oneOf(d.option, "repo", "ref", "expected-commit", "yes", "json", "check-updates", "target", "host", "output", "all")
-	if d.option != "" && !knownOption {
+	if d.option != "" && !isKnownOption(d.option) {
 		return false
 	}
 	optionIssue := d.issue == UsageInapplicableOption || d.issue == UsageDuplicateOption || d.issue == UsageMissingOptionValue || d.issue == UsageEmptyOptionValue || d.issue == UsageUnexpectedOptionValue || d.issue == UsageInvalidOptionValue
@@ -495,7 +483,7 @@ func (d UsageData) valid() bool {
 		return false
 	}
 	switch d.issue {
-	case UsageMissingExecutable, UsageAlternateExecutable, UsageMissingCommand, UsageUnknownCommand, UsageMissingSubcommand, UsageUnknownSubcommand, UsageUnexpectedArgument, UsageUnknownOption, UsageMisplacedOption, UsageInapplicableOption, UsageDuplicateOption, UsageMissingOptionValue, UsageEmptyOptionValue, UsageUnexpectedOptionValue, UsageInvalidOptionValue:
+	case UsageMissingExecutable, UsageAlternateExecutable, UsageMissingCommand, UsageUnknownCommand, UsageUnexpectedArgument, UsageUnknownOption, UsageMisplacedOption, UsageInapplicableOption, UsageDuplicateOption, UsageMissingOptionValue, UsageEmptyOptionValue, UsageUnexpectedOptionValue, UsageInvalidOptionValue:
 		return true
 	default:
 		return false
@@ -874,7 +862,7 @@ func (d HistoryData) valid() bool {
 
 // RecordedSource is the source intent durably retained for an installation.
 // It deliberately omits validation-only tree and renderer provenance that the
-// MVP installation record does not own.
+// Installation status omits ownership details that are unavailable locally.
 type RecordedSource struct {
 	mode         SourceMode
 	selection    domain.SourceSelection
@@ -943,7 +931,7 @@ type Installation struct {
 }
 
 func NewInstallation(id domain.InstallationID, toolkitID, pluginID string, source RecordedSource, toolkitVersion, cliVersion, expectedNativeVersion string) (Installation, error) {
-	if !id.Valid() || !regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`).MatchString(toolkitID) || !regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`).MatchString(pluginID) || !source.valid() || !boundedText(toolkitVersion, 128, false) || !boundedText(cliVersion, 128, false) || (expectedNativeVersion != "" && !boundedText(expectedNativeVersion, 128, false)) {
+	if !id.Valid() || !hyphenatedIdentifierPattern.MatchString(toolkitID) || !pluginIdentifierPattern.MatchString(pluginID) || !source.valid() || !boundedText(toolkitVersion, 128, false) || !boundedText(cliVersion, 128, false) || (expectedNativeVersion != "" && !boundedText(expectedNativeVersion, 128, false)) {
 		return Installation{}, fmt.Errorf("installation is incomplete")
 	}
 	return Installation{id: id, toolkitID: toolkitID, pluginID: pluginID, source: source, toolkitVersion: toolkitVersion, cliVersion: cliVersion, expectedNativeVersion: expectedNativeVersion}, nil
@@ -1188,7 +1176,7 @@ func (i InstallationSummary) HistoryCount() int                   { return i.his
 func (i InstallationSummary) LastOperationID() domain.OperationID { return i.lastOperation }
 func (i InstallationSummary) HasLastOperationID() bool            { return i.lastOperation.Valid() }
 func (i InstallationSummary) valid() bool {
-	if !i.id.Valid() || !regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`).MatchString(i.toolkitID) || !i.target.Valid() || !i.scope.Valid() ||
+	if !i.id.Valid() || !hyphenatedIdentifierPattern.MatchString(i.toolkitID) || !i.target.Valid() || !i.scope.Valid() ||
 		!boundedText(i.scopeRoot, 4096, false) || (i.lifecycle != "active" && i.lifecycle != "archived") || !i.source.valid() ||
 		(i.all && (len(i.assets) != 0 || len(i.bundles) != 0)) || (!i.all && len(i.assets) == 0 && len(i.bundles) == 0) ||
 		(i.health != "healthy" && i.health != "drifted" && i.health != "unknown" && i.health != "recovery_required") || i.historyCount < 0 || i.historyCount > 1024 || i.historyCount > 0 && !i.lastOperation.Valid() {
@@ -1199,42 +1187,9 @@ func (i InstallationSummary) valid() bool {
 
 type ListData struct {
 	installations []InstallationSummary
-	migration     *StateMigration
 }
 
 func NewListData(installations []InstallationSummary) (ListData, error) {
-	return NewListDataWithMigration(installations, nil)
-}
-
-type StateMigration struct {
-	from, to int
-	changes  []string
-}
-
-func NewStateMigration(from, to int, changes []string) (StateMigration, error) {
-	value := StateMigration{from: from, to: to, changes: uniqueSortedStrings(changes)}
-	if !value.valid() {
-		return StateMigration{}, fmt.Errorf("state migration preview is incomplete")
-	}
-	return value, nil
-}
-
-func (m StateMigration) FromVersion() int  { return m.from }
-func (m StateMigration) ToVersion() int    { return m.to }
-func (m StateMigration) Changes() []string { return cloneStrings(m.changes) }
-func (m StateMigration) valid() bool {
-	if m.from < 1 || m.to <= m.from || len(m.changes) == 0 {
-		return false
-	}
-	for index, change := range m.changes {
-		if !boundedText(change, 256, false) || index > 0 && m.changes[index-1] >= change {
-			return false
-		}
-	}
-	return true
-}
-
-func NewListDataWithMigration(installations []InstallationSummary, migration *StateMigration) (ListData, error) {
 	items := append([]InstallationSummary(nil), installations...)
 	for _, item := range items {
 		if !item.valid() {
@@ -1247,32 +1202,14 @@ func NewListDataWithMigration(installations []InstallationSummary, migration *St
 		}
 		return items[left].id.String() < items[right].id.String()
 	})
-	var ownedMigration *StateMigration
-	if migration != nil {
-		if !migration.valid() {
-			return ListData{}, fmt.Errorf("list migration preview is invalid")
-		}
-		copy := *migration
-		copy.changes = cloneStrings(migration.changes)
-		ownedMigration = &copy
-	}
-	return ListData{installations: items, migration: ownedMigration}, nil
+	return ListData{installations: items}, nil
 }
 
 func (ListData) cliData() {}
 func (d ListData) Installations() []InstallationSummary {
 	return append([]InstallationSummary(nil), d.installations...)
 }
-func (d ListData) Migration() (StateMigration, bool) {
-	if d.migration == nil {
-		return StateMigration{}, false
-	}
-	return *d.migration, true
-}
 func (d ListData) valid() bool {
-	if d.migration != nil && !d.migration.valid() {
-		return false
-	}
 	for index, item := range d.installations {
 		if !item.valid() || index > 0 && (d.installations[index-1].lifecycle > item.lifecycle || d.installations[index-1].lifecycle == item.lifecycle && d.installations[index-1].id.String() >= item.id.String()) {
 			return false
@@ -1316,7 +1253,7 @@ func (c DoctorCheck) ID() string                { return c.id }
 func (c DoctorCheck) Status() DoctorCheckStatus { return c.status }
 func (c DoctorCheck) Summary() string           { return c.summary }
 func (c DoctorCheck) valid() bool {
-	return regexp.MustCompile(`^[a-z][a-z0-9_]{1,62}$`).MatchString(c.id) &&
+	return doctorCheckIDPattern.MatchString(c.id) &&
 		(c.status == DoctorCheckOK || c.status == DoctorCheckWarning || c.status == DoctorCheckError) &&
 		boundedText(c.summary, 512, false)
 }
@@ -1354,7 +1291,7 @@ func (c MCPStartupCheck) Result() string           { return c.result }
 func (c MCPStartupCheck) ExitCode() int            { return c.exitCode }
 func (c MCPStartupCheck) HasExitCode() bool        { return c.hasExitCode }
 func (c MCPStartupCheck) valid() bool {
-	if !regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`).MatchString(c.serverID) || !boundedText(c.executable, 4096, false) ||
+	if !hyphenatedIdentifierPattern.MatchString(c.serverID) || !boundedText(c.executable, 4096, false) ||
 		!boundedText(c.workingDir, 4096, false) || c.ownership != "package" ||
 		(c.result != "not_run" && c.result != "started" && c.result != "exited" && c.result != "timed_out" && c.result != "failed") ||
 		len(c.arguments) > 256 || len(c.environment) > 128 {
@@ -1366,7 +1303,7 @@ func (c MCPStartupCheck) valid() bool {
 		}
 	}
 	for index, name := range c.environment {
-		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(name) || index > 0 && c.environment[index-1] >= name {
+		if !environmentNamePattern.MatchString(name) || index > 0 && c.environment[index-1] >= name {
 			return false
 		}
 	}
@@ -1526,7 +1463,7 @@ func NewVersionData(product, executable, version string, repository domain.Repos
 	if targetOS == "windows" {
 		expectedExecutable = "ai4j.exe"
 	}
-	if product != "AI4J" || executable != expectedExecutable || !boundedText(version, 128, false) || !repository.Valid() || !commit.Valid() || !boundedText(goVersion, 64, false) || !regexp.MustCompile(`^go[0-9]+\.[0-9]+(\.[0-9]+)?([a-z0-9.-]+)?$`).MatchString(goVersion) || buildTime.IsZero() || buildTime.Year() < 0 || buildTime.Year() > 9999 || !regexp.MustCompile(`^[a-z0-9_]{1,32}$`).MatchString(targetOS) || !regexp.MustCompile(`^[a-z0-9_]{1,32}$`).MatchString(targetArch) || !defaultSource.valid() {
+	if product != "AI4J" || executable != expectedExecutable || !boundedText(version, 128, false) || !repository.Valid() || !commit.Valid() || !boundedText(goVersion, 64, false) || !goVersionPattern.MatchString(goVersion) || buildTime.IsZero() || buildTime.Year() < 0 || buildTime.Year() > 9999 || !goTargetPattern.MatchString(targetOS) || !goTargetPattern.MatchString(targetArch) || !defaultSource.valid() {
 		return VersionData{}, fmt.Errorf("version data is incomplete")
 	}
 	return VersionData{product: product, executable: executable, version: version, repository: repository, commit: commit, goVersion: goVersion, buildTime: buildTime.UTC(), targetOS: targetOS, targetArch: targetArch, defaultSource: defaultSource}, nil

@@ -76,7 +76,7 @@ func validateDataPair(command Command, commandResult result.Result, data Data) e
 			return fmt.Errorf("unavailable data requires an error or cancelled result")
 		}
 		switch command {
-		case CommandInit, CommandValidate, CommandBuild, CommandPlanInstall, CommandPlanUpdate, CommandPlanSync, CommandPlanRollback, CommandPlanUninstall, CommandPlanHistoryPurge, CommandHistory, CommandList, CommandStatus, CommandVersion:
+		case CommandInit, CommandValidate, CommandBuild, CommandHistory, CommandList, CommandStatus, CommandVersion:
 			if !neutralLifecycle(commandResult) {
 				return fmt.Errorf("read-only command requires a neutral lifecycle")
 			}
@@ -101,12 +101,13 @@ func validateDataPair(command Command, commandResult result.Result, data Data) e
 	case CommandBuild:
 		value, ok := data.(BuildData)
 		valid = ok && value.valid() && commandResult.Status() == result.StatusOK && commandResult.Phase() == result.PhaseComplete && commandResult.Outcome() == result.OutcomeCommitted && commandResult.Mutation() == result.MutationStarted && commandResult.DurableChange() == result.DurableCommittedWithDiff && commandResult.UpdateDisposition() == result.UpdateNotChecked
-	case CommandPlanInstall, CommandPlanUpdate, CommandPlanSync, CommandPlanRollback, CommandPlanUninstall, CommandPlanHistoryPurge:
-		value, ok := data.(PlanData)
-		valid = ok && value.valid() && neutralLifecycle(commandResult) && value.operation.planCommand() == command && value.disposition == commandResult.UpdateDisposition() && planConflictSemantics(value, commandResult)
 	case CommandInstall, CommandUpdate, CommandSync, CommandRollback, CommandUninstall, CommandHistoryPurge:
-		value, ok := data.(MutationData)
-		valid = ok && value.valid() && value.operation.command() == command && value.disposition == commandResult.UpdateDisposition() && sameLifecycle(value.operationResult, commandResult) && updateDispositionSemantics(commandResult)
+		switch value := data.(type) {
+		case PlanData:
+			valid = value.valid() && neutralLifecycle(commandResult) && value.operation.command() == command && value.disposition == commandResult.UpdateDisposition() && planConflictSemantics(value, commandResult)
+		case MutationData:
+			valid = value.valid() && value.operation.command() == command && value.disposition == commandResult.UpdateDisposition() && sameLifecycle(value.operationResult, commandResult) && updateDispositionSemantics(commandResult)
+		}
 	case CommandList:
 		value, ok := data.(ListData)
 		valid = ok && value.valid() && neutralLifecycle(commandResult) && commandResult.Status() == result.StatusOK && commandResult.UpdateDisposition() == result.UpdateNotChecked

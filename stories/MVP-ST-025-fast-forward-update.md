@@ -44,5 +44,5 @@ As an AI4J user, I want a stored branch installation updated only to a reviewed 
 
 ## Out of scope
 
-- Source migration, rewritten-history acceptance, automatic tag movement, private sources, SSH, or credentials.
+- Explicit source changes, rewritten-history acceptance, automatic tag movement, private sources, SSH, or credentials.
 - Automatic recovery, rollback, compensation, retained old packages, native cache management, or session activation claims.

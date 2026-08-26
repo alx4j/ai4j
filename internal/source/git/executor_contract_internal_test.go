@@ -19,10 +19,10 @@ const (
 	testObjectB = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
-func TestMVPBudgetsAndLimitsAreClosed(t *testing.T) {
+func TestBudgetsAndLimitsAreClosed(t *testing.T) {
 	t.Parallel()
 
-	execution := MVPExecutionBudget()
+	execution := DefaultExecutionBudget()
 	if !execution.Valid() || execution.Aggregate() != 5*time.Minute || execution.LocalMaximum() != 15*time.Second ||
 		execution.NetworkMaximum() != time.Minute || execution.TerminationGrace() != 2*time.Second {
 		t.Fatalf("execution budget = %#v", execution)
@@ -30,7 +30,7 @@ func TestMVPBudgetsAndLimitsAreClosed(t *testing.T) {
 	if (ExecutionBudget{}).Valid() || (ExecutionBudget{aggregate: 5 * time.Minute}).Valid() {
 		t.Fatal("partial execution budget is valid")
 	}
-	workspace := MVPWorkspaceBudget()
+	workspace := DefaultWorkspaceBudget()
 	if !workspace.Valid() || workspace.DeclaredMaximumBytes() != 1<<30 || workspace.HeadroomBytes() != 256<<20 ||
 		workspace.Enforcement() != WorkspaceEnforcementAdvisory {
 		t.Fatalf("workspace budget = %#v", workspace)
@@ -110,7 +110,7 @@ func TestRuntimeProfileBindsExactAppleGitFacts(t *testing.T) {
 	t.Parallel()
 
 	profile := AppleGit154DarwinARM64Profile()
-	if !profile.Valid() || profile.ID() != "apple_git_154_3_macos15_arm64_v1" ||
+	if !profile.Valid() || profile.ID() != "apple_git_154_3_macos15_arm64" ||
 		profile.GitVersion() != "2.39.5 (Apple Git-154.3)" || profile.HostOS() != "darwin" ||
 		profile.HostArchitecture() != "arm64" || profile.HostMajorVersion() != 15 {
 		t.Fatalf("profile = %#v", profile)
@@ -222,7 +222,7 @@ func TestGitHardenedEnvironmentIsExactAndDefensivelyCopied(t *testing.T) {
 		{"GIT_TERMINAL_PROMPT", "0"}, {"LANG", "C"}, {"LC_ALL", "C"}, {"PATH", "/dev/null"},
 	}
 	first := GitHardenedEnvironment()
-	if GitHardenedEnvironmentProfile().String() != "git_hardened_v1" || len(first) != len(want) {
+	if GitHardenedEnvironmentProfile().String() != "git_hardened" || len(first) != len(want) {
 		t.Fatalf("profile/env = %q/%d", GitHardenedEnvironmentProfile().String(), len(first))
 	}
 	for index, expected := range want {

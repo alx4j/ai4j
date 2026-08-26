@@ -124,7 +124,7 @@ func TestValidateBinaryRejectsUnsupportedReleaseTarget(t *testing.T) {
 	}
 
 	_, err := ValidateBinary(&build, revision, strings.Repeat("a", 64))
-	if err == nil || !strings.Contains(err.Error(), "not a v1 release target") {
+	if err == nil || !strings.Contains(err.Error(), "not supported for release") {
 		t.Fatalf("ValidateBinary() error = %v", err)
 	}
 }

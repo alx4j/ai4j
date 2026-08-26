@@ -124,4 +124,4 @@ Complete these technical substories in order. Each substory starts only after th
 ## Out of scope
 
 - SHA-256 Git object format.
-- In-place repository or requested-reference migration.
+- In-place repository or requested-reference changes.

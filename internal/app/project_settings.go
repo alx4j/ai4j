@@ -455,7 +455,7 @@ func projectMarketplaceAbsent(record installstate.Record) bool {
 	return err == nil && !present
 }
 
-func (v *v1LifecycleService) planProjectShared(record *installstate.Record, previous *installstate.Record) ([]byte, []byte, error) {
+func (s *lifecycleService) planProjectShared(record *installstate.Record, previous *installstate.Record) ([]byte, []byte, error) {
 	if record.Scope != "project-shared" {
 		return nil, nil, nil
 	}
@@ -493,7 +493,7 @@ func (v *v1LifecycleService) planProjectShared(record *installstate.Record, prev
 	return before, after, record.Validate()
 }
 
-func (v *v1LifecycleService) planProjectSharedRemoval(record installstate.Record) ([]byte, error) {
+func (s *lifecycleService) planProjectSharedRemoval(record installstate.Record) ([]byte, error) {
 	if record.Scope != "project-shared" {
 		return nil, nil
 	}
@@ -505,7 +505,7 @@ func (v *v1LifecycleService) planProjectSharedRemoval(record installstate.Record
 	return projectSettingsWithoutMarketplace(before, record.DeclarationID, record.SettingsCreated)
 }
 
-func (v *v1LifecycleService) planProjectSharedRollback(current installstate.Record, desired *installstate.Record, desiredEntry []byte) ([]byte, []byte, error) {
+func (s *lifecycleService) planProjectSharedRollback(current installstate.Record, desired *installstate.Record, desiredEntry []byte) ([]byte, []byte, error) {
 	path := projectSettingsPath(current)
 	before, present, err := readProjectSettings(path)
 	if err != nil {
@@ -568,18 +568,18 @@ func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
 	return document.Bytes(), nil
 }
 
-func (v *v1LifecycleService) projectSharedNativeCatalogPath(record installstate.Record) string {
-	return filepath.Join(v.base.state.DataRoot(), "state", "catalogs", record.InstallationID, ".claude-plugin", "marketplace.json")
+func (s *lifecycleService) projectSharedNativeCatalogPath(record installstate.Record) string {
+	return filepath.Join(s.state.DataRoot(), "state", "catalogs", record.InstallationID, ".claude-plugin", "marketplace.json")
 }
 
-func (v *v1LifecycleService) writeProjectSharedNativeCatalog(before, desired *installstate.Record, policy cli.ConflictPolicy) (string, error) {
+func (s *lifecycleService) writeProjectSharedNativeCatalog(before, desired *installstate.Record, policy cli.ConflictPolicy) (string, error) {
 	contents, err := projectSharedNativeCatalog(*desired)
 	if err != nil {
 		return "", err
 	}
-	path := v.projectSharedNativeCatalogPath(*desired)
+	path := s.projectSharedNativeCatalogPath(*desired)
 	if before == nil || before.Lifecycle == "archived" {
-		if err := writeOwnedNew(v.base.state.DataRoot(), path, contents); err != nil {
+		if err := writeOwnedNew(s.state.DataRoot(), path, contents); err != nil {
 			return "", err
 		}
 		return filepath.Dir(filepath.Dir(path)), nil
@@ -588,19 +588,19 @@ func (v *v1LifecycleService) writeProjectSharedNativeCatalog(before, desired *in
 	if err != nil {
 		return "", err
 	}
-	if err := mutateOwned(v.base.state.DataRoot(), path, sha256Digest(previous), contents, policy); err != nil {
+	if err := mutateOwned(s.state.DataRoot(), path, sha256Digest(previous), contents, policy); err != nil {
 		return "", err
 	}
 	return filepath.Dir(filepath.Dir(path)), nil
 }
 
-func (v *v1LifecycleService) removeProjectSharedNativeCatalog(record installstate.Record, policy cli.ConflictPolicy) error {
+func (s *lifecycleService) removeProjectSharedNativeCatalog(record installstate.Record, policy cli.ConflictPolicy) error {
 	contents, err := projectSharedNativeCatalog(record)
 	if err != nil {
 		return err
 	}
-	path := v.projectSharedNativeCatalogPath(record)
-	if err := mutateOwned(v.base.state.DataRoot(), path, sha256Digest(contents), nil, policy); err != nil {
+	path := s.projectSharedNativeCatalogPath(record)
+	if err := mutateOwned(s.state.DataRoot(), path, sha256Digest(contents), nil, policy); err != nil {
 		return err
 	}
 	for _, directory := range []string{filepath.Dir(path), filepath.Dir(filepath.Dir(path))} {
@@ -673,15 +673,15 @@ func removeCreatedProjectSettingsIfEmpty(record installstate.Record) error {
 	return applyProjectSettings(path, contents, nil)
 }
 
-func (v *v1LifecycleService) applyProjectSharedTransition(ctx context.Context, before, desired *installstate.Record, settingsBefore, rules []byte, policy cli.ConflictPolicy) error {
+func (s *lifecycleService) applyProjectSharedTransition(ctx context.Context, before, desired *installstate.Record, settingsBefore, rules []byte, policy cli.ConflictPolicy) error {
 	if desired.Lifecycle == "archived" {
 		if before == nil || before.Lifecycle != "active" {
 			return nil
 		}
-		if err := v.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(*before), "--scope", nativeScope(*before), "--keep-data"}); err != nil && policy != cli.ConflictKeep {
+		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(*before), "--scope", nativeScope(*before), "--keep-data"}); err != nil && policy != cli.ConflictKeep {
 			return err
 		}
-		if err := v.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil && policy != cli.ConflictKeep {
+		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil && policy != cli.ConflictKeep {
 			return err
 		}
 		if !projectMarketplaceAbsent(*before) {
@@ -692,11 +692,11 @@ func (v *v1LifecycleService) applyProjectSharedTransition(ctx context.Context, b
 		if err := removeCreatedProjectSettingsIfEmpty(*before); err != nil {
 			return err
 		}
-		if err := v.removeProjectSharedNativeCatalog(*before, policy); err != nil {
+		if err := s.removeProjectSharedNativeCatalog(*before, policy); err != nil {
 			return err
 		}
 		if before.Rules != (installstate.OwnedFile{}) {
-			return mutateOwned(before.ScopeRoot, v.rulesPath(*before), before.Rules.Checksum, nil, policy)
+			return mutateOwned(before.ScopeRoot, s.rulesPath(*before), before.Rules.Checksum, nil, policy)
 		}
 		return nil
 	}
@@ -714,40 +714,40 @@ func (v *v1LifecycleService) applyProjectSharedTransition(ctx context.Context, b
 	} else if inspectProjectMarketplaceDrift(*before) != cli.DriftUnchanged {
 		return errors.New("project marketplace does not match installation state")
 	}
-	catalogRoot, err := v.writeProjectSharedNativeCatalog(before, desired, policy)
+	catalogRoot, err := s.writeProjectSharedNativeCatalog(before, desired, policy)
 	if err != nil {
 		return err
 	}
 	if newInstallation {
-		if err := v.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", catalogRoot, "--scope", nativeScope(*desired)}); err != nil {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", catalogRoot, "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
 		if err := replaceProjectMarketplace(*desired, entry, true); err != nil {
 			return err
 		}
-		if err := v.runClaudeFor(ctx, *desired, []string{"plugin", "install", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
 	} else {
-		if err := v.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "update", desired.MarketplaceID, "--scope", nativeScope(*desired)}); err != nil {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "update", desired.MarketplaceID, "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
 		if err := replaceProjectMarketplace(*desired, entry, true); err != nil {
 			return err
 		}
-		if err := v.runClaudeFor(ctx, *desired, []string{"plugin", "update", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "update", nativePluginID(*desired), "--scope", nativeScope(*desired)}); err != nil {
 			return err
 		}
 	}
 	switch {
 	case newInstallation && desired.Rules != (installstate.OwnedFile{}):
-		return writeOwnedNew(desired.ScopeRoot, v.rulesPath(*desired), rules)
+		return writeOwnedNew(desired.ScopeRoot, s.rulesPath(*desired), rules)
 	case !newInstallation && before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}):
-		return writeOwnedNew(desired.ScopeRoot, v.rulesPath(*desired), rules)
+		return writeOwnedNew(desired.ScopeRoot, s.rulesPath(*desired), rules)
 	case !newInstallation && before.Rules != (installstate.OwnedFile{}) && desired.Rules == (installstate.OwnedFile{}):
-		return mutateOwned(before.ScopeRoot, v.rulesPath(*before), before.Rules.Checksum, nil, policy)
-	case !newInstallation && before.Rules != (installstate.OwnedFile{}) && (before.Rules.Checksum != desired.Rules.Checksum || inspectFileDrift(v.rulesPath(*before), before.Rules.Checksum) != cli.DriftUnchanged):
-		return mutateOwned(before.ScopeRoot, v.rulesPath(*before), before.Rules.Checksum, rules, policy)
+		return mutateOwned(before.ScopeRoot, s.rulesPath(*before), before.Rules.Checksum, nil, policy)
+	case !newInstallation && before.Rules != (installstate.OwnedFile{}) && (before.Rules.Checksum != desired.Rules.Checksum || inspectFileDrift(s.rulesPath(*before), before.Rules.Checksum) != cli.DriftUnchanged):
+		return mutateOwned(before.ScopeRoot, s.rulesPath(*before), before.Rules.Checksum, rules, policy)
 	}
 	return nil
 }

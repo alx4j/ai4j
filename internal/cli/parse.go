@@ -10,8 +10,6 @@ import (
 	"github.com/alx4j/ai4j/internal/fault"
 )
 
-const codexNativeLifecycleUnavailable = "Codex exposes plugin lifecycle only through its interactive native plugin browser; build the Codex package with ai4j, then install or manage it through /plugins or the Codex desktop plugin browser"
-
 type Parser struct{ windows bool }
 
 func NewParser(goos string) Parser { return Parser{windows: goos == "windows"} }
@@ -27,6 +25,7 @@ type parsedOptions struct {
 	hasExpected       bool
 	expectedDigest    string
 	hasExpectedDigest bool
+	dryRun            bool
 	yes               bool
 	json              bool
 	allowDirty        bool
@@ -61,26 +60,20 @@ const (
 )
 
 var commandOptions = map[Command]map[string]optionKind{
-	CommandInit:             {"target": valueOption, "output": valueOption, "examples": booleanOption, "json": booleanOption},
-	CommandValidate:         {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
-	CommandBuild:            {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "host": valueOption, "output": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
-	CommandPlanInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
-	CommandInstall:          {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandPlanUpdate:       {"installation": valueOption, "repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "conflict-policy": valueOption, "json": booleanOption},
-	CommandUpdate:           {"installation": valueOption, "repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandPlanSync:         {"installation": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "conflict-policy": valueOption, "json": booleanOption},
-	CommandSync:             {"installation": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandList:             {"target": valueOption, "scope": valueOption, "json": booleanOption},
-	CommandStatus:           {"installation": valueOption, "check-updates": booleanOption, "json": booleanOption},
-	CommandDoctor:           {"installation": valueOption, "test-mcp": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandPlanRollback:     {"installation": valueOption, "operation": valueOption, "conflict-policy": valueOption, "json": booleanOption},
-	CommandRollback:         {"installation": valueOption, "operation": valueOption, "conflict-policy": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandPlanUninstall:    {"installation": valueOption, "conflict-policy": valueOption, "json": booleanOption},
-	CommandUninstall:        {"installation": valueOption, "conflict-policy": valueOption, "yes": booleanOption, "json": booleanOption},
-	CommandHistory:          {"installation": valueOption, "json": booleanOption},
-	CommandPlanHistoryPurge: {"installation": valueOption, "operation": valueOption, "expired": booleanOption, "all": booleanOption, "json": booleanOption},
-	CommandHistoryPurge:     {"installation": valueOption, "operation": valueOption, "expired": booleanOption, "all": booleanOption, "yes": booleanOption, "json": booleanOption},
-	CommandVersion:          {"json": booleanOption},
+	CommandInit:         {"target": valueOption, "output": valueOption, "examples": booleanOption, "json": booleanOption},
+	CommandValidate:     {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
+	CommandBuild:        {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "host": valueOption, "output": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
+	CommandInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandUpdate:       {"repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandSync:         {"all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandList:         {"target": valueOption, "scope": valueOption, "json": booleanOption},
+	CommandStatus:       {"installation": valueOption, "check-updates": booleanOption, "json": booleanOption},
+	CommandDoctor:       {"test-mcp": valueOption, "yes": booleanOption, "json": booleanOption},
+	CommandRollback:     {"operation": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandUninstall:    {"conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandHistory:      {"json": booleanOption},
+	CommandHistoryPurge: {"operation": valueOption, "expired": booleanOption, "all": booleanOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandVersion:      {"json": booleanOption},
 }
 
 var knownOptions = map[string]struct{}{
@@ -88,24 +81,38 @@ var knownOptions = map[string]struct{}{
 	"target": {}, "host": {}, "output": {}, "all": {}, "asset": {}, "bundle": {}, "examples": {}, "scope": {}, "project": {}, "installation": {}, "conflict-policy": {}, "operation": {}, "test-mcp": {}, "expired": {}, "selection": {}, "force": {}, "dry-run": {},
 }
 
+func isKnownOption(name string) bool {
+	_, ok := knownOptions[name]
+	return ok
+}
+
 func (p Parser) Parse(argv []string) (Request, error) {
 	jsonRequested := containsExactJSON(argv)
 	if len(argv) == 0 {
-		return nil, usage(UsageMissingExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonEmpty, nil)
+		return nil, newUsageError(UsageMissingExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonEmpty, nil)
 	}
 	if !p.validExecutable(argv[0]) {
-		return nil, usage(UsageAlternateExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonUnknownValue, nil)
+		return nil, newUsageError(UsageAlternateExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonUnknownValue, nil)
 	}
 	if len(argv) == 1 {
-		return nil, usage(UsageMissingCommand, "", "", jsonRequested, "cli.command", fault.ReasonEmpty, nil)
+		return nil, newUsageError(UsageMissingCommand, "", "", jsonRequested, "cli.command", fault.ReasonEmpty, nil)
 	}
 	command, optionStart, issue := parseCommand(argv[1:])
 	if issue != "" {
-		return nil, usage(issue, "", "", jsonRequested, "cli.command", fault.ReasonUnknownValue, nil)
+		return nil, newUsageError(issue, "", "", jsonRequested, "cli.command", fault.ReasonUnknownValue, nil)
 	}
-	options, err := parseOptions(command, argv[1+optionStart:], jsonRequested)
+	arguments := argv[1+optionStart:]
+	installation, hasInstallation, arguments, err := parseInstallationArgument(command, arguments, jsonRequested)
 	if err != nil {
 		return nil, err
+	}
+	options, err := parseOptions(command, arguments, jsonRequested)
+	if err != nil {
+		return nil, err
+	}
+	if hasInstallation {
+		options.installation = installation
+		options.hasInstallation = true
 	}
 	if err := validateOptionRelationships(command, options, jsonRequested); err != nil {
 		return nil, err
@@ -118,17 +125,14 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	switch command {
 	case CommandInit:
 		if len(options.targets) == 0 {
-			return nil, usage(UsageMissingOptionValue, command, "target", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "target", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if options.output == "" {
-			return nil, usage(UsageMissingOptionValue, command, "output", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "output", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		return InitRequest{targets: append([]BuildTarget(nil), options.targets...), output: options.output, examples: options.examples, mode: output}, nil
 	case CommandValidate:
-		if len(options.targets) == 1 && options.targets[0] != BuildTargetClaude {
-			return UnsupportedRequest{command: command, output: output, message: codexNativeLifecycleUnavailable}, nil
-		}
-		return ValidateRequest{source: source, output: output}, nil
+		return ValidateRequest{source: source, target: firstTarget(options.targets), output: output}, nil
 	case CommandBuild:
 		required := []struct {
 			name    string
@@ -140,73 +144,37 @@ func (p Parser) Parse(argv []string) (Request, error) {
 		}
 		for _, option := range required {
 			if !option.present {
-				return nil, usage(UsageMissingOptionValue, command, option.name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+				return nil, newUsageError(UsageMissingOptionValue, command, option.name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 			}
 		}
 		hasExplicitSelection := len(options.assets) != 0 || len(options.bundles) != 0
 		if !options.all && !hasExplicitSelection {
-			return nil, usage(UsageMissingOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if options.all && hasExplicitSelection {
-			return nil, usage(UsageInvalidOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+			return nil, newUsageError(UsageInvalidOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 		}
 		return BuildRequest{source: source, target: options.targets[0], host: options.host, output: options.output, all: options.all, assets: append([]string(nil), options.assets...), bundles: append([]string(nil), options.bundles...), mode: output}, nil
-	case CommandPlanInstall:
-		if usesV1InstallOptions(options) {
-			if len(options.targets) == 1 && options.targets[0] != BuildTargetClaude {
-				return UnsupportedRequest{command: command, output: output, message: codexNativeLifecycleUnavailable}, nil
-			}
-			return PlanInstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, v1: true, output: output}, nil
-		}
-		return PlanInstallRequest{source: source, output: output}, nil
 	case CommandInstall:
-		if usesV1InstallOptions(options) || options.hasExpectedDigest {
-			if len(options.targets) == 1 && options.targets[0] != BuildTargetClaude {
-				return UnsupportedRequest{command: command, output: output, message: codexNativeLifecycleUnavailable}, nil
-			}
-			return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, v1: true, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, yes: options.yes, output: output}, nil
-		}
-		return InstallRequest{source: source, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, yes: options.yes, output: output}, nil
-	case CommandPlanUpdate:
-		if options.hasInstallation || options.hasRepository || options.hasReference || options.allowDirty || options.hasConflictPolicy {
-			return PlanUpdateRequest{installation: options.installation, hasInstallation: options.hasInstallation, source: source, policy: conflictPolicy(options), v1: true, output: output}, nil
-		}
-		return PlanUpdateRequest{output: output}, nil
+		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandUpdate:
-		if options.hasInstallation || options.hasRepository || options.hasReference || options.allowDirty || options.hasExpectedDigest || options.hasConflictPolicy {
-			return UpdateRequest{installation: options.installation, hasInstallation: options.hasInstallation, source: source, policy: conflictPolicy(options), v1: true, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, yes: options.yes, output: output}, nil
-		}
-		return UpdateRequest{expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, yes: options.yes, output: output}, nil
-	case CommandPlanSync:
-		return PlanSyncRequest{installation: options.installation, selection: selectionOptions(options), allowDirty: options.allowDirty, policy: conflictPolicy(options), output: output}, nil
+		return UpdateRequest{installation: options.installation, source: source, policy: conflictPolicy(options), expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandSync:
-		return SyncRequest{installation: options.installation, selection: selectionOptions(options), allowDirty: options.allowDirty, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, policy: conflictPolicy(options), yes: options.yes, output: output}, nil
+		return SyncRequest{installation: options.installation, selection: selectionOptions(options), allowDirty: options.allowDirty, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandDoctor:
 		return DoctorRequest{installation: options.installation, testMCP: options.testMCP, yes: options.yes, output: output}, nil
-	case CommandPlanRollback:
-		return PlanRollbackRequest{installation: options.installation, operation: options.operation, hasOperation: options.hasOperation, policy: conflictPolicy(options), output: output}, nil
 	case CommandRollback:
-		return RollbackRequest{installation: options.installation, operation: options.operation, hasOperation: options.hasOperation, policy: conflictPolicy(options), yes: options.yes, output: output}, nil
+		return RollbackRequest{installation: options.installation, operation: options.operation, hasOperation: options.hasOperation, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandHistory:
 		return HistoryRequest{installation: options.installation, output: output}, nil
-	case CommandPlanHistoryPurge:
-		return PlanHistoryPurgeRequest{installation: options.installation, selection: historyPurgeSelection(options), operation: options.operation, output: output}, nil
 	case CommandHistoryPurge:
-		return HistoryPurgeRequest{installation: options.installation, selection: historyPurgeSelection(options), operation: options.operation, yes: options.yes, output: output}, nil
+		return HistoryPurgeRequest{installation: options.installation, selection: historyPurgeSelection(options), operation: options.operation, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandList:
 		return ListRequest{target: firstTarget(options.targets), hasTarget: len(options.targets) == 1, scope: options.scope, hasScope: options.hasScope, output: output}, nil
 	case CommandStatus:
 		return StatusRequest{installation: options.installation, hasInstallation: options.hasInstallation, checkUpdates: options.checkUpdates, output: output}, nil
-	case CommandPlanUninstall:
-		if options.hasInstallation || options.hasConflictPolicy {
-			return PlanUninstallRequest{installation: options.installation, hasInstallation: options.hasInstallation, policy: conflictPolicy(options), v1: true, output: output}, nil
-		}
-		return PlanUninstallRequest{output: output}, nil
 	case CommandUninstall:
-		if options.hasInstallation || options.hasConflictPolicy {
-			return UninstallRequest{installation: options.installation, hasInstallation: options.hasInstallation, policy: conflictPolicy(options), v1: true, yes: options.yes, output: output}, nil
-		}
-		return UninstallRequest{yes: options.yes, output: output}, nil
+		return UninstallRequest{installation: options.installation, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandVersion:
 		return VersionRequest{output: output}, nil
 	default:
@@ -259,34 +227,28 @@ func parseCommand(arguments []string) (Command, int, UsageIssue) {
 		return CommandUninstall, 1, ""
 	case "version":
 		return CommandVersion, 1, ""
-	case "plan":
-		if len(arguments) < 2 {
-			return "", 0, UsageMissingSubcommand
-		}
-		if strings.HasPrefix(arguments[1], "-") {
-			return "", 0, UsageMissingSubcommand
-		}
-		switch arguments[1] {
-		case "install":
-			return CommandPlanInstall, 2, ""
-		case "update":
-			return CommandPlanUpdate, 2, ""
-		case "sync":
-			return CommandPlanSync, 2, ""
-		case "rollback":
-			return CommandPlanRollback, 2, ""
-		case "uninstall":
-			return CommandPlanUninstall, 2, ""
-		case "history":
-			if len(arguments) >= 3 && arguments[2] == "purge" {
-				return CommandPlanHistoryPurge, 3, ""
-			}
-			return "", 0, UsageUnknownSubcommand
-		default:
-			return "", 0, UsageUnknownSubcommand
-		}
 	}
 	return "", 0, UsageUnknownCommand
+}
+
+func parseInstallationArgument(command Command, arguments []string, jsonRequested bool) (domain.InstallationID, bool, []string, error) {
+	if !usesPositionalInstallation(command) || len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
+		return domain.InstallationID{}, false, arguments, nil
+	}
+	installation, err := domain.NewInstallationID(arguments[0])
+	if err != nil {
+		return domain.InstallationID{}, false, nil, newUsageError(UsageInvalidOptionValue, command, "installation", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
+	}
+	return installation, true, arguments[1:], nil
+}
+
+func usesPositionalInstallation(command Command) bool {
+	switch command {
+	case CommandUpdate, CommandSync, CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseOptions(command Command, arguments []string, jsonRequested bool) (parsedOptions, error) {
@@ -296,7 +258,7 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 	for index := 0; index < len(arguments); index++ {
 		token := arguments[index]
 		if token == "--" || !strings.HasPrefix(token, "--") || token == "-" {
-			return parsedOptions{}, usage(UsageUnexpectedArgument, command, "", jsonRequested, "cli.argument", fault.ReasonInvalidFormat, nil)
+			return parsedOptions{}, newUsageError(UsageUnexpectedArgument, command, "", jsonRequested, "cli.argument", fault.ReasonInvalidFormat, nil)
 		}
 		nameValue := strings.SplitN(strings.TrimPrefix(token, "--"), "=", 2)
 		name := nameValue[0]
@@ -304,20 +266,20 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 		if !ok || name == "" {
 			issue := UsageUnknownOption
 			safeOption := ""
-			if _, known := knownOptions[name]; known {
+			if isKnownOption(name) {
 				issue = UsageInapplicableOption
 				safeOption = name
 			}
-			return parsedOptions{}, usage(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
+			return parsedOptions{}, newUsageError(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
 		}
-		repeatable := name == "asset" || name == "bundle" || command == CommandInit && name == "target"
+		repeatable := name == "asset" || name == "bundle" || (command == CommandInit || command == CommandValidate) && name == "target"
 		if _, duplicate := seen[name]; duplicate && !repeatable {
-			return parsedOptions{}, usage(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
+			return parsedOptions{}, newUsageError(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
 		}
 		seen[name] = struct{}{}
 		if kind == booleanOption {
 			if len(nameValue) == 2 {
-				return parsedOptions{}, usage(UsageUnexpectedOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+				return parsedOptions{}, newUsageError(UsageUnexpectedOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 			}
 			setBoolean(&result, name)
 			continue
@@ -327,16 +289,16 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 			value = nameValue[1]
 		} else {
 			if index+1 >= len(arguments) || strings.HasPrefix(arguments[index+1], "--") {
-				return parsedOptions{}, usage(UsageMissingOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+				return parsedOptions{}, newUsageError(UsageMissingOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 			}
 			index++
 			value = arguments[index]
 		}
 		if value == "" {
-			return parsedOptions{}, usage(UsageEmptyOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return parsedOptions{}, newUsageError(UsageEmptyOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if err := setValue(&result, name, value); err != nil {
-			return parsedOptions{}, usage(UsageInvalidOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
+			return parsedOptions{}, newUsageError(UsageInvalidOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
 		}
 	}
 	return result, nil
@@ -348,6 +310,8 @@ func setBoolean(options *parsedOptions, name string) {
 		options.json = true
 	case "yes":
 		options.yes = true
+	case "dry-run":
+		options.dryRun = true
 	case "check-updates":
 		options.checkUpdates = true
 	case "allow-dirty":
@@ -498,10 +462,10 @@ func historyPurgeSelection(options parsedOptions) HistoryPurgeSelection {
 
 func validateOptionRelationships(command Command, options parsedOptions, jsonRequested bool) error {
 	invalid := func(option string) error {
-		return usage(UsageInvalidOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+		return newUsageError(UsageInvalidOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 	}
 	missing := func(option string) error {
-		return usage(UsageMissingOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+		return newUsageError(UsageMissingOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 	}
 	if options.hasSource && (options.hasRepository || options.hasReference) {
 		return invalid("source")
@@ -515,7 +479,16 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	if options.hasExpectedDigest && command == CommandInstall && !options.hasSource {
 		return invalid("expected-source-digest")
 	}
-	if options.hasConflictPolicy && options.conflictPolicy == "interactive" && (jsonRequested || isPlanCommand(command)) {
+	if options.dryRun && options.yes {
+		return invalid("yes")
+	}
+	if options.dryRun && options.hasExpected {
+		return invalid("expected-commit")
+	}
+	if options.dryRun && options.hasExpectedDigest {
+		return invalid("expected-source-digest")
+	}
+	if options.hasConflictPolicy && options.conflictPolicy == "interactive" && (jsonRequested || options.dryRun) {
 		return invalid("conflict-policy")
 	}
 	if options.hasProject && (!options.hasScope || options.scope == ScopeUser) {
@@ -527,8 +500,11 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	}
 	switch command {
 	case CommandValidate:
-		if (options.hasSource || options.allowDirty) && len(options.targets) == 0 {
+		if len(options.targets) == 0 {
 			return missing("target")
+		}
+		if len(options.targets) > 1 {
+			return invalid("target")
 		}
 		if options.allowDirty && !options.hasSource {
 			return invalid("allow-dirty")
@@ -537,33 +513,30 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if options.allowDirty && !options.hasSource {
 			return invalid("allow-dirty")
 		}
-	case CommandPlanInstall, CommandInstall:
+	case CommandInstall:
 		if options.hasInstallation {
 			if options.hasRepository || options.hasReference || options.hasSource || len(options.targets) != 0 || options.hasScope || options.hasProject || hasSelection || options.hasExpected || options.hasExpectedDigest {
 				return invalid("installation")
 			}
 			return nil
 		}
-		if usesV1InstallOptions(options) || options.hasExpectedDigest {
-			if len(options.targets) == 0 {
-				return missing("target")
-			}
-			if !options.hasScope {
-				return missing("scope")
-			}
-			if !hasSelection {
-				return missing("all")
-			}
-			if options.allowDirty && !options.hasSource {
-				return invalid("allow-dirty")
-			}
+		if len(options.targets) == 0 {
+			return missing("target")
 		}
-	case CommandPlanUpdate, CommandUpdate:
-		usesV1 := options.hasInstallation || options.hasRepository || options.hasReference || options.allowDirty || options.hasExpectedDigest || options.hasConflictPolicy
-		if usesV1 && !options.hasInstallation {
+		if !options.hasScope {
+			return missing("scope")
+		}
+		if !hasSelection {
+			return missing("all")
+		}
+		if options.allowDirty && !options.hasSource {
+			return invalid("allow-dirty")
+		}
+	case CommandUpdate:
+		if !options.hasInstallation {
 			return missing("installation")
 		}
-	case CommandPlanSync, CommandSync:
+	case CommandSync:
 		if !options.hasInstallation {
 			return missing("installation")
 		}
@@ -574,14 +547,11 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if !options.hasInstallation {
 			return missing("installation")
 		}
-	case CommandPlanRollback, CommandRollback, CommandPlanUninstall, CommandUninstall, CommandHistory:
-		if (command == CommandPlanUninstall || command == CommandUninstall) && !options.hasInstallation && !options.hasConflictPolicy {
-			return nil
-		}
+	case CommandRollback, CommandUninstall, CommandHistory:
 		if !options.hasInstallation {
 			return missing("installation")
 		}
-	case CommandPlanHistoryPurge, CommandHistoryPurge:
+	case CommandHistoryPurge:
 		if !options.hasInstallation {
 			return missing("installation")
 		}
@@ -600,14 +570,6 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		}
 	}
 	return nil
-}
-
-func usesV1InstallOptions(options parsedOptions) bool {
-	return options.hasSource || options.hasInstallation || len(options.targets) != 0 || options.hasScope || options.hasProject || options.all || len(options.assets) != 0 || len(options.bundles) != 0 || options.allowDirty
-}
-
-func isPlanCommand(command Command) bool {
-	return command == CommandPlanInstall || command == CommandPlanUpdate || command == CommandPlanSync || command == CommandPlanRollback || command == CommandPlanUninstall || command == CommandPlanHistoryPurge
 }
 
 func selectionIdentifier(value string) bool {
@@ -629,8 +591,4 @@ func containsExactJSON(arguments []string) bool {
 		}
 	}
 	return false
-}
-
-func usage(issue UsageIssue, command Command, option string, jsonRequested bool, field string, reason fault.InvalidReason, cause error) *UsageError {
-	return newUsageError(issue, command, option, jsonRequested, field, reason, cause)
 }
