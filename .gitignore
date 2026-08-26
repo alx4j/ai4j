@@ -1,1 +1,11 @@
 /dist/
+
+# Local project history; intentionally not published.
+/BACKLOG.md
+/COMPATIBILITY.md
+/MVP_IMPLEMENTATION_PLAN.md
+/MVP_REQUIREMENTS.md
+/state.md
+/USER_GUIDE.md
+/V1_IMPLEMENTATION_PLAN.md
+/V1_REQUIREMENTS.md
