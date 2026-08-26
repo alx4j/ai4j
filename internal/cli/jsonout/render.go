@@ -1,4 +1,4 @@
-// Package jsonout renders schema-version-1 CLI responses as JSON.
+// Package jsonout renders CLI responses as stable JSON.
 package jsonout
 
 import (
@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/alx4j/ai4j/internal/cli"
-	"github.com/alx4j/ai4j/internal/cli/jsonv1"
+	"github.com/alx4j/ai4j/internal/cli/jsonwire"
 	"github.com/alx4j/ai4j/internal/result"
 )
 
@@ -22,7 +22,7 @@ func Render(output io.Writer, response cli.Response) (result.ExitCode, error) {
 		return exitCode, fmt.Errorf("render JSON: output is required")
 	}
 
-	document, err := jsonv1.Marshal(response)
+	document, err := jsonwire.Marshal(response)
 	if err != nil {
 		return exitCode, fmt.Errorf("render JSON: %w", err)
 	}

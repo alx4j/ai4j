@@ -140,8 +140,11 @@ func (s Store) writeHistory(entry HistoryEntry, createOnly bool, expected []byte
 		_ = temporary.Close()
 		_ = os.Remove(temporaryPath)
 	}()
-	if temporary.Chmod(0o600) != nil || writeAndSync(temporary, contents) != nil {
-		return fmt.Errorf("write history entry")
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("secure history temporary file: %w", err)
+	}
+	if err := writeAndSync(temporary, contents); err != nil {
+		return fmt.Errorf("write history entry: %w", err)
 	}
 	if createOnly {
 		if err := os.Link(temporaryPath, path); err != nil {

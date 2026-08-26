@@ -1,0 +1,91 @@
+package app
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/alx4j/ai4j/internal/cli"
+	"github.com/alx4j/ai4j/internal/domain"
+	"github.com/alx4j/ai4j/internal/installstate"
+	gitsource "github.com/alx4j/ai4j/internal/source/git"
+	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	validation "github.com/alx4j/ai4j/internal/validate"
+)
+
+func testPlanSourceFrom(t *testing.T, options cli.SourceOptions, commit string) cli.Source {
+	t.Helper()
+	input, err := githubsource.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
+	if err != nil {
+		t.Fatal(err)
+	}
+	effective, err := githubsource.Resolve(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := gitsource.NewResolutionRequest(effective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertisement, err := gitsource.ParseRemoteAdvertisement(request, []byte("ref: refs/heads/main\tHEAD\n"+commit+"\tHEAD\n"+commit+"\trefs/heads/main\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution, err := gitsource.ResolveReference(request, advertisement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := gitsource.NewSelectedObjectProof(resolution, []byte("commit\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenCommit, err := gitsource.NewDirectProvenCommit(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := gitsource.NewCommitTreeProof(provenCommit, []byte(strings.Repeat("b", 40)+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenance, err := gitsource.NewSourceProvenance(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := domain.NewRenderedDigest(strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := domain.NewBuildCommit(strings.Repeat("d", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := gitsource.NewRenderedProvenance(provenance, digest, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := cli.NewSource(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
+func testInstallationRecord(refKind, commit string) installstate.Record {
+	requested := "main"
+	scopeRoot, _ := filepath.Abs(".")
+	return installstate.Record{
+		SchemaVersion: installstate.SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j", PluginID: "ai4j-default",
+		Source: installstate.Source{Mode: "github", Selection: "explicit", Repository: "github.com/alx4j/ai4j", RequestedRef: &requested, RefKind: refKind, Commit: commit, RenderedDigest: strings.Repeat("e", 64)},
+		Target: "claude", Host: "darwin-arm64", Scope: "user", ScopeRoot: scopeRoot, Lifecycle: "active",
+		Selection:       installstate.Selection{All: true, Assets: []string{}, Bundles: []string{}, Resolved: []string{"ai4j-rules"}},
+		NativeResources: []string{"claude:ai4j-default@ai4j", "claude:marketplace:ai4j"}, Health: "healthy", AI4JVersion: "0.0.0-dev",
+		Catalog:       installstate.OwnedFile{Path: "state/catalog/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
+		Rules:         installstate.OwnedFile{Path: ".claude/rules/ai4j.md", Checksum: strings.Repeat("f", 64)},
+		LastOperation: installstate.LastOperation{ID: "operation-001", Timestamp: "2026-08-24T12:00:00Z"},
+	}
+}
+
+func testLifecycleReport(t *testing.T) validation.Report {
+	t.Helper()
+	return validation.Report{Source: testPlanSourceFrom(t, cli.SourceOptions{}, strings.Repeat("a", 40))}
+}

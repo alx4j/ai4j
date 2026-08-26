@@ -7,7 +7,7 @@ import (
 
 func TestCollisionKeyValidityEnforcesCanonicalSizeCeiling(t *testing.T) {
 	t.Parallel()
-	key := CollisionKey{version: collisionKeyVersionV1, canonical: strings.Repeat("a", MaximumCollisionKeyBytes)}
+	key := CollisionKey{canonical: strings.Repeat("a", MaximumCollisionKeyBytes)}
 	if !key.Valid() {
 		t.Fatal("exact collision-key ceiling rejected")
 	}

@@ -51,7 +51,7 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 				if err := json.Unmarshal(snapshots[len(snapshots)-1]["ai4j-build.json"], &manifest); err != nil {
 					t.Fatal(err)
 				}
-				if manifest.SourceCommit != testCommit || manifest.SourceDigest == "" || manifest.CLIBuild != testBuild || manifest.TargetProfile == "" || !manifest.Reproducible || len(manifest.Mappings) != 6 || len(manifest.Selection) != 6 || manifest.Migration != nil {
+				if manifest.SourceCommit != testCommit || manifest.SourceDigest == "" || manifest.CLIBuild != testBuild || manifest.TargetProfile == "" || !manifest.Reproducible || len(manifest.Mappings) != 6 || len(manifest.Selection) != 6 {
 					t.Fatalf("build manifest = %#v", manifest)
 				}
 				if test.target == "claude" {
@@ -204,31 +204,6 @@ func TestBuildRejectsUnknownAssetBeforePublishing(t *testing.T) {
 	_, statErr := os.Lstat(output)
 	if report.Failure != FailureValidation || len(report.Problems) != 1 || report.Problems[0].Code() != "unknown_asset" || !os.IsNotExist(statErr) {
 		t.Fatalf("failure=%s problems=%v outputError=%v", report.Failure, report.Problems, statErr)
-	}
-}
-
-func TestBuildSchemaOneProducesMigrationPreview(t *testing.T) {
-	files := firstPartyFiles(t)
-	files["plugins/ai4j-default/.claude-plugin/plugin.json"] = []byte("{\n  \"name\": \"ai4j-default\",\n  \"description\": \"Legacy AI4J toolkit\"\n}\n")
-	files["toolkit.json"] = []byte(`{
-  "schemaVersion": 1,
-  "toolkit": {"id": "ai4j"},
-  "marketplace": {"id": "ai4j", "path": ".claude-plugin/marketplace.json"},
-  "plugin": {"id": "ai4j-default", "path": "plugins/ai4j-default"},
-  "sharedRules": [{"id": "ai4j-rules", "path": "toolkit/rules/ai4j.md"}],
-  "executables": [{"id": "claude-mcp", "command": "claude", "ownership": "host", "dependency": "required"}]
-}`)
-	service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: &fixtureRunner{files: files}, TempRoot: t.TempDir()})
-	output := filepath.Join(t.TempDir(), "legacy")
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
-	report := service.Build(context.Background(), request.(cli.BuildRequest))
-	if report.Failure != FailureNone {
-		t.Fatalf("legacy build failure=%s problems=%v", report.Failure, report.Problems)
-	}
-	var manifest buildManifest
-	content, err := os.ReadFile(filepath.Join(output, "ai4j-build.json"))
-	if err != nil || json.Unmarshal(content, &manifest) != nil || manifest.Migration == nil || manifest.Migration.FromSchema != 1 || manifest.Migration.ToSchema != 2 || len(manifest.Migration.Review) == 0 {
-		t.Fatalf("migration manifest=%#v readError=%v", manifest.Migration, err)
 	}
 }
 

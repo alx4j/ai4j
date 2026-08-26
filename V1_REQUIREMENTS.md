@@ -256,13 +256,13 @@ Assets may declare dependencies on other assets in the same toolkit. The resolve
 
 Remote package dependencies and arbitrary lifecycle dependencies remain unsupported.
 
-### V1-FR-04 — Schema migration
+### V1-FR-04 — Canonical schemas
 
-The CLI must validate known schema versions and reject unknown future versions. When an older supported schema can be upgraded, `ai4j build` or an explicit migration operation must produce a previewable migration without silently rewriting the source.
+The CLI must accept only the canonical toolkit, installation-state, history, and journal schemas defined for the first public release. Any other schema version must fail closed without rewriting source or state.
 
-Migration output must identify changed fields, defaults, target mappings, and any behavior that requires author review.
+AI4J has no runtime upgrade path for unreleased development formats. Authors must regenerate an outdated toolkit manifest, and users must remove outdated local development state before retrying. A future public-format upgrade requires an explicit release requirement and compatibility design; it must not be implemented speculatively.
 
-Installation-state and history-schema migrations are separate from toolkit-manifest migration. They must be versioned, planned, exclusively locked, journaled, recoverable, and committed atomically with ownership state. An unknown newer state, journal, or history schema must block mutation without reinterpretation.
+State and history writes remain atomic, exclusively locked where required, and recoverable for interrupted current-format operations. Unknown schema versions must block mutation without reinterpretation.
 
 ## 8. Targets, hosts, and scopes
 
@@ -347,7 +347,7 @@ Every installation must also have an immutable generated installation ID used by
 
 Project-shared declarations must additionally use a stable manifest-defined `declarationId`, defaulting deterministically to the toolkit identifier when omitted. It is part of tracked ownership markers and filenames and must be identical for every collaborator. The private installation ID remains per user and canonical root. Status, ownership, and history must link both identifiers.
 
-Once project-shared state exists, its declaration ID is immutable. A proposed change must fail as an ownership migration conflict rather than create a second tracked declaration.
+Once project-shared state exists, its declaration ID is immutable. A proposed change must fail as an ownership conflict rather than create a second tracked declaration.
 
 The same identity tuple always reconciles the existing installation; “multiple installations of one toolkit” means distinct target/scope/root tuples. For user scope, the canonical scope root is the canonical current-user home and private-state domain.
 
@@ -359,7 +359,7 @@ An archived installation may be inspected, have history purged, roll back its re
 
 State must be independent by installation while shared-resource ownership is coordinated globally. It must include the canonical scope root, source mode and commit/digest, selection intent and resolved closure, shared-resource ownership references, native-resource keys, history references, native identifiers, checksums, and health. These facts must never be inferred from another installation merely because toolkit IDs match.
 
-An in-place source or reference migration must preserve the toolkit identifier and installation ID. A source declaring a different toolkit identifier is a separate installation and must not inherit ownership.
+An in-place source or reference change must preserve the toolkit identifier and installation ID. A source declaring a different toolkit identifier is a separate installation and must not inherit ownership.
 
 ### V1-FR-09 — Asset and bundle selection
 
@@ -400,13 +400,13 @@ The `github.com/alx4j/ai4j` repository must retain its first-party toolkit and p
 
 Submodules, Git LFS expansion, repository hooks, external filters, unsafe transports, credential-bearing URLs, dirty source snapshots, and untracked installation bytes remain unsupported for GitHub installations.
 
-### V1-FR-12 — Source and reference migration
+### V1-FR-12 — Source and reference changes
 
-An existing installation may migrate to another accepted GitHub repository or reference only through an explicit update request.
+An existing installation may switch to another accepted GitHub repository or reference only through an explicit update request.
 
-Omitting `--repo` and `--ref` during update always means the installation's stored source, never the current AI4J release default. A change to the compiled-in default must not initiate or imply a source migration.
+Omitting `--repo` and `--ref` during update always means the installation's stored source, never the current AI4J release default. A change to the compiled-in default must not initiate or imply a source change.
 
-The migration plan must show:
+The source-change plan must show:
 
 - Old and new canonical repository identities
 - Old requested reference and installed commit
@@ -416,7 +416,7 @@ The migration plan must show:
 - Ownership transfers and resources to remove
 - Compatibility, trust, and rollback implications
 
-Repository or reference migration requires explicit approval even when no rendered byte changes.
+Changing the repository or reference requires explicit approval even when no rendered byte changes.
 
 ### V1-FR-13 — Local-development source
 
@@ -519,14 +519,14 @@ Update must support:
 - Source-level asset diff
 - Selected-asset and dependency diff
 - Target-native rendered diff
-- Compatibility and schema-migration warnings
+- Compatibility warnings
 - Active instruction, executable, hook, and MCP diff
 
-No pinned reference, source migration, or non-fast-forward tracked reference may move without explicit new source/reference input, exact-commit disclosure, and approval. A stored tracked branch may advance automatically only by fast-forward.
+No pinned reference, explicit source change, or non-fast-forward tracked reference may move without explicit new source/reference input, exact-commit disclosure, and approval. A stored tracked branch may advance automatically only by fast-forward.
 
-`--repo` without `--ref` selects the new repository's default branch. `--ref` without `--repo` applies to the stored GitHub repository. A rewritten branch or moved tag requires explicit reference input plus a matching `--expected-commit`. Expected revision mismatch is a pre-mutation conflict. Source migration must not change the toolkit identifier.
+`--repo` without `--ref` selects the new repository's default branch. `--ref` without `--repo` applies to the stored GitHub repository. A rewritten branch or moved tag requires explicit reference input plus a matching `--expected-commit`. Expected revision mismatch is a pre-mutation conflict. A source change must not change the toolkit identifier.
 
-GitHub-to-local and local-to-GitHub in-place migration are not supported in v1. For an existing local installation, update uses its stored canonical checkout; `--repo` and `--ref` are invalid, while `--allow-dirty` and `--expected-source-digest` apply. Changing that checkout path requires uninstall and install. For a GitHub installation, local-source options are invalid.
+Switching an existing installation between GitHub and local source modes is not supported. For an existing local installation, update uses its stored canonical checkout; `--repo` and `--ref` are invalid, while `--allow-dirty` and `--expected-source-digest` apply. Changing that checkout path requires uninstall and install. For a GitHub installation, local-source options are invalid.
 
 ### V1-FR-20 — Status and list
 
@@ -798,7 +798,7 @@ ai4j sync <id>
                [--yes] [--json]
 
 ai4j list [--target <claude|codex>] [--scope <scope>] [--json]
-ai4j status --installation <id> [--check-updates] [--json]
+ai4j status [--installation <id>] [--check-updates] [--json]
 ai4j doctor <id> [--test-mcp <server-id>] [--yes] [--json]
 
 ai4j rollback <id> --dry-run [--operation <operation-id>]
@@ -975,7 +975,7 @@ The estimate must cover:
 - Security exposure, abandoned-entry cleanup, and source-limit enforcement
 - macOS and Windows implementation effort
 
-The output must be an architecture decision record with prototype evidence, normative/CLI/JSON changes, and migration impact. Until it is approved, Option A remains normative and no persistent toolkit-managed source cache may be created.
+The output must be an architecture decision record with prototype evidence, normative/CLI/JSON changes, and adoption impact. Until it is approved, Option A remains normative and no persistent toolkit-managed source cache may be created.
 
 If any persistent cache is selected, entries must be immutable and keyed by a hash of sanitized canonical repository identity plus exact commit, never raw path text. Incomplete entries must be ignored until atomically promoted. Origin mismatch, dirty or untracked bytes, unsafe file types, format mismatch, or checksum failure must invalidate the entry before use. Cache is disposable and must never be authoritative installation or rollback state.
 
@@ -1026,7 +1026,7 @@ v1 is acceptable only when automated tests demonstrate all of the following:
 6. GitHub source retains exact-commit and fast-forward safety; local mode records stable digests, enforces expected-digest checks, and marks dirty state non-reproducible.
 7. JSON, TOML, YAML, and Markdown configuration fixtures preserve unrelated content and fail safely when round-trip preservation is impossible.
 8. Build output is deterministic and native validators accept it without executing toolkit content.
-9. Source/reference migration shows source and rendered diffs, preserves toolkit/installation identity, and requires explicit approval.
+9. A source or reference change shows source and rendered diffs, preserves toolkit and installation identity, and requires explicit approval.
 10. Every conflict class follows the same policy in plan and apply; interactive policy is terminal-only, accepted `keep` is degraded, and `--yes` never acts as force.
 11. Failure and termination in every success, compensation, and cleanup journal phase leave recoverable or cleanup-pending state, or a reported checksum/native-state conflict, without overwriting concurrent changes; fully compensated failures terminate as rolled back with `changed: false`.
 12. Rollback uses the recorded exact native artifact through a supported interface, restores only toolkit-owned structural state, is itself crash-recoverable, and rejects drift or unsupported native restore capability before mutation.
@@ -1038,15 +1038,15 @@ v1 is acceptable only when automated tests demonstrate all of the following:
 18. Path traversal, symlinks, junctions, mount points, unexpected reparse points, special files, case/Unicode collisions, and mutation-time substitutions are rejected on both hosts.
 19. Private temporary, state, recovery, history, and rollback data receive required macOS modes or Windows ACLs at creation.
 20. JSON output is deterministic, schema-valid, prose-free on standard output, consistent with exit codes, and uses the reserved `degraded` status correctly.
-21. Unknown future installation-state, journal, and history schemas block mutation; supported migrations are locked, planned, journaled, and recoverable.
+21. Unknown installation-state, journal, and history schemas block mutation without reinterpretation; interrupted operations using the canonical formats remain recoverable.
 22. CLI grammar tests cover GitHub/local expected revisions, dirty-source validation, dirty local archived reactivation with and without the required `--allow-dirty`, plan/apply policies, uninstall policy, init/build output safety, and non-interactive approval.
 23. The release-candidate bundle contains `ai4j` and `ai4j.exe` built from the same clean commit and pinned Go patch; independent verification confirms their target metadata and SHA-256 checksums without requiring public release publication.
 24. V1-EVAL-01, V1-EVAL-02, and V1-EVAL-03 have recorded decisions; unselected features remain disabled and Option A remains effective unless explicitly replaced.
 25. Omitted source flags select `github.com/alx4j/ai4j`; the equivalent explicit repository produces the same effective identity, exact commit, rendered digest, active-content inventory, ordered actions, and desired final state on every supported target/host tuple, while `sourceSelection` differs as `built_in_default` versus `explicit`. Explicit third-party public and private repositories retain identical safety treatment.
-26. `--ref` alone applies to the built-in repository, an invalid explicit repository never falls back, and `--source` is rejected with either GitHub flag. Update uses stored or explicitly supplied sources; archived reactivation requires `--installation <archived-id>` and uses only the tombstone's stored source and desired state. A dirty `development_source` tombstone can be reactivated only with `--allow-dirty` and only when the current checkout reproduces the stored digest. Neither path migrates because a later release changes its default.
+26. `--ref` alone applies to the built-in repository, an invalid explicit repository never falls back, and `--source` is rejected with either GitHub flag. Update uses stored or explicitly supplied sources; archived reactivation requires `--installation <archived-id>` and uses only the tombstone's stored source and desired state. A dirty `development_source` tombstone can be reactivated only with `--allow-dirty` and only when the current checkout reproduces the stored digest. Neither path changes because a later release changes its default.
 27. The first-party repository builds its declared Claude and Codex variants and installs its Claude variant while Go source, module files, CI/release configuration, release metadata, and unrelated files remain outside active-content inventory and native packages. Codex automated lifecycle requests fail before mutation and the built package remains available for native interactive installation.
 28. `ai4j` and `ai4j.exe` build from module `github.com/alx4j/ai4j` with the same pinned supported Go patch; isolated unsigned builds are reproducible and their version metadata, VCS metadata, and checksums agree.
-29. Architecture tests prove that v1 adds Codex package output, Windows, Claude scopes, local source, selection, and durable history through the MVP extension seams without target/host implementation imports in the core.
+29. Architecture tests keep Codex package output, Windows, Claude scopes, local source, selection, and durable history behind explicit core boundaries without target or host implementation imports in the core.
 30. GitHub-backed Claude user and project-local generated SHA-pinned catalogs use stable private adapter-owned storage, survive ephemeral-source cleanup, cannot redirect an incompatible installation, and are removed only after safe scoped native deregistration. A supported local-development install instead uses an immutable digest-addressed backing bundle containing only rendered native units and its catalog, backed by a canonical complete sidecar descriptor that excludes itself from the payload inventory; no registration points to an ephemeral snapshot, and the bundle cannot serve as a general source cache. Tests prove that equal source/package digests with different catalog or native identities produce different bundle keys, while exactly compatible installations share one reference-counted bundle and one installation's update or uninstall cannot remove another's live backing. Project-shared Claude declarations use a structurally owned portable inline marketplace in tracked settings, while Claude's scoped native manager exclusively owns `enabledPlugins`, enablement, cache lifecycle, and native marketplace registration. Uninstall reconciles scoped native plugin and marketplace removal before deleting any remaining owned inline declaration; local-development source with project-shared scope is rejected.
 31. Repository policy checks reject a commit whose author or committer differs from `Oleksii Stupin <oleksii.stupin@gmail.com>`.
 

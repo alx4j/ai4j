@@ -2,7 +2,6 @@ package app
 
 import (
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,7 +19,6 @@ import (
 	"unicode"
 
 	"github.com/alx4j/ai4j/internal/cli"
-	"github.com/alx4j/ai4j/internal/cli/human"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
 	validation "github.com/alx4j/ai4j/internal/validate"
@@ -41,7 +39,7 @@ type doctorProcessRunner interface {
 type doctorService struct {
 	state  installstate.Store
 	status statusService
-	native scopedStatusValidation
+	native nativeStatusInspector
 	runner doctorProcessRunner
 }
 
@@ -51,7 +49,7 @@ type mcpDefinition struct {
 	Environment []string
 }
 
-func newDoctorService(state installstate.Store, status statusService, native scopedStatusValidation, runner doctorProcessRunner) *doctorService {
+func newDoctorService(state installstate.Store, status statusService, native nativeStatusInspector, runner doctorProcessRunner) *doctorService {
 	return &doctorService{state: state, status: status, native: native, runner: runner}
 }
 
@@ -113,7 +111,11 @@ func (d *doctorService) Doctor(ctx context.Context, request cli.DoctorRequest, c
 		if err != nil {
 			return cli.Response{}, err
 		}
-		if !approvedDoctorInteractively(commandIO, data) {
+		approval, approvalErr := approveDoctorInteractively(request.OutputMode(), commandIO, data)
+		if approvalErr != nil {
+			return cli.Response{}, approvalErr
+		}
+		if approval != approvalGranted {
 			return doctorResponse(data, result.StatusError, result.FailureApproval, []result.Problem{doctorProblem("approval_required", "MCP startup requires explicit approval")})
 		}
 	}
@@ -208,10 +210,7 @@ func (d *doctorService) inspectStatic(ctx context.Context, installationID string
 		checks = append(checks, doctorCheck("owned_"+sanitizeCheckID(drift.Resource()), status, drift.Resource()+" is "+string(drift.State())))
 	}
 	if d.native != nil && record.MarketplaceID != "" {
-		native, problem := d.native.InspectNativeStatusFor(ctx, record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-		if scoped, ok := d.native.(directoryScopedStatusValidation); ok {
-			native, problem = scoped.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
-		}
+		native, problem := d.native.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, record.PluginID+"@"+record.MarketplaceID)
 		if problem != nil {
 			checks = append(checks, doctorCheck("native_state", cli.DoctorCheckWarning, "target-native state is not observable"))
 		} else {
@@ -355,26 +354,15 @@ func isolatedDoctorEnvironment(required []string) ([]string, []string) {
 	return environment, missingRequired
 }
 
-func approvedDoctorInteractively(commandIO CommandIO, data cli.DoctorData) bool {
-	if !commandIO.Interactive || commandIO.Input == nil || commandIO.Output == nil {
-		return false
+func approveDoctorInteractively(outputMode cli.OutputMode, commandIO CommandIO, data cli.DoctorData) (approvalDecision, error) {
+	if outputMode == cli.OutputJSON {
+		return approvalMissing, nil
 	}
 	preview, err := doctorResponse(data, result.StatusDegraded, result.FailureNone, nil)
 	if err != nil {
-		return false
+		return approvalMissing, err
 	}
-	if _, err := human.Render(commandIO.Output, preview); err != nil {
-		return false
-	}
-	if _, err := io.WriteString(commandIO.Output, "Start this MCP process for up to 5 seconds? [y/N]: "); err != nil {
-		return false
-	}
-	line, err := bufio.NewReader(io.LimitReader(commandIO.Input, 64)).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false
-	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes"
+	return promptApproval(commandIO, preview, "Start this MCP process for up to 5 seconds? [y/N]: ")
 }
 
 func newStartupCheck(serverID string, definition mcpDefinition, executable, workingDirectory, startupResult string, exitCode int, hasExitCode bool) cli.MCPStartupCheck {

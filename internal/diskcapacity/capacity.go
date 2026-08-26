@@ -30,7 +30,7 @@ func Require(path string, payload uint64) error {
 	}
 	available, err := availableBytes(existing)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	if available < payload+filesystemMetadataBytes {
 		return ErrInsufficient

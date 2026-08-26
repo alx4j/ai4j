@@ -44,25 +44,25 @@ type ExecutionBudget struct {
 	grace     time.Duration
 }
 
-var mvpExecutionBudget = ExecutionBudget{
+var defaultExecutionBudget = ExecutionBudget{
 	aggregate: AggregateOperationTimeout,
 	local:     LocalCommandTimeout,
 	network:   NetworkCommandTimeout,
 	grace:     TerminationGrace,
 }
 
-func MVPExecutionBudget() ExecutionBudget                 { return mvpExecutionBudget }
+func DefaultExecutionBudget() ExecutionBudget             { return defaultExecutionBudget }
 func (b ExecutionBudget) Aggregate() time.Duration        { return b.aggregate }
 func (b ExecutionBudget) LocalMaximum() time.Duration     { return b.local }
 func (b ExecutionBudget) NetworkMaximum() time.Duration   { return b.network }
 func (b ExecutionBudget) TerminationGrace() time.Duration { return b.grace }
-func (b ExecutionBudget) Valid() bool                     { return b == mvpExecutionBudget }
+func (b ExecutionBudget) Valid() bool                     { return b == defaultExecutionBudget }
 
-// WorkspaceEnforcement identifies the truthful MVP resource semantics. Disk
+// WorkspaceEnforcement identifies the resource semantics. Disk
 // preflight plus post-operation scans are advisory; they are not a hard quota.
 type WorkspaceEnforcement string
 
-const WorkspaceEnforcementAdvisory WorkspaceEnforcement = "advisory_postcondition_v1"
+const WorkspaceEnforcementAdvisory WorkspaceEnforcement = "advisory_postcondition"
 
 func (e WorkspaceEnforcement) Valid() bool { return e == WorkspaceEnforcementAdvisory }
 
@@ -74,16 +74,16 @@ type WorkspaceBudget struct {
 	enforcement WorkspaceEnforcement
 }
 
-var mvpWorkspaceBudget = WorkspaceBudget{
+var defaultWorkspaceBudget = WorkspaceBudget{
 	declared: MaximumWorkspaceBytes, headroom: WorkspaceHeadroomBytes,
 	enforcement: WorkspaceEnforcementAdvisory,
 }
 
-func MVPWorkspaceBudget() WorkspaceBudget                   { return mvpWorkspaceBudget }
+func DefaultWorkspaceBudget() WorkspaceBudget               { return defaultWorkspaceBudget }
 func (b WorkspaceBudget) DeclaredMaximumBytes() uint64      { return b.declared }
 func (b WorkspaceBudget) HeadroomBytes() uint64             { return b.headroom }
 func (b WorkspaceBudget) Enforcement() WorkspaceEnforcement { return b.enforcement }
-func (b WorkspaceBudget) Valid() bool                       { return b == mvpWorkspaceBudget }
+func (b WorkspaceBudget) Valid() bool                       { return b == defaultWorkspaceBudget }
 func (b WorkspaceBudget) PreflightBytes() (uint64, bool) {
 	if !b.Valid() || b.declared > ^uint64(0)-b.headroom {
 		return 0, false
@@ -215,12 +215,12 @@ type OutputGrammar string
 
 const (
 	NoOutputGrammar        OutputGrammar = "none"
-	RemoteOutputGrammar    OutputGrammar = "ls_remote_v1"
-	ScalarOutputGrammar    OutputGrammar = "scalar_v1"
-	TreeOutputGrammar      OutputGrammar = "ls_tree_v1"
-	IndexOutputGrammar     OutputGrammar = "ls_files_stage_v1"
-	AttributeOutputGrammar OutputGrammar = "check_attr_v1"
-	ConfigOutputGrammar    OutputGrammar = "config_list_v1"
+	RemoteOutputGrammar    OutputGrammar = "ls_remote"
+	ScalarOutputGrammar    OutputGrammar = "scalar"
+	TreeOutputGrammar      OutputGrammar = "ls_tree"
+	IndexOutputGrammar     OutputGrammar = "ls_files_stage"
+	AttributeOutputGrammar OutputGrammar = "check_attr"
+	ConfigOutputGrammar    OutputGrammar = "config_list"
 	StatusOutputGrammar    OutputGrammar = "status_porcelain_v1"
 )
 
@@ -245,7 +245,7 @@ type RuntimeProfile struct {
 }
 
 var appleGit154DarwinARM64 = RuntimeProfile{
-	id: "apple_git_154_3_macos15_arm64_v1", gitVersion: "2.39.5 (Apple Git-154.3)",
+	id: "apple_git_154_3_macos15_arm64", gitVersion: "2.39.5 (Apple Git-154.3)",
 	hostOS: "darwin", hostArch: "arm64", hostMajor: 15,
 }
 
@@ -315,15 +315,15 @@ func (p RuntimeProfile) AllowedChildPurposes(
 type RuntimeChildPurpose string
 
 const (
-	ChildGitRemoteHTTPSDriver RuntimeChildPurpose = "git_remote_https_driver_v1"
-	ChildRemoteHTTPS          RuntimeChildPurpose = "git_remote_https_v1"
-	ChildGitFetchPack         RuntimeChildPurpose = "git_fetch_pack_v1"
-	ChildGitIndexPack         RuntimeChildPurpose = "git_index_pack_v1"
-	ChildGitRevList           RuntimeChildPurpose = "git_rev_list_v1"
-	ChildCredentialShell      RuntimeChildPurpose = "git_credential_shell_v1"
-	ChildCredential           RuntimeChildPurpose = "git_https_credential_helper_v1"
-	ChildSSHWrapper           RuntimeChildPurpose = "ai4j_git_ssh_wrapper_v1"
-	ChildSSHClient            RuntimeChildPurpose = "git_ssh_native_client_v1"
+	ChildGitRemoteHTTPSDriver RuntimeChildPurpose = "git_remote_https_driver"
+	ChildRemoteHTTPS          RuntimeChildPurpose = "git_remote_https"
+	ChildGitFetchPack         RuntimeChildPurpose = "git_fetch_pack"
+	ChildGitIndexPack         RuntimeChildPurpose = "git_index_pack"
+	ChildGitRevList           RuntimeChildPurpose = "git_rev_list"
+	ChildCredentialShell      RuntimeChildPurpose = "git_credential_shell"
+	ChildCredential           RuntimeChildPurpose = "git_https_credential_helper"
+	ChildSSHWrapper           RuntimeChildPurpose = "ai4j_git_ssh_wrapper"
+	ChildSSHClient            RuntimeChildPurpose = "git_ssh_native_client"
 )
 
 func (p RuntimeChildPurpose) Valid() bool {
@@ -336,14 +336,14 @@ func (p RuntimeChildPurpose) Valid() bool {
 	}
 }
 
-// AuthenticationMode is the complete credential-free projection supported by
-// the MVP. SSH agent and caller-supplied helper modes are intentionally absent.
+// AuthenticationMode is the complete credential-free projection. SSH agent
+// and caller-supplied helper modes are intentionally absent.
 type AuthenticationMode string
 
 const (
 	AuthenticationAnonymousHTTPS AuthenticationMode = "https_anonymous"
-	AuthenticationKeychainHTTPS  AuthenticationMode = "https_keychain_v1"
-	AuthenticationDefaultKeySSH  AuthenticationMode = "ssh_default_keys_v1"
+	AuthenticationKeychainHTTPS  AuthenticationMode = "https_keychain"
+	AuthenticationDefaultKeySSH  AuthenticationMode = "ssh_default_keys"
 )
 
 func (m AuthenticationMode) Valid() bool {
@@ -397,7 +397,7 @@ func (AuthenticationProjection) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"authentication": "redacted"})
 }
 
-var gitHardenedEnvironmentProfile = mustEnvironmentProfile("git_hardened_v1")
+var gitHardenedEnvironmentProfile = mustEnvironmentProfile("git_hardened")
 
 func GitHardenedEnvironmentProfile() lifecycle.ProcessEnvironmentProfileID {
 	return gitHardenedEnvironmentProfile

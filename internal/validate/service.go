@@ -1,4 +1,4 @@
-// Package validate implements the Wave 1 read-only vertical slice.
+// Package validate implements toolkit validation and target-native builds.
 package validate
 
 import (
@@ -158,21 +158,19 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	if err != nil {
 		return failureReport(FailureInternal, "internal_error", "validation result could not be constructed")
 	}
-	if validated.v2 != nil {
-		resolved, selectionErr := resolveSelectionV2(*validated.v2, lifecycleSelectionRequest{all: true, host: configuredBuildHost(s.config)})
-		if selectionErr != nil {
-			code, message := packageProblem(selectionErr)
-			return reportWithSource(source, FailureValidation, code, message)
-		}
-		if selectionErr = validateSelectedExecutableFormats(workspacePath, resolved, configuredBuildHost(s.config), *validated.v2); selectionErr != nil {
-			code, message := packageProblem(selectionErr)
-			return reportWithSource(source, FailureValidation, code, message)
-		}
-		validated.content, selectionErr = selectedContentV2(workspacePath, *validated.v2, resolved)
-		if selectionErr != nil {
-			code, message := packageProblem(selectionErr)
-			return reportWithSource(source, FailureValidation, code, message)
-		}
+	resolved, selectionErr := resolveSelection(validated.model, selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), all: true})
+	if selectionErr != nil {
+		code, message := packageProblem(selectionErr)
+		return reportWithSource(source, FailureValidation, code, message)
+	}
+	if selectionErr = validateSelectedExecutableFormats(workspacePath, resolved, configuredBuildHost(s.config), validated.model); selectionErr != nil {
+		code, message := packageProblem(selectionErr)
+		return reportWithSource(source, FailureValidation, code, message)
+	}
+	validated.content, selectionErr = selectedContent(workspacePath, validated.model, resolved)
+	if selectionErr != nil {
+		code, message := packageProblem(selectionErr)
+		return reportWithSource(source, FailureValidation, code, message)
 	}
 	dependencyWarnings, dependencyProblem := s.checkHostDependencies(validated.content)
 	if dependencyProblem != nil {

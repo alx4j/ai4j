@@ -151,12 +151,6 @@ func renderList(output *boundedBuffer, data cli.ListData) {
 		output.indentedLine(3, "selection="+selection+" resolved="+strings.Join(installation.Resolved(), ","))
 		output.indentedLine(3, "history="+strconv.Itoa(installation.HistoryCount())+" last-operation="+installation.LastOperationID().String())
 	}
-	if migration, ok := data.Migration(); ok {
-		output.indentedLine(1, "migration: from="+strconv.Itoa(migration.FromVersion())+" to="+strconv.Itoa(migration.ToVersion()))
-		for _, change := range migration.Changes() {
-			output.indentedLine(2, "- "+change)
-		}
-	}
 }
 
 func renderInit(output *boundedBuffer, data cli.InitData) {

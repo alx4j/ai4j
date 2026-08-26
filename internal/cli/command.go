@@ -32,13 +32,6 @@ func (c Command) Valid() bool {
 	}
 }
 
-func Commands() []Command {
-	return []Command{
-		CommandInit, CommandValidate, CommandBuild, CommandInstall, CommandUpdate, CommandSync, CommandList, CommandStatus,
-		CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge, CommandVersion,
-	}
-}
-
 type OutputMode string
 
 const (

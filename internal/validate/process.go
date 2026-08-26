@@ -9,7 +9,7 @@ import (
 
 const maximumProcessOutput = 16 << 20
 
-// ProcessRunner is the single execution boundary used by Wave 1. It exists so
+// ProcessRunner is the single execution boundary for external processes. It exists so
 // Git and Claude invocations can be acceptance-tested without network access or
 // starting toolkit content.
 type ProcessRunner interface {

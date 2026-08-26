@@ -54,7 +54,7 @@ func TestPublishedToolkitSchemaRejectsInlineOverlaySecretField(t *testing.T) {
 
 func compileToolkitSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join("..", "..", "schemas", "toolkit", "v2.json"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "schemas", "toolkit", "v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,10 +66,10 @@ func compileToolkitSchema(t *testing.T) *jsonschema.Schema {
 	}
 	compiler := jsonschema.NewCompiler()
 	compiler.DefaultDraft(jsonschema.Draft2020)
-	if err := compiler.AddResource("https://github.com/alx4j/ai4j/schemas/toolkit/v2.json", document); err != nil {
+	if err := compiler.AddResource("https://github.com/alx4j/ai4j/schemas/toolkit/v1.json", document); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := compiler.Compile("https://github.com/alx4j/ai4j/schemas/toolkit/v2.json")
+	schema, err := compiler.Compile("https://github.com/alx4j/ai4j/schemas/toolkit/v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,18 +18,19 @@ import (
 
 const outputFailureMessage = "ai4j: output failed\n"
 
+const codexNativeLifecycleUnavailable = "Codex exposes plugin lifecycle only through its interactive native plugin browser; build the Codex package with ai4j, then install or manage it through /plugins or the Codex desktop plugin browser"
+
 // Renderer presents one validated response and returns its process exit code.
 type Renderer func(io.Writer, cli.Response) (result.ExitCode, error)
 
-// CommandHandler handles one already parsed non-version command. Lifecycle
-// stories provide the production implementation behind this seam.
+// CommandHandler handles one already parsed non-version command.
 type CommandIO struct {
 	Input       io.Reader
 	Output      io.Writer
 	Interactive bool
 }
 
-type CommandHandler func(cli.Request, CommandIO) (cli.Response, error)
+type CommandHandler func(context.Context, cli.Request, CommandIO) (cli.Response, error)
 
 // OtherCommandsFactory lazily constructs the non-version command handler.
 // Parsing, usage failures, and version handling never call this factory.
@@ -70,6 +72,12 @@ func NewApplication(dependencies Dependencies) (Application, error) {
 // Run parses the complete argv vector before constructing non-version command
 // dependencies. Version and usage paths do not read stdin.
 func (a Application) Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return a.RunContext(context.Background(), argv, stdin, stdout, stderr)
+}
+
+// RunContext runs one command and propagates cancellation to source, target,
+// and host operations after parsing succeeds.
+func (a Application) RunContext(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	request, err := a.parser.Parse(argv)
 	if err != nil {
 		var usageError *cli.UsageError
@@ -90,12 +98,15 @@ func (a Application) Run(argv []string, stdin io.Reader, stdout, stderr io.Write
 	}
 
 	var response cli.Response
-	if unsupported, ok := request.(cli.UnsupportedRequest); ok {
-		response, err = newUnsupportedResponse(unsupported)
+	if message, unsupported := unsupportedCapability(request); unsupported {
+		response, err = newUnsupportedResponse(request.Command(), message)
 	} else if request.Command() == cli.CommandVersion {
 		response, err = a.version.Handle(request)
 	} else {
-		response, err = a.handleOther(request, CommandIO{Input: stdin, Output: stdout, Interactive: terminalPair(stdin, stdout)})
+		response, err = a.handleOther(ctx, request, CommandIO{Input: stdin, Output: stdout, Interactive: terminalPair(stdin, stdout)})
+	}
+	if isContextCancellation(err) {
+		response, err = cancelledResponse(request.Command(), "command_cancelled", "command was cancelled before mutation", result.UpdateNotChecked, nil)
 	}
 	if err != nil || !response.Valid() || response.Command() != request.Command() {
 		response, err = newUnavailableResponse(request.Command(), "command_unavailable", "command implementation is unavailable")
@@ -107,7 +118,7 @@ func (a Application) Run(argv []string, stdin io.Reader, stdout, stderr io.Write
 	return a.render(request.OutputMode(), stdout, stderr, response)
 }
 
-func (a Application) handleOther(request cli.Request, commandIO CommandIO) (cli.Response, error) {
+func (a Application) handleOther(ctx context.Context, request cli.Request, commandIO CommandIO) (cli.Response, error) {
 	if a.otherCommands == nil {
 		return cli.Response{}, fmt.Errorf("non-version commands are not composed")
 	}
@@ -118,7 +129,7 @@ func (a Application) handleOther(request cli.Request, commandIO CommandIO) (cli.
 	if handler == nil {
 		return cli.Response{}, fmt.Errorf("non-version command factory returned no handler")
 	}
-	return handler(request, commandIO)
+	return handler(ctx, request, commandIO)
 }
 
 func terminalPair(input io.Reader, output io.Writer) bool {
@@ -155,10 +166,6 @@ func newUsageResponse(usageError *cli.UsageError) (cli.Response, error) {
 	option := usageError.Option()
 	data, err := cli.NewUsageData(usageError.Issue(), option)
 	if err != nil {
-		option = ""
-		data, err = cli.NewUsageData(usageError.Issue(), option)
-	}
-	if err != nil {
 		return cli.Response{}, err
 	}
 	issue, err := result.NewContext("issue", string(usageError.Issue()))
@@ -173,7 +180,7 @@ func newUsageResponse(usageError *cli.UsageError) (cli.Response, error) {
 		}
 		context = append(context, optionContext)
 	}
-	problem, err := result.NewProblem("invalid_cli_usage", "command line does not match the MVP grammar", context)
+	problem, err := result.NewProblem("invalid_cli_usage", "command line does not match the CLI grammar", context)
 	if err != nil {
 		return cli.Response{}, err
 	}
@@ -196,8 +203,18 @@ func newUnavailableResponse(command cli.Command, code, message string) (cli.Resp
 	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
 }
 
-func newUnsupportedResponse(request cli.UnsupportedRequest) (cli.Response, error) {
-	message := request.Message()
+func unsupportedCapability(request cli.Request) (string, bool) {
+	switch command := request.(type) {
+	case cli.ValidateRequest:
+		return codexNativeLifecycleUnavailable, command.Target() == cli.BuildTargetCodex
+	case cli.InstallRequest:
+		return codexNativeLifecycleUnavailable, command.Target() == cli.BuildTargetCodex
+	default:
+		return "", false
+	}
+}
+
+func newUnsupportedResponse(command cli.Command, message string) (cli.Response, error) {
 	if message == "" {
 		message = "command capability is not available in this release"
 	}
@@ -209,7 +226,34 @@ func newUnsupportedResponse(request cli.UnsupportedRequest) (cli.Response, error
 	if err != nil {
 		return cli.Response{}, err
 	}
-	return cli.NewResponse(request.Command(), commandResult, nil, cli.UnavailableData{})
+	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
+}
+
+func isContextCancellation(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func mutationLockResponse(command cli.Command, err error, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
+	if isContextCancellation(err) {
+		return cancelledResponse(command, "command_cancelled", "command was cancelled while waiting to start", disposition, warnings)
+	}
+	return lifecycleFailure(command, result.FailureConflict, "mutation_locked", "another AI4J modifying command is running", disposition, warnings)
+}
+
+func cancelledResponse(command cli.Command, code, message string, disposition result.UpdateDisposition, warnings []result.Warning) (cli.Response, error) {
+	problem, err := result.NewProblem(code, message, nil)
+	if err != nil {
+		return cli.Response{}, err
+	}
+	commandResult, err := result.New(result.Facts{
+		Status: result.StatusCancelled, Phase: result.PhaseNone, Outcome: result.OutcomeNone,
+		Mutation: result.MutationNotStarted, DurableChange: result.DurableChangeNone,
+		Failure: result.FailureCancellation, UpdateDisposition: disposition, Warnings: warnings, Errors: []result.Problem{problem},
+	})
+	if err != nil {
+		return cli.Response{}, err
+	}
+	return cli.NewResponse(command, commandResult, nil, cli.UnavailableData{})
 }
 
 func neutralResult(status result.Status, failure result.Failure, problems []result.Problem) (result.Result, error) {
@@ -234,9 +278,13 @@ func productionDefaultSource() (cli.DefaultSource, error) {
 }
 
 // Run executes the production composition using embedded build facts and the
-// exact compiled default-source policy. Lifecycle command composition is added
-// by its owning stories.
+// exact compiled default-source policy.
 func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return RunContext(context.Background(), argv, stdin, stdout, stderr)
+}
+
+// RunContext executes the production composition with caller cancellation.
+func RunContext(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defaultSource, err := productionDefaultSource()
 	if err != nil {
 		writeOutputFailure(stderr)
@@ -254,5 +302,5 @@ func Run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		writeOutputFailure(stderr)
 		return result.ExitUnexpectedInternal.Int()
 	}
-	return application.Run(argv, stdin, stdout, stderr)
+	return application.RunContext(ctx, argv, stdin, stdout, stderr)
 }

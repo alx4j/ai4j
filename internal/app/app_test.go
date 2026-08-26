@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -84,27 +85,73 @@ func TestApplicationVersionWorksWithoutOtherCommandFactory(t *testing.T) {
 	validateSchema(t, "version.json", stdout.Bytes())
 }
 
-func TestApplicationCodexLifecycleFailsBeforeDependencyConstruction(t *testing.T) {
+func TestApplicationPropagatesContextToCommandHandler(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "request-context")
+	var observed string
+	application := newTestApplication(t, validBuild(), func() (app.CommandHandler, error) {
+		return func(handlerContext context.Context, _ cli.Request, _ app.CommandIO) (cli.Response, error) {
+			observed, _ = handlerContext.Value(contextKey{}).(string)
+			return cli.Response{}, errors.New("stop after observing context")
+		}, nil
+	}, human.Render, jsonout.Render)
+
+	application.RunContext(ctx, []string{"ai4j", "status"}, nil, io.Discard, io.Discard)
+
+	if observed != "request-context" {
+		t.Fatalf("handler context value = %q", observed)
+	}
+}
+
+func TestApplicationRendersHandlerCancellation(t *testing.T) {
 	t.Parallel()
 
-	factoryCalls := 0
 	application := newTestApplication(t, validBuild(), func() (app.CommandHandler, error) {
-		factoryCalls++
-		panic("Codex capability gate constructed lifecycle dependencies")
+		return func(context.Context, cli.Request, app.CommandIO) (cli.Response, error) {
+			return cli.Response{}, context.Canceled
+		}, nil
 	}, human.Render, jsonout.Render)
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
 
-	exitCode := application.Run([]string{"ai4j", "install", "--target", "codex", "--scope", "user", "--all", "--yes", "--json"}, panicReader{}, stdout, stderr)
+	exitCode := application.RunContext(context.Background(), []string{"ai4j", "status", "--json"}, nil, stdout, stderr)
 
-	if exitCode != result.ExitEnvironment.Int() {
-		t.Fatalf("exit code = %d, want %d; output=%q", exitCode, result.ExitEnvironment.Int(), stdout.String())
+	if exitCode != result.ExitCancelled.Int() {
+		t.Fatalf("exit code = %d, want %d; output=%q", exitCode, result.ExitCancelled.Int(), stdout.String())
 	}
-	if factoryCalls != 0 || stderr.Len() != 0 {
-		t.Fatalf("factory calls = %d, stderr = %q", factoryCalls, stderr.String())
+	if stderr.Len() != 0 || !strings.Contains(stdout.String(), `"status":"cancelled"`) || !strings.Contains(stdout.String(), `"code":"command_cancelled"`) {
+		t.Fatalf("cancelled output = %q, stderr = %q", stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "unsupported_capability") || !strings.Contains(stdout.String(), "interactive native plugin browser") {
-		t.Fatalf("Codex response = %q", stdout.String())
+	validateSchema(t, "status.json", stdout.Bytes())
+}
+
+func TestApplicationCodexLifecycleFailsBeforeDependencyConstruction(t *testing.T) {
+	t.Parallel()
+
+	commands := [][]string{
+		{"ai4j", "validate", "--target", "codex", "--json"},
+		{"ai4j", "install", "--target", "codex", "--scope", "user", "--all", "--yes", "--json"},
+	}
+	for _, arguments := range commands {
+		factoryCalls := 0
+		application := newTestApplication(t, validBuild(), func() (app.CommandHandler, error) {
+			factoryCalls++
+			panic("Codex capability gate constructed lifecycle dependencies")
+		}, human.Render, jsonout.Render)
+		stdout := new(bytes.Buffer)
+		stderr := new(bytes.Buffer)
+
+		exitCode := application.Run(arguments, panicReader{}, stdout, stderr)
+
+		if exitCode != result.ExitEnvironment.Int() {
+			t.Fatalf("%v exit code = %d, want %d; output=%q", arguments, exitCode, result.ExitEnvironment.Int(), stdout.String())
+		}
+		if factoryCalls != 0 || stderr.Len() != 0 {
+			t.Fatalf("%v factory calls = %d, stderr = %q", arguments, factoryCalls, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "unsupported_capability") || !strings.Contains(stdout.String(), "interactive native plugin browser") {
+			t.Fatalf("%v Codex response = %q", arguments, stdout.String())
+		}
 	}
 }
 
@@ -179,12 +226,12 @@ func TestApplicationEveryUsageIssueBypassesDependenciesAndStdin(t *testing.T) {
 		{name: "unknown option", arguments: []string{"ai4j", "version", "--secret=do-not-disclose"}, issue: cli.UsageUnknownOption, forbidden: "do-not-disclose"},
 		{name: "misplaced option JSON", arguments: []string{"ai4j", "--json"}, issue: cli.UsageMisplacedOption, json: true},
 		{name: "inapplicable option", arguments: []string{"ai4j", "version", "--repo", "github.com/example/repo"}, issue: cli.UsageInapplicableOption},
-		{name: "post MVP option", arguments: []string{"ai4j", "version", "--target", "claude"}, issue: cli.UsageInapplicableOption},
+		{name: "inapplicable version option", arguments: []string{"ai4j", "version", "--target", "claude"}, issue: cli.UsageInapplicableOption},
 		{name: "duplicate option JSON", arguments: []string{"ai4j", "version", "--json", "--json"}, issue: cli.UsageDuplicateOption, json: true},
 		{name: "missing option value", arguments: []string{"ai4j", "validate", "--repo"}, issue: cli.UsageMissingOptionValue},
 		{name: "empty option value", arguments: []string{"ai4j", "validate", "--repo="}, issue: cli.UsageEmptyOptionValue},
 		{name: "unexpected option value", arguments: []string{"ai4j", "version", "--json=true"}, issue: cli.UsageUnexpectedOptionValue},
-		{name: "invalid option value", arguments: []string{"ai4j", "install", "--expected-commit", "not-a-commit"}, issue: cli.UsageInvalidOptionValue, forbidden: "not-a-commit"},
+		{name: "invalid option value", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--expected-commit", "not-a-commit"}, issue: cli.UsageInvalidOptionValue, forbidden: "not-a-commit"},
 	}
 	for _, test := range tests {
 		test := test
@@ -220,6 +267,25 @@ func TestApplicationEveryUsageIssueBypassesDependenciesAndStdin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplicationPreservesKnownOptionInUsageResponse(t *testing.T) {
+	t.Parallel()
+
+	application := newTestApplication(t, validBuild(), func() (app.CommandHandler, error) {
+		panic("usage constructed non-version dependencies")
+	}, human.Render, jsonout.Render)
+	stdout := new(bytes.Buffer)
+
+	exitCode := application.Run([]string{"ai4j", "update", "installation-001", "--dry-run", "--dry-run", "--json"}, panicReader{}, stdout, new(bytes.Buffer))
+
+	if exitCode != result.ExitUsageOrApproval.Int() {
+		t.Fatalf("exit code = %d, want 2", exitCode)
+	}
+	if !strings.Contains(stdout.String(), `"field":"option","value":"dry-run"`) {
+		t.Fatalf("usage response omitted the known option: %s", stdout.String())
+	}
+	validateSchema(t, "usage.json", stdout.Bytes())
 }
 
 func TestApplicationSelectsExactlyOneRenderer(t *testing.T) {

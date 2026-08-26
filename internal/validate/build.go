@@ -47,7 +47,6 @@ type buildManifest struct {
 	Artifacts     []buildManifestArtifact `json:"artifacts"`
 	Mappings      []buildMapping          `json:"mappings"`
 	Selection     []buildSelection        `json:"selection"`
-	Migration     *buildMigration         `json:"migration,omitempty"`
 }
 
 type buildSelection struct {
@@ -55,13 +54,6 @@ type buildSelection struct {
 	Variant     string `json:"variant"`
 	Reason      string `json:"reason"`
 	RequestedBy string `json:"requestedBy"`
-}
-
-type buildMigration struct {
-	FromSchema int      `json:"fromSchema"`
-	ToSchema   int      `json:"toSchema"`
-	Changes    []string `json:"changes"`
-	Review     []string `json:"review"`
 }
 
 type buildManifestArtifact struct {
@@ -137,37 +129,24 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 	}
 	report.Source = source
 	report.Reproducible = !source.Dirty()
-	var resolved []resolvedAssetV2
-	if validated.v2 != nil {
-		resolved, err = resolveSelectionV2(*validated.v2, request)
-		if err != nil {
-			code, message := packageProblem(err)
-			return buildFailure(report, FailureValidation, code, message)
-		}
-		if err = validateSelectedExecutableFormats(workspacePath, resolved, request.Host(), *validated.v2); err != nil {
-			code, message := packageProblem(err)
-			return buildFailure(report, FailureValidation, code, message)
-		}
-		validated.content, err = selectedContentV2(workspacePath, *validated.v2, resolved)
-		if err != nil {
-			code, message := packageProblem(err)
-			return buildFailure(report, FailureValidation, code, message)
-		}
-		report.Selection, err = cliSelectionsV2(resolved)
-		if err != nil {
-			return buildFailure(report, FailureInternal, "internal_error", "build selection result could not be constructed")
-		}
-	} else if !request.SelectAll() {
-		return buildFailure(report, FailureValidation, "unsupported_selection", "schema version 1 supports only --all; build previews migration to schema version 2")
+	selection := selection{target: request.Target(), host: request.Host(), all: request.SelectAll(), assets: request.Assets(), bundles: request.Bundles()}
+	resolved, err := resolveSelection(validated.model, selection)
+	if err != nil {
+		code, message := packageProblem(err)
+		return buildFailure(report, FailureValidation, code, message)
 	}
-	if len(report.Selection) == 0 {
-		for _, item := range validated.content {
-			selection, selectionErr := cli.NewBuildSelection(item.Identifier(), "default", "all", "--all")
-			if selectionErr != nil {
-				return buildFailure(report, FailureInternal, "internal_error", "build selection result could not be constructed")
-			}
-			report.Selection = append(report.Selection, selection)
-		}
+	if err = validateSelectedExecutableFormats(workspacePath, resolved, request.Host(), validated.model); err != nil {
+		code, message := packageProblem(err)
+		return buildFailure(report, FailureValidation, code, message)
+	}
+	validated.content, err = selectedContent(workspacePath, validated.model, resolved)
+	if err != nil {
+		code, message := packageProblem(err)
+		return buildFailure(report, FailureValidation, code, message)
+	}
+	report.Selection, err = cliSelections(resolved)
+	if err != nil {
+		return buildFailure(report, FailureInternal, "internal_error", "build selection result could not be constructed")
 	}
 	var validateOutput func(string) error
 	if request.Target() == cli.BuildTargetClaude {
@@ -256,7 +235,7 @@ var (
 	errNativeBuildValidation = errors.New("native build validation failed")
 )
 
-func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved []resolvedAssetV2, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
+func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved []resolvedAsset, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
 	output, err := filepath.Abs(request.Output())
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize output: %w", err)
@@ -283,19 +262,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 	defer func() { _ = stageWorkspace.Close() }()
 	stage := stageWorkspace.Path()
 
-	var mappings []buildMapping
-	if validated.v2 != nil {
-		mappings, err = renderV2Build(stage, workspacePath, *validated.v2, resolved, request.Target())
-	} else {
-		switch request.Target() {
-		case cli.BuildTargetClaude:
-			mappings, err = renderClaudeBuild(stage, workspacePath, acquired.inventory)
-		case cli.BuildTargetCodex:
-			mappings, err = renderCodexBuild(stage, workspacePath, acquired.inventory)
-		default:
-			err = errors.New("unsupported build target")
-		}
-	}
+	mappings, err := renderBuild(stage, workspacePath, validated.model, resolved, request.Target())
 	if err != nil {
 		return nil, err
 	}
@@ -320,9 +287,6 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 		CLIBuild: source.CLIBuildCommit().String(), Target: request.Target(), Host: request.Host(),
 		TargetProfile: buildTargetProfile(request.Target()), Reproducible: !source.Dirty(),
 		Artifacts: manifestArtifacts, Mappings: mappings, Selection: buildSelections(resolved),
-	}
-	if validated.schemaVersion == 1 {
-		manifest.Migration = &buildMigration{FromSchema: 1, ToSchema: 2, Changes: []string{"replace MVP plugin envelope with explicit assets, bundles, targets, and native packages", "default build selection to --all"}, Review: []string{"confirm asset ownership and dependencies", "confirm target package membership and compatibility"}}
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -350,101 +314,12 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 func buildTargetProfile(target cli.BuildTarget) string {
 	switch target {
 	case cli.BuildTargetClaude:
-		return "claude-plugin-v1"
+		return "claude-plugin"
 	case cli.BuildTargetCodex:
-		return "codex-plugin-v1"
+		return "codex-plugin"
 	default:
 		return ""
 	}
-}
-
-func renderClaudeBuild(stage, workspace string, inventory gitsource.TreeInventory) ([]buildMapping, error) {
-	tracked := trackedFiles(inventory)
-	var manifest toolkitManifest
-	if err := readStrictJSON(workspace, toolkitManifestPath, tracked, &manifest); err != nil {
-		return nil, err
-	}
-	for _, sourcePath := range filesUnder(tracked, manifest.Plugin.Path) {
-		relative := strings.TrimPrefix(sourcePath, manifest.Plugin.Path+"/")
-		if err := copyTrackedBuildFile(stage, "plugin/"+relative, workspace, sourcePath, tracked); err != nil {
-			return nil, err
-		}
-	}
-	for _, rule := range manifest.SharedRules {
-		if err := copyTrackedBuildFile(stage, "configuration/rules/"+filepath.Base(rule.Path), workspace, rule.Path, tracked); err != nil {
-			return nil, err
-		}
-	}
-	return []buildMapping{
-		{Canonical: "skill:repository-review", Native: "plugin/skills/repository-review", Fidelity: "exact"},
-		{Canonical: "agent:repository-reviewer", Native: "plugin/agents/repository-reviewer.md", Fidelity: "exact"},
-		{Canonical: "instruction:ai4j-rules", Native: "configuration/rules/ai4j.md", Fidelity: "exact"},
-		{Canonical: "mcp:claude-tools", Native: "plugin/.mcp.json", Fidelity: "exact"},
-		{Canonical: "hook:representative", Native: "unsupported", Fidelity: "unsupported"},
-	}, nil
-}
-
-func renderCodexBuild(stage, workspace string, inventory gitsource.TreeInventory) ([]buildMapping, error) {
-	tracked := trackedFiles(inventory)
-	var manifest toolkitManifest
-	if err := readStrictJSON(workspace, toolkitManifestPath, tracked, &manifest); err != nil {
-		return nil, err
-	}
-	skillRoot := manifest.Plugin.Path + "/skills"
-	for _, sourcePath := range filesUnder(tracked, skillRoot) {
-		relative := strings.TrimPrefix(sourcePath, skillRoot+"/")
-		if err := copyTrackedBuildFile(stage, "plugin/skills/"+relative, workspace, sourcePath, tracked); err != nil {
-			return nil, err
-		}
-	}
-	plugin := codexPluginManifest{Name: "ai4j-default", Version: "0.1.0", Description: "Practical repository review guidance and a focused review agent", Skills: "./skills/", MCPServers: "./.mcp.json"}
-	pluginBytes, err := json.MarshalIndent(plugin, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	if err := writeBuildFile(stage, "plugin/.codex-plugin/plugin.json", append(pluginBytes, '\n'), 0o644); err != nil {
-		return nil, err
-	}
-	mcpPath := manifest.Plugin.Path + "/.mcp.json"
-	var claudeMCP mcpManifest
-	if err := readStrictJSON(workspace, mcpPath, tracked, &claudeMCP); err != nil {
-		return nil, err
-	}
-	codexMCP := make(map[string]codexMCPServer, len(claudeMCP.Servers))
-	for id, server := range claudeMCP.Servers {
-		envVars, envErr := environmentNames(server.Env)
-		if envErr != nil {
-			return nil, envErr
-		}
-		codexMCP[id] = codexMCPServer{Command: server.Command, Args: append([]string(nil), server.Args...), EnvVars: envVars}
-	}
-	mcpBytes, err := json.MarshalIndent(codexMCP, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	if err := writeBuildFile(stage, "plugin/.mcp.json", append(mcpBytes, '\n'), 0o644); err != nil {
-		return nil, err
-	}
-	for _, rule := range manifest.SharedRules {
-		if err := copyTrackedBuildFile(stage, "configuration/AGENTS.md", workspace, rule.Path, tracked); err != nil {
-			return nil, err
-		}
-	}
-	agentSource := manifest.Plugin.Path + "/agents/repository-reviewer.md"
-	agent, err := readTrackedFile(workspace, agentSource, tracked)
-	if err != nil {
-		return nil, err
-	}
-	if err := writeBuildFile(stage, "configuration/.codex/agents/repository-reviewer.toml", codexAgent(agent), 0o644); err != nil {
-		return nil, err
-	}
-	return []buildMapping{
-		{Canonical: "skill:repository-review", Native: "plugin/skills/repository-review", Fidelity: "exact"},
-		{Canonical: "agent:repository-reviewer", Native: "configuration/.codex/agents/repository-reviewer.toml", Fidelity: "exact"},
-		{Canonical: "instruction:ai4j-rules", Native: "configuration/AGENTS.md", Fidelity: "exact"},
-		{Canonical: "mcp:claude-tools", Native: "plugin/.mcp.json", Fidelity: "exact"},
-		{Canonical: "hook:representative", Native: "unsupported", Fidelity: "unsupported"},
-	}, nil
 }
 
 func trackedFiles(inventory gitsource.TreeInventory) map[string]gitsource.TreeEntry {
@@ -527,10 +402,6 @@ func buildFailure(report BuildReport, failure Failure, code, message string) Bui
 	report.Problems = []result.Problem{problem}
 	report.Failure = failure
 	return report
-}
-
-func codexAgent(source []byte) []byte {
-	return codexAgentNamed(source, "repository-reviewer")
 }
 
 func codexAgentNamed(source []byte, name string) []byte {

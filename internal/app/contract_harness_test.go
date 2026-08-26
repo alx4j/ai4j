@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -40,15 +41,15 @@ func TestContractHarnessEveryCanonicalCommandIsSchemaValidAndDeterministic(t *te
 		changed    bool
 	}{
 		{name: "init", arguments: []string{"ai4j", "init", "--target", "claude", "--target", "codex", "--output", "new-toolkit", "--json"}, command: cli.CommandInit, schemaName: "init.json", usesFake: true, changed: true},
-		{name: "validate", arguments: []string{"ai4j", "validate", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", usesFake: true},
+		{name: "validate", arguments: []string{"ai4j", "validate", "--target", "claude", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", usesFake: true},
 		{name: "build", arguments: []string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", "dist", "--all", "--json"}, command: cli.CommandBuild, schemaName: "build.json", usesFake: true, changed: true},
-		{name: "install dry run", arguments: []string{"ai4j", "install", "--dry-run", "--json"}, command: cli.CommandInstall, schemaName: "install.json", usesFake: true},
-		{name: "install", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", usesFake: true, changed: true},
-		{name: "update dry run", arguments: []string{"ai4j", "update", "--dry-run", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", usesFake: true},
-		{name: "update", arguments: []string{"ai4j", "update", "--yes", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", usesFake: true, changed: true},
+		{name: "install dry run", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--dry-run", "--json"}, command: cli.CommandInstall, schemaName: "install.json", usesFake: true},
+		{name: "install", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", usesFake: true, changed: true},
+		{name: "update dry run", arguments: []string{"ai4j", "update", "installation-001", "--dry-run", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", usesFake: true},
+		{name: "update", arguments: []string{"ai4j", "update", "installation-001", "--yes", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", usesFake: true, changed: true},
 		{name: "status", arguments: []string{"ai4j", "status", "--json"}, command: cli.CommandStatus, schemaName: "status.json", usesFake: true},
-		{name: "uninstall dry run", arguments: []string{"ai4j", "uninstall", "--dry-run", "--json"}, command: cli.CommandUninstall, schemaName: "uninstall.json", usesFake: true},
-		{name: "uninstall", arguments: []string{"ai4j", "uninstall", "--yes", "--json"}, command: cli.CommandUninstall, schemaName: "uninstall.json", usesFake: true, changed: true},
+		{name: "uninstall dry run", arguments: []string{"ai4j", "uninstall", "installation-001", "--dry-run", "--json"}, command: cli.CommandUninstall, schemaName: "uninstall.json", usesFake: true},
+		{name: "uninstall", arguments: []string{"ai4j", "uninstall", "installation-001", "--yes", "--json"}, command: cli.CommandUninstall, schemaName: "uninstall.json", usesFake: true, changed: true},
 		{name: "version", arguments: []string{"ai4j", "version", "--json"}, command: cli.CommandVersion, schemaName: "version.json"},
 	}
 
@@ -105,22 +106,22 @@ func TestContractHarnessResultFamiliesMatchProcessAndEnvelope(t *testing.T) {
 	t.Parallel()
 
 	tests := []resultScenario{
-		{name: "committed success", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCommitted, wantExit: result.ExitSuccess, wantStatus: result.StatusOK, wantChanged: true, wantPhase: result.PhaseComplete},
-		{name: "pinned no change", arguments: []string{"ai4j", "update", "--dry-run", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", scenario: scenarioPinned, wantExit: result.ExitSuccess, wantStatus: result.StatusNoChange},
+		{name: "committed success", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCommitted, wantExit: result.ExitSuccess, wantStatus: result.StatusOK, wantChanged: true, wantPhase: result.PhaseComplete},
+		{name: "pinned no change", arguments: []string{"ai4j", "update", "installation-001", "--dry-run", "--json"}, command: cli.CommandUpdate, schemaName: "update.json", scenario: scenarioPinned, wantExit: result.ExitSuccess, wantStatus: result.StatusNoChange},
 		{name: "degraded warning", arguments: []string{"ai4j", "status", "--json"}, command: cli.CommandStatus, schemaName: "status.json", scenario: scenarioDegraded, wantExit: result.ExitSuccess, wantStatus: result.StatusDegraded},
-		{name: "cancelled", arguments: []string{"ai4j", "validate", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioCancelled, wantExit: result.ExitCancelled, wantStatus: result.StatusCancelled},
+		{name: "cancelled", arguments: []string{"ai4j", "validate", "--target", "claude", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioCancelled, wantExit: result.ExitCancelled, wantStatus: result.StatusCancelled},
 		{name: "usage", arguments: []string{"ai4j", "validate", "--credential=" + contractSecretCanary, "--json"}, schemaName: "usage.json", scenario: scenarioUsage, wantExit: result.ExitUsageOrApproval, wantStatus: result.StatusError, noFactory: true},
-		{name: "approval required", arguments: []string{"ai4j", "install", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioApproval, wantExit: result.ExitUsageOrApproval, wantStatus: result.StatusError},
-		{name: "environment", arguments: []string{"ai4j", "validate", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioEnvironment, wantExit: result.ExitEnvironment, wantStatus: result.StatusError},
+		{name: "approval required", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioApproval, wantExit: result.ExitUsageOrApproval, wantStatus: result.StatusError},
+		{name: "environment", arguments: []string{"ai4j", "validate", "--target", "claude", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioEnvironment, wantExit: result.ExitEnvironment, wantStatus: result.StatusError},
 		{name: "source update check", arguments: []string{"ai4j", "status", "--check-updates", "--json"}, command: cli.CommandStatus, schemaName: "status.json", scenario: scenarioSource, wantExit: result.ExitSource, wantStatus: result.StatusError},
-		{name: "validation", arguments: []string{"ai4j", "validate", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioValidation, wantExit: result.ExitValidation, wantStatus: result.StatusError},
-		{name: "conflict", arguments: []string{"ai4j", "install", "--dry-run", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioConflict, wantExit: result.ExitConflict, wantStatus: result.StatusError},
-		{name: "pre-mutation empty recovery", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioPreMutationRolledBack, wantExit: result.ExitValidation, wantStatus: result.StatusError, wantPhase: result.PhaseCompleteRolledBack},
-		{name: "post mutation compensated", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCompensated, wantExit: result.ExitCompensated, wantStatus: result.StatusError, wantPhase: result.PhaseCompleteRolledBack},
-		{name: "committed cleanup pending", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCommittedCleanup, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantChanged: true, wantPhase: result.PhaseCommittedCleanupPending},
-		{name: "rolled back cleanup pending", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioRolledBackCleanup, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantPhase: result.PhaseRolledBackCleanupPending},
-		{name: "prepared recovery required", arguments: []string{"ai4j", "install", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioPreparedRecovery, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantPhase: result.PhasePrepared},
-		{name: "unexpected handler failure", arguments: []string{"ai4j", "validate", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioInternal, wantExit: result.ExitUnexpectedInternal, wantStatus: result.StatusError},
+		{name: "validation", arguments: []string{"ai4j", "validate", "--target", "claude", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioValidation, wantExit: result.ExitValidation, wantStatus: result.StatusError},
+		{name: "conflict", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--dry-run", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioConflict, wantExit: result.ExitConflict, wantStatus: result.StatusError},
+		{name: "pre-mutation empty recovery", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioPreMutationRolledBack, wantExit: result.ExitValidation, wantStatus: result.StatusError, wantPhase: result.PhaseCompleteRolledBack},
+		{name: "post mutation compensated", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCompensated, wantExit: result.ExitCompensated, wantStatus: result.StatusError, wantPhase: result.PhaseCompleteRolledBack},
+		{name: "committed cleanup pending", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioCommittedCleanup, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantChanged: true, wantPhase: result.PhaseCommittedCleanupPending},
+		{name: "rolled back cleanup pending", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioRolledBackCleanup, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantPhase: result.PhaseRolledBackCleanupPending},
+		{name: "prepared recovery required", arguments: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--yes", "--json"}, command: cli.CommandInstall, schemaName: "install.json", scenario: scenarioPreparedRecovery, wantExit: result.ExitRecoveryRequired, wantStatus: result.StatusError, wantPhase: result.PhasePrepared},
+		{name: "unexpected handler failure", arguments: []string{"ai4j", "validate", "--target", "claude", "--json"}, command: cli.CommandValidate, schemaName: "validate.json", scenario: scenarioInternal, wantExit: result.ExitUnexpectedInternal, wantStatus: result.StatusError},
 	}
 
 	for _, test := range tests {
@@ -132,7 +133,7 @@ func TestContractHarnessResultFamiliesMatchProcessAndEnvelope(t *testing.T) {
 			handlerCalls := 0
 			factory := app.OtherCommandsFactory(func() (app.CommandHandler, error) {
 				factoryCalls++
-				return func(request cli.Request, _ app.CommandIO) (cli.Response, error) {
+				return func(_ context.Context, request cli.Request, _ app.CommandIO) (cli.Response, error) {
 					handlerCalls++
 					if test.scenario == scenarioInternal {
 						return cli.Response{}, errors.New(contractSecretCanary)
@@ -205,7 +206,7 @@ func TestContractHarnessRepresentativeHumanOutputIsDeterministic(t *testing.T) {
 	for run := 0; run < 20; run++ {
 		stdout := new(bytes.Buffer)
 		stderr := new(bytes.Buffer)
-		exitCode := application.Run([]string{"ai4j", "install", "--dry-run"}, panicReader{}, stdout, stderr)
+		exitCode := application.Run([]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--dry-run"}, panicReader{}, stdout, stderr)
 		if exitCode != result.ExitSuccess.Int() {
 			t.Fatalf("run %d exit = %d, want 0", run, exitCode)
 		}
@@ -319,7 +320,7 @@ func TestContractHarnessSubprocessHelper(t *testing.T) {
 	}
 	fake := &deterministicCommands{t: t, secret: contractSecretCanary}
 	application := newTestApplication(t, validBuild(), fake.factory(commandResponse), human.Render, jsonout.Render)
-	exitCode := application.Run([]string{"ai4j", "install", "--dry-run", "--json"}, panicReader{}, os.Stdout, os.Stderr)
+	exitCode := application.Run([]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--all", "--dry-run", "--json"}, panicReader{}, os.Stdout, os.Stderr)
 	if fake.factoryCalls != 1 || fake.handlerCalls != 1 {
 		os.Exit(result.ExitUnexpectedInternal.Int())
 	}
@@ -338,7 +339,7 @@ type commandResponder func(*testing.T, cli.Request, bool) cli.Response
 func (f *deterministicCommands) factory(responder commandResponder) app.OtherCommandsFactory {
 	return func() (app.CommandHandler, error) {
 		f.factoryCalls++
-		return func(request cli.Request, _ app.CommandIO) (cli.Response, error) {
+		return func(_ context.Context, request cli.Request, _ app.CommandIO) (cli.Response, error) {
 			f.handlerCalls++
 			if f.secret == "" {
 				return cli.Response{}, errors.New("fake canary is required")

@@ -12,20 +12,6 @@ type Request interface {
 	request()
 }
 
-// UnsupportedRequest is a fully validated command that cannot be completed
-// through the documented target or host capabilities. Dispatch returns
-// unsupported_capability before source acquisition or mutation.
-type UnsupportedRequest struct {
-	command Command
-	output  OutputMode
-	message string
-}
-
-func (UnsupportedRequest) request()                 {}
-func (r UnsupportedRequest) Command() Command       { return r.command }
-func (r UnsupportedRequest) OutputMode() OutputMode { return r.output }
-func (r UnsupportedRequest) Message() string        { return r.message }
-
 type SourceOptions struct {
 	repository         string
 	repositoryProvided bool
@@ -62,6 +48,7 @@ func NewDevelopmentSourceOptions(checkout string, allowDirty bool) (SourceOption
 
 type ValidateRequest struct {
 	source SourceOptions
+	target BuildTarget
 	output OutputMode
 }
 
@@ -69,6 +56,7 @@ func (ValidateRequest) request()                 {}
 func (ValidateRequest) Command() Command         { return CommandValidate }
 func (r ValidateRequest) OutputMode() OutputMode { return r.output }
 func (r ValidateRequest) Source() SourceOptions  { return r.source }
+func (r ValidateRequest) Target() BuildTarget    { return r.target }
 
 type InitRequest struct {
 	targets  []BuildTarget
@@ -160,7 +148,6 @@ type InstallRequest struct {
 	selection         SelectionOptions
 	installation      domain.InstallationID
 	hasInstallation   bool
-	v1                bool
 	expectedCommit    domain.CommitOID
 	hasExpected       bool
 	expectedDigest    string
@@ -180,7 +167,6 @@ func (r InstallRequest) Project() (string, bool)               { return r.projec
 func (r InstallRequest) Selection() SelectionOptions           { return r.selection }
 func (r InstallRequest) InstallationID() domain.InstallationID { return r.installation }
 func (r InstallRequest) HasInstallationID() bool               { return r.hasInstallation }
-func (r InstallRequest) V1() bool                              { return r.v1 }
 func (r InstallRequest) ExpectedCommit() (domain.CommitOID, bool) {
 	return r.expectedCommit, r.hasExpected
 }
@@ -192,10 +178,8 @@ func (r InstallRequest) Approved() bool { return r.yes }
 
 type UpdateRequest struct {
 	installation      domain.InstallationID
-	hasInstallation   bool
 	source            SourceOptions
 	policy            ConflictPolicy
-	v1                bool
 	expectedCommit    domain.CommitOID
 	hasExpected       bool
 	expectedDigest    string
@@ -209,10 +193,8 @@ func (UpdateRequest) request()                                {}
 func (UpdateRequest) Command() Command                        { return CommandUpdate }
 func (r UpdateRequest) OutputMode() OutputMode                { return r.output }
 func (r UpdateRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r UpdateRequest) HasInstallationID() bool               { return r.hasInstallation }
 func (r UpdateRequest) Source() SourceOptions                 { return r.source }
 func (r UpdateRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-func (r UpdateRequest) V1() bool                              { return r.v1 }
 func (r UpdateRequest) ExpectedCommit() (domain.CommitOID, bool) {
 	return r.expectedCommit, r.hasExpected
 }
@@ -325,13 +307,11 @@ func (r RollbackRequest) DryRun() bool                          { return r.dryRu
 func (r RollbackRequest) Approved() bool                        { return r.yes }
 
 type UninstallRequest struct {
-	installation    domain.InstallationID
-	hasInstallation bool
-	policy          ConflictPolicy
-	v1              bool
-	dryRun          bool
-	yes             bool
-	output          OutputMode
+	installation domain.InstallationID
+	policy       ConflictPolicy
+	dryRun       bool
+	yes          bool
+	output       OutputMode
 }
 
 func (UninstallRequest) request()                                {}
@@ -339,9 +319,7 @@ func (UninstallRequest) Command() Command                        { return Comman
 func (r UninstallRequest) OutputMode() OutputMode                { return r.output }
 func (r UninstallRequest) Approved() bool                        { return r.yes }
 func (r UninstallRequest) InstallationID() domain.InstallationID { return r.installation }
-func (r UninstallRequest) HasInstallationID() bool               { return r.hasInstallation }
 func (r UninstallRequest) ConflictPolicy() ConflictPolicy        { return r.policy }
-func (r UninstallRequest) V1() bool                              { return r.v1 }
 func (r UninstallRequest) DryRun() bool                          { return r.dryRun }
 
 type HistoryRequest struct {

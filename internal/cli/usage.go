@@ -6,7 +6,7 @@ import (
 	"github.com/alx4j/ai4j/internal/fault"
 )
 
-// UsageIssue is a stable, typed reason that argv did not match the MVP grammar.
+// UsageIssue is a stable, typed reason that argv did not match the CLI grammar.
 type UsageIssue string
 
 const (
@@ -14,8 +14,6 @@ const (
 	UsageAlternateExecutable   UsageIssue = "alternate_executable"
 	UsageMissingCommand        UsageIssue = "missing_command"
 	UsageUnknownCommand        UsageIssue = "unknown_command"
-	UsageMissingSubcommand     UsageIssue = "missing_subcommand"
-	UsageUnknownSubcommand     UsageIssue = "unknown_subcommand"
 	UsageUnexpectedArgument    UsageIssue = "unexpected_argument"
 	UsageUnknownOption         UsageIssue = "unknown_option"
 	UsageMisplacedOption       UsageIssue = "misplaced_option"

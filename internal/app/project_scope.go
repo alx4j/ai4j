@@ -16,7 +16,7 @@ import (
 const projectInspectionTimeout = 15 * time.Second
 const maximumProjectMetadataBytes = 1 << 20
 
-func (v *v1LifecycleService) resolveProjectRoot(ctx context.Context, project string, explicit bool) (string, error) {
+func (s *lifecycleService) resolveProjectRoot(ctx context.Context, project string, explicit bool) (string, error) {
 	candidate := project
 	if !explicit {
 		var err error
@@ -37,13 +37,13 @@ func (v *v1LifecycleService) resolveProjectRoot(ctx context.Context, project str
 	if err != nil || !info.IsDir() {
 		return "", errors.New("project is not a directory")
 	}
-	git, err := v.base.runner.LookPath("git")
+	git, err := s.runner.LookPath("git")
 	if err != nil {
 		return "", err
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
-	observation, err := v.base.runner.Run(commandContext, canonical, git, []string{"rev-parse", "--show-toplevel"}, []string{
+	observation, err := s.runner.Run(commandContext, canonical, git, []string{"rev-parse", "--show-toplevel"}, []string{
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
 	})
@@ -83,40 +83,40 @@ func nativeDirectory(record installstate.Record) string {
 	return record.ScopeRoot
 }
 
-func (v *v1LifecycleService) runClaudeFor(ctx context.Context, record installstate.Record, arguments []string) error {
-	return v.base.runClaudeAt(ctx, nativeDirectory(record), arguments)
+func (s *lifecycleService) runClaudeFor(ctx context.Context, record installstate.Record, arguments []string) error {
+	return s.runClaudeAt(ctx, nativeDirectory(record), arguments)
 }
 
-func (v *v1LifecycleService) inspectProjectLocal(ctx context.Context, record installstate.Record) error {
+func (s *lifecycleService) inspectProjectLocal(ctx context.Context, record installstate.Record) error {
 	if record.Scope != "project-local" || record.Rules.Path == "" {
 		return nil
 	}
-	git, err := v.base.runner.LookPath("git")
+	git, err := s.runner.LookPath("git")
 	if err != nil {
 		return err
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
 	relative := filepath.ToSlash(record.Rules.Path)
-	tracked, err := v.base.runner.Run(commandContext, record.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
+	tracked, err := s.runner.Run(commandContext, record.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
 	if err != nil || tracked.ExitCode != 0 && tracked.ExitCode != 1 {
 		return errors.New("project rules tracking could not be inspected")
 	}
 	if tracked.ExitCode == 0 {
 		return errors.New("project rules destination is tracked")
 	}
-	_, err = v.projectExcludePath(ctx, record)
+	_, err = s.projectExcludePath(ctx, record)
 	return err
 }
 
-func (v *v1LifecycleService) projectExcludePath(ctx context.Context, record installstate.Record) (string, error) {
-	git, err := v.base.runner.LookPath("git")
+func (s *lifecycleService) projectExcludePath(ctx context.Context, record installstate.Record) (string, error) {
+	git, err := s.runner.LookPath("git")
 	if err != nil {
 		return "", err
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
-	observation, err := v.base.runner.Run(commandContext, record.ScopeRoot, git, []string{"rev-parse", "--git-path", "info/exclude"}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
+	observation, err := s.runner.Run(commandContext, record.ScopeRoot, git, []string{"rev-parse", "--git-path", "info/exclude"}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
 	if err != nil || observation.ExitCode != 0 || len(observation.Stderr) != 0 {
 		return "", errors.New("Git local exclusion path could not be resolved")
 	}
@@ -130,22 +130,22 @@ func (v *v1LifecycleService) projectExcludePath(ctx context.Context, record inst
 	return filepath.Clean(value), nil
 }
 
-func (v *v1LifecycleService) ensureProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
+func (s *lifecycleService) ensureProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
 	if record.Scope != "project-local" || record.Rules.Path == "" {
 		return nil
 	}
-	path, err := v.projectExcludePath(ctx, record)
+	path, err := s.projectExcludePath(ctx, record)
 	if err != nil {
 		return err
 	}
 	return editProjectExclude(path, projectExcludeLine(record), true)
 }
 
-func (v *v1LifecycleService) removeProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
+func (s *lifecycleService) removeProjectLocalExclusion(ctx context.Context, record installstate.Record) error {
 	if record.Scope != "project-local" || record.Rules.Path == "" {
 		return nil
 	}
-	path, err := v.projectExcludePath(ctx, record)
+	path, err := s.projectExcludePath(ctx, record)
 	if err != nil {
 		return err
 	}

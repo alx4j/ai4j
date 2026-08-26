@@ -10,8 +10,6 @@ import (
 	"github.com/alx4j/ai4j/internal/fault"
 )
 
-const codexNativeLifecycleUnavailable = "Codex exposes plugin lifecycle only through its interactive native plugin browser; build the Codex package with ai4j, then install or manage it through /plugins or the Codex desktop plugin browser"
-
 type Parser struct{ windows bool }
 
 func NewParser(goos string) Parser { return Parser{windows: goos == "windows"} }
@@ -83,20 +81,25 @@ var knownOptions = map[string]struct{}{
 	"target": {}, "host": {}, "output": {}, "all": {}, "asset": {}, "bundle": {}, "examples": {}, "scope": {}, "project": {}, "installation": {}, "conflict-policy": {}, "operation": {}, "test-mcp": {}, "expired": {}, "selection": {}, "force": {}, "dry-run": {},
 }
 
+func isKnownOption(name string) bool {
+	_, ok := knownOptions[name]
+	return ok
+}
+
 func (p Parser) Parse(argv []string) (Request, error) {
 	jsonRequested := containsExactJSON(argv)
 	if len(argv) == 0 {
-		return nil, usage(UsageMissingExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonEmpty, nil)
+		return nil, newUsageError(UsageMissingExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonEmpty, nil)
 	}
 	if !p.validExecutable(argv[0]) {
-		return nil, usage(UsageAlternateExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonUnknownValue, nil)
+		return nil, newUsageError(UsageAlternateExecutable, "", "", jsonRequested, "cli.executable", fault.ReasonUnknownValue, nil)
 	}
 	if len(argv) == 1 {
-		return nil, usage(UsageMissingCommand, "", "", jsonRequested, "cli.command", fault.ReasonEmpty, nil)
+		return nil, newUsageError(UsageMissingCommand, "", "", jsonRequested, "cli.command", fault.ReasonEmpty, nil)
 	}
 	command, optionStart, issue := parseCommand(argv[1:])
 	if issue != "" {
-		return nil, usage(issue, "", "", jsonRequested, "cli.command", fault.ReasonUnknownValue, nil)
+		return nil, newUsageError(issue, "", "", jsonRequested, "cli.command", fault.ReasonUnknownValue, nil)
 	}
 	arguments := argv[1+optionStart:]
 	installation, hasInstallation, arguments, err := parseInstallationArgument(command, arguments, jsonRequested)
@@ -122,17 +125,14 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	switch command {
 	case CommandInit:
 		if len(options.targets) == 0 {
-			return nil, usage(UsageMissingOptionValue, command, "target", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "target", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if options.output == "" {
-			return nil, usage(UsageMissingOptionValue, command, "output", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "output", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		return InitRequest{targets: append([]BuildTarget(nil), options.targets...), output: options.output, examples: options.examples, mode: output}, nil
 	case CommandValidate:
-		if len(options.targets) == 1 && options.targets[0] != BuildTargetClaude {
-			return UnsupportedRequest{command: command, output: output, message: codexNativeLifecycleUnavailable}, nil
-		}
-		return ValidateRequest{source: source, output: output}, nil
+		return ValidateRequest{source: source, target: firstTarget(options.targets), output: output}, nil
 	case CommandBuild:
 		required := []struct {
 			name    string
@@ -144,30 +144,21 @@ func (p Parser) Parse(argv []string) (Request, error) {
 		}
 		for _, option := range required {
 			if !option.present {
-				return nil, usage(UsageMissingOptionValue, command, option.name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+				return nil, newUsageError(UsageMissingOptionValue, command, option.name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 			}
 		}
 		hasExplicitSelection := len(options.assets) != 0 || len(options.bundles) != 0
 		if !options.all && !hasExplicitSelection {
-			return nil, usage(UsageMissingOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return nil, newUsageError(UsageMissingOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if options.all && hasExplicitSelection {
-			return nil, usage(UsageInvalidOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+			return nil, newUsageError(UsageInvalidOptionValue, command, "all", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 		}
 		return BuildRequest{source: source, target: options.targets[0], host: options.host, output: options.output, all: options.all, assets: append([]string(nil), options.assets...), bundles: append([]string(nil), options.bundles...), mode: output}, nil
 	case CommandInstall:
-		if usesV1InstallOptions(options) || options.hasExpectedDigest {
-			if len(options.targets) == 1 && options.targets[0] != BuildTargetClaude {
-				return UnsupportedRequest{command: command, output: output, message: codexNativeLifecycleUnavailable}, nil
-			}
-			return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, v1: true, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
-		}
-		return InstallRequest{source: source, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: selectionOptions(options), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandUpdate:
-		if options.hasInstallation || options.hasRepository || options.hasReference || options.allowDirty || options.hasExpectedDigest || options.hasConflictPolicy {
-			return UpdateRequest{installation: options.installation, hasInstallation: options.hasInstallation, source: source, policy: conflictPolicy(options), v1: true, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
-		}
-		return UpdateRequest{expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return UpdateRequest{installation: options.installation, source: source, policy: conflictPolicy(options), expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandSync:
 		return SyncRequest{installation: options.installation, selection: selectionOptions(options), allowDirty: options.allowDirty, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandDoctor:
@@ -183,10 +174,7 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	case CommandStatus:
 		return StatusRequest{installation: options.installation, hasInstallation: options.hasInstallation, checkUpdates: options.checkUpdates, output: output}, nil
 	case CommandUninstall:
-		if options.hasInstallation || options.hasConflictPolicy {
-			return UninstallRequest{installation: options.installation, hasInstallation: options.hasInstallation, policy: conflictPolicy(options), v1: true, dryRun: options.dryRun, yes: options.yes, output: output}, nil
-		}
-		return UninstallRequest{dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return UninstallRequest{installation: options.installation, policy: conflictPolicy(options), dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandVersion:
 		return VersionRequest{output: output}, nil
 	default:
@@ -249,7 +237,7 @@ func parseInstallationArgument(command Command, arguments []string, jsonRequeste
 	}
 	installation, err := domain.NewInstallationID(arguments[0])
 	if err != nil {
-		return domain.InstallationID{}, false, nil, usage(UsageInvalidOptionValue, command, "installation", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
+		return domain.InstallationID{}, false, nil, newUsageError(UsageInvalidOptionValue, command, "installation", jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
 	}
 	return installation, true, arguments[1:], nil
 }
@@ -270,7 +258,7 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 	for index := 0; index < len(arguments); index++ {
 		token := arguments[index]
 		if token == "--" || !strings.HasPrefix(token, "--") || token == "-" {
-			return parsedOptions{}, usage(UsageUnexpectedArgument, command, "", jsonRequested, "cli.argument", fault.ReasonInvalidFormat, nil)
+			return parsedOptions{}, newUsageError(UsageUnexpectedArgument, command, "", jsonRequested, "cli.argument", fault.ReasonInvalidFormat, nil)
 		}
 		nameValue := strings.SplitN(strings.TrimPrefix(token, "--"), "=", 2)
 		name := nameValue[0]
@@ -278,20 +266,20 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 		if !ok || name == "" {
 			issue := UsageUnknownOption
 			safeOption := ""
-			if _, known := knownOptions[name]; known {
+			if isKnownOption(name) {
 				issue = UsageInapplicableOption
 				safeOption = name
 			}
-			return parsedOptions{}, usage(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
+			return parsedOptions{}, newUsageError(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
 		}
-		repeatable := name == "asset" || name == "bundle" || command == CommandInit && name == "target"
+		repeatable := name == "asset" || name == "bundle" || (command == CommandInit || command == CommandValidate) && name == "target"
 		if _, duplicate := seen[name]; duplicate && !repeatable {
-			return parsedOptions{}, usage(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
+			return parsedOptions{}, newUsageError(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
 		}
 		seen[name] = struct{}{}
 		if kind == booleanOption {
 			if len(nameValue) == 2 {
-				return parsedOptions{}, usage(UsageUnexpectedOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+				return parsedOptions{}, newUsageError(UsageUnexpectedOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 			}
 			setBoolean(&result, name)
 			continue
@@ -301,16 +289,16 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 			value = nameValue[1]
 		} else {
 			if index+1 >= len(arguments) || strings.HasPrefix(arguments[index+1], "--") {
-				return parsedOptions{}, usage(UsageMissingOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+				return parsedOptions{}, newUsageError(UsageMissingOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 			}
 			index++
 			value = arguments[index]
 		}
 		if value == "" {
-			return parsedOptions{}, usage(UsageEmptyOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+			return parsedOptions{}, newUsageError(UsageEmptyOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
 		if err := setValue(&result, name, value); err != nil {
-			return parsedOptions{}, usage(UsageInvalidOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
+			return parsedOptions{}, newUsageError(UsageInvalidOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
 		}
 	}
 	return result, nil
@@ -474,10 +462,10 @@ func historyPurgeSelection(options parsedOptions) HistoryPurgeSelection {
 
 func validateOptionRelationships(command Command, options parsedOptions, jsonRequested bool) error {
 	invalid := func(option string) error {
-		return usage(UsageInvalidOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
+		return newUsageError(UsageInvalidOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, nil)
 	}
 	missing := func(option string) error {
-		return usage(UsageMissingOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
+		return newUsageError(UsageMissingOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 	}
 	if options.hasSource && (options.hasRepository || options.hasReference) {
 		return invalid("source")
@@ -512,8 +500,11 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	}
 	switch command {
 	case CommandValidate:
-		if (options.hasSource || options.allowDirty) && len(options.targets) == 0 {
+		if len(options.targets) == 0 {
 			return missing("target")
+		}
+		if len(options.targets) > 1 {
+			return invalid("target")
 		}
 		if options.allowDirty && !options.hasSource {
 			return invalid("allow-dirty")
@@ -529,23 +520,20 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 			}
 			return nil
 		}
-		if usesV1InstallOptions(options) || options.hasExpectedDigest {
-			if len(options.targets) == 0 {
-				return missing("target")
-			}
-			if !options.hasScope {
-				return missing("scope")
-			}
-			if !hasSelection {
-				return missing("all")
-			}
-			if options.allowDirty && !options.hasSource {
-				return invalid("allow-dirty")
-			}
+		if len(options.targets) == 0 {
+			return missing("target")
+		}
+		if !options.hasScope {
+			return missing("scope")
+		}
+		if !hasSelection {
+			return missing("all")
+		}
+		if options.allowDirty && !options.hasSource {
+			return invalid("allow-dirty")
 		}
 	case CommandUpdate:
-		usesV1 := options.hasInstallation || options.hasRepository || options.hasReference || options.allowDirty || options.hasExpectedDigest || options.hasConflictPolicy
-		if usesV1 && !options.hasInstallation {
+		if !options.hasInstallation {
 			return missing("installation")
 		}
 	case CommandSync:
@@ -560,9 +548,6 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 			return missing("installation")
 		}
 	case CommandRollback, CommandUninstall, CommandHistory:
-		if command == CommandUninstall && !options.hasInstallation && !options.hasConflictPolicy {
-			return nil
-		}
 		if !options.hasInstallation {
 			return missing("installation")
 		}
@@ -587,10 +572,6 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	return nil
 }
 
-func usesV1InstallOptions(options parsedOptions) bool {
-	return options.hasSource || options.hasInstallation || len(options.targets) != 0 || options.hasScope || options.hasProject || options.all || len(options.assets) != 0 || len(options.bundles) != 0 || options.allowDirty
-}
-
 func selectionIdentifier(value string) bool {
 	if len(value) < 2 || len(value) > 63 || value[0] < 'a' || value[0] > 'z' {
 		return false
@@ -610,8 +591,4 @@ func containsExactJSON(arguments []string) bool {
 		}
 	}
 	return false
-}
-
-func usage(issue UsageIssue, command Command, option string, jsonRequested bool, field string, reason fault.InvalidReason, cause error) *UsageError {
-	return newUsageError(issue, command, option, jsonRequested, field, reason, cause)
 }
