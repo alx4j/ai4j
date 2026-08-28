@@ -408,6 +408,7 @@ func renderSource(output *boundedBuffer, source cli.Source, indent int) {
 		return
 	}
 	output.indentedField(indent+1, "Repository", source.Repository().String())
+	output.indentedField(indent+1, "Transport", source.Transport().String())
 	if source.HasRequestedRef() {
 		output.indentedField(indent+1, "Requested reference", source.RequestedRef())
 	} else {
@@ -427,6 +428,7 @@ func renderRecordedSource(output *boundedBuffer, source cli.RecordedSource, inde
 		return
 	}
 	output.indentedField(indent+1, "Repository", source.Repository().String())
+	output.indentedField(indent+1, "Transport", source.Transport().String())
 	if source.HasRequestedRef() {
 		output.indentedField(indent+1, "Requested reference", source.RequestedRef())
 	} else {

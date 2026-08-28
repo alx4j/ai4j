@@ -12,11 +12,11 @@ func TestRenderPinsDefaultPackagesToTheFullCommit(t *testing.T) {
 	t.Parallel()
 	repository, _ := domain.NewRepositoryIdentity("github.com/alx4j/ai4j")
 	commit, _ := domain.NewCommitOID(strings.Repeat("a", 40))
-	first, err := Render(repository, commit)
+	first, err := Render(repository, domain.HTTPSGitTransport(), commit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Render(repository, commit)
+	second, err := Render(repository, domain.HTTPSGitTransport(), commit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,15 +52,15 @@ func TestRenderPackagesSortsPluginsAndPinsEachToTheFullCommit(t *testing.T) {
 	repository, _ := domain.NewRepositoryIdentity("github.com/alx4j/ai4j")
 	commit, _ := domain.NewCommitOID(strings.Repeat("b", 40))
 	packages := []Package{
-		{ID: "review", Path: "plugins/review", Description: "Review guidance"},
-		{ID: "agents", Path: "plugins/agents", Description: "Focused agents"},
+		sourcedPackage("review", "plugins/review", "Review guidance", repository, domain.HTTPSGitTransport(), commit),
+		sourcedPackage("agents", "plugins/agents", "Focused agents", repository, domain.HTTPSGitTransport(), commit),
 	}
 
-	first, err := RenderPackages("ai4j-selection", packages, repository, commit)
+	first, err := RenderPackages("ai4j-selection", packages)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := RenderPackages("ai4j-selection", []Package{packages[1], packages[0]}, repository, commit)
+	second, err := RenderPackages("ai4j-selection", []Package{packages[1], packages[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,16 +136,35 @@ func TestRenderPackagesRejectsInvalidPackageSets(t *testing.T) {
 		packages []Package
 	}{
 		{name: "empty", packages: nil},
-		{name: "missing identity", packages: []Package{{ID: "review", Path: "", Description: "Review guidance"}}},
-		{name: "duplicate identity", packages: []Package{{ID: "review", Path: "plugins/review", Description: "First"}, {ID: "review", Path: "plugins/review-copy", Description: "Second"}}},
+		{name: "missing identity", packages: []Package{sourcedPackage("review", "", "Review guidance", repository, domain.HTTPSGitTransport(), commit)}},
+		{name: "duplicate identity", packages: []Package{sourcedPackage("review", "plugins/review", "First", repository, domain.HTTPSGitTransport(), commit), sourcedPackage("review", "plugins/review-copy", "Second", repository, domain.HTTPSGitTransport(), commit)}},
+		{name: "missing source", packages: []Package{{ID: "review", Path: "plugins/review", Description: "Review guidance"}}},
 	}
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := RenderPackages("ai4j-selection", test.packages, repository, commit); err == nil {
+			if _, err := RenderPackages("ai4j-selection", test.packages); err == nil {
 				t.Fatal("RenderPackages succeeded")
 			}
 		})
 	}
+}
+
+func TestRenderPackagesPreservesEnterpriseSSHRemote(t *testing.T) {
+	t.Parallel()
+	repository, _ := domain.NewRepositoryIdentity("gitlab.barclays.example/division/team/barclays")
+	commit, _ := domain.NewCommitOID(strings.Repeat("d", 40))
+	document, err := RenderPackages("barclays", []Package{sourcedPackage("barclays", "plugins/barclays", "Barclays tools", repository, domain.SSHGitTransport(), commit)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(document.Bytes()), `"url": "git@gitlab.barclays.example:division/team/barclays.git"`) ||
+		!strings.Contains(string(document.Bytes()), `"sha": "`+commit.String()+`"`) {
+		t.Fatalf("catalog = %s", document.Bytes())
+	}
+}
+
+func sourcedPackage(id, path, description string, repository domain.RepositoryIdentity, transport domain.GitTransport, commit domain.CommitOID) Package {
+	return Package{ID: id, Path: path, Description: description, Repository: repository, Transport: transport, Commit: commit}
 }

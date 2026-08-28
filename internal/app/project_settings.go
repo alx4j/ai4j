@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
@@ -23,9 +22,9 @@ type jsonObjectMember struct {
 }
 
 func projectMarketplaceEntry(record installstate.Record) ([]byte, error) {
-	repository := strings.TrimPrefix(record.Source.Repository, "github.com/")
-	if repository == record.Source.Repository || repository == "" || record.Source.Commit == "" {
-		return nil, errors.New("project-shared source must be an exact GitHub commit")
+	remote, err := storedSourceRemote(record.Source)
+	if err != nil || record.Source.Commit == "" {
+		return nil, errors.New("project-shared source must be an exact Git commit")
 	}
 	entry := struct {
 		Source struct {
@@ -56,7 +55,7 @@ func projectMarketplaceEntry(record installstate.Record) ([]byte, error) {
 	for index, pkg := range record.Packages {
 		entry.Source.Plugins[index].Name = pkg.ID
 		entry.Source.Plugins[index].Source.Source = "git-subdir"
-		entry.Source.Plugins[index].Source.URL = "https://github.com/" + repository + ".git"
+		entry.Source.Plugins[index].Source.URL = remote.Endpoint()
 		entry.Source.Plugins[index].Source.Path = pkg.Path
 		entry.Source.Plugins[index].Source.SHA = record.Source.Commit
 	}
@@ -664,11 +663,15 @@ func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	transport, err := storedSourceTransport(record.Source)
+	if err != nil {
+		return nil, err
+	}
 	packages := make([]catalog.Package, len(record.Packages))
 	for index, pkg := range record.Packages {
-		packages[index] = catalog.Package{ID: pkg.ID, Path: pkg.Path, Description: "AI4J toolkit package " + pkg.ID}
+		packages[index] = catalog.Package{ID: pkg.ID, Path: pkg.Path, Description: "AI4J toolkit package " + pkg.ID, Repository: repository, Transport: transport, Commit: commit}
 	}
-	document, err := catalog.RenderPackages(record.MarketplaceID, packages, repository, commit)
+	document, err := catalog.RenderPackages(record.MarketplaceID, packages)
 	if err != nil {
 		return nil, err
 	}

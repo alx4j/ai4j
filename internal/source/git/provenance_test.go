@@ -8,7 +8,7 @@ import (
 
 	"github.com/alx4j/ai4j/internal/domain"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 const (
@@ -41,7 +41,7 @@ func TestResolutionRequestCopiesCredentialFreeEffectiveSourceFacts(t *testing.T)
 	if value, present := omitted.RequestedReference().Value(); value != "" || present {
 		t.Fatalf("requested = %q/%t", value, present)
 	}
-	if _, err := gitsource.NewResolutionRequest(githubsource.EffectiveSource{}); !errors.Is(err, gitsource.ErrInvalidResolutionRequest) {
+	if _, err := gitsource.NewResolutionRequest(gitremote.EffectiveSource{}); !errors.Is(err, gitsource.ErrInvalidResolutionRequest) {
 		t.Fatalf("zero source error = %v", err)
 	}
 }
@@ -167,13 +167,13 @@ func TestUpdateDispositionIsClosedAndStable(t *testing.T) {
 	}
 }
 
-func effectiveSource(t *testing.T, repository string, repositoryProvided bool, reference string, referenceProvided bool) githubsource.EffectiveSource {
+func effectiveSource(t *testing.T, repository string, repositoryProvided bool, reference string, referenceProvided bool) gitremote.EffectiveSource {
 	t.Helper()
-	input, err := githubsource.NewSelectionInput(repository, repositoryProvided, reference, referenceProvided)
+	input, err := gitremote.NewSelectionInput(repository, repositoryProvided, reference, referenceProvided)
 	if err != nil {
 		t.Fatal(err)
 	}
-	effective, err := githubsource.Resolve(input)
+	effective, err := gitremote.Resolve(input)
 	if err != nil {
 		t.Fatal(err)
 	}

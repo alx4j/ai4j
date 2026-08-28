@@ -277,7 +277,7 @@ func (p RuntimeProfile) AllowedChildPurposes(
 		switch auth.mode {
 		case AuthenticationAnonymousHTTPS:
 			return []RuntimeChildPurpose{ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS}, nil
-		case AuthenticationKeychainHTTPS:
+		case AuthenticationCredentialHelperHTTPS:
 			return []RuntimeChildPurpose{
 				ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildCredentialShell, ChildCredential,
 			}, nil
@@ -293,7 +293,7 @@ func (p RuntimeProfile) AllowedChildPurposes(
 			return []RuntimeChildPurpose{
 				ChildGitRevList, ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildGitFetchPack, ChildGitIndexPack,
 			}, nil
-		case AuthenticationKeychainHTTPS:
+		case AuthenticationCredentialHelperHTTPS:
 			return []RuntimeChildPurpose{
 				ChildGitRevList, ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildGitFetchPack,
 				ChildGitIndexPack, ChildCredentialShell, ChildCredential,
@@ -341,13 +341,13 @@ func (p RuntimeChildPurpose) Valid() bool {
 type AuthenticationMode string
 
 const (
-	AuthenticationAnonymousHTTPS AuthenticationMode = "https_anonymous"
-	AuthenticationKeychainHTTPS  AuthenticationMode = "https_keychain"
-	AuthenticationDefaultKeySSH  AuthenticationMode = "ssh_default_keys"
+	AuthenticationAnonymousHTTPS        AuthenticationMode = "https_anonymous"
+	AuthenticationCredentialHelperHTTPS AuthenticationMode = "https_credential_helper"
+	AuthenticationDefaultKeySSH         AuthenticationMode = "ssh_default_keys"
 )
 
 func (m AuthenticationMode) Valid() bool {
-	return m == AuthenticationAnonymousHTTPS || m == AuthenticationKeychainHTTPS || m == AuthenticationDefaultKeySSH
+	return m == AuthenticationAnonymousHTTPS || m == AuthenticationCredentialHelperHTTPS || m == AuthenticationDefaultKeySSH
 }
 
 // AuthenticationProjection binds one canonical repository to exactly one
@@ -378,7 +378,7 @@ func (p AuthenticationProjection) Valid() bool {
 		return false
 	}
 	switch p.mode {
-	case AuthenticationAnonymousHTTPS, AuthenticationKeychainHTTPS:
+	case AuthenticationAnonymousHTTPS, AuthenticationCredentialHelperHTTPS:
 		return p.transport == domain.HTTPSGitTransport()
 	case AuthenticationDefaultKeySSH:
 		return p.transport == domain.SSHGitTransport()

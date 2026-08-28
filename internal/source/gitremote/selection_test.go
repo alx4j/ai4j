@@ -1,4 +1,4 @@
-package github_test
+package gitremote_test
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/alx4j/ai4j/internal/domain"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 func TestResolveSelectionMatrix(t *testing.T) {
@@ -32,15 +32,17 @@ func TestResolveSelectionMatrix(t *testing.T) {
 		{name: "explicit https", repository: "https://github.com/alx4j/ai4j.git", repositoryPresent: true, selection: domain.ExplicitSource(), identity: "github.com/alx4j/ai4j", transport: domain.HTTPSGitTransport(), endpoint: "https://github.com/alx4j/ai4j.git"},
 		{name: "explicit ssh", repository: "git@github.com:alx4j/ai4j.git", repositoryPresent: true, reference: "refs/tags/v1.0.0", referencePresent: true, selection: domain.ExplicitSource(), identity: "github.com/alx4j/ai4j", transport: domain.SSHGitTransport(), endpoint: "git@github.com:alx4j/ai4j.git"},
 		{name: "third party", repository: "example/toolkit", repositoryPresent: true, selection: domain.ExplicitSource(), identity: "github.com/example/toolkit", transport: domain.HTTPSGitTransport(), endpoint: "https://github.com/example/toolkit.git"},
+		{name: "enterprise https", repository: "https://git.everpure.example/platform/toolkits/everpure.git", repositoryPresent: true, selection: domain.ExplicitSource(), identity: "git.everpure.example/platform/toolkits/everpure", transport: domain.HTTPSGitTransport(), endpoint: "https://git.everpure.example/platform/toolkits/everpure.git"},
+		{name: "enterprise ssh", repository: "git@gitlab.barclays.example:division/team/Barclays.git", repositoryPresent: true, selection: domain.ExplicitSource(), identity: "gitlab.barclays.example/division/team/Barclays", transport: domain.SSHGitTransport(), endpoint: "git@gitlab.barclays.example:division/team/Barclays.git"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			input, err := githubsource.NewSelectionInput(test.repository, test.repositoryPresent, test.reference, test.referencePresent)
+			input, err := gitremote.NewSelectionInput(test.repository, test.repositoryPresent, test.reference, test.referencePresent)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := githubsource.Resolve(input)
+			got, err := gitremote.Resolve(input)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +78,7 @@ func TestSelectionPresenceAndReferenceSafety(t *testing.T) {
 		{reference: strings.Repeat("r", 1025), hasRef: true},
 	}
 	for _, test := range invalid {
-		if _, err := githubsource.NewSelectionInput(test.repository, test.hasRepo, test.reference, test.hasRef); err == nil {
+		if _, err := gitremote.NewSelectionInput(test.repository, test.hasRepo, test.reference, test.hasRef); err == nil {
 			t.Errorf("NewSelectionInput(%q,%v,%q,%v) succeeded", test.repository, test.hasRepo, test.reference, test.hasRef)
 		}
 	}
@@ -85,9 +87,9 @@ func TestSelectionPresenceAndReferenceSafety(t *testing.T) {
 func TestInvalidReferenceRetainsItsSafeClassification(t *testing.T) {
 	t.Parallel()
 
-	_, err := githubsource.NewSelectionInput("", false, "-upload-pack=secret", true)
-	var selectionErr githubsource.SelectionError
-	if !errors.As(err, &selectionErr) || selectionErr.Code() != githubsource.ErrorInvalidReference {
+	_, err := gitremote.NewSelectionInput("", false, "-upload-pack=secret", true)
+	var selectionErr gitremote.SelectionError
+	if !errors.As(err, &selectionErr) || selectionErr.Code() != gitremote.ErrorInvalidReference {
 		t.Fatalf("invalid reference error = %T %v", err, err)
 	}
 }
@@ -113,12 +115,12 @@ func TestDefaultAndExplicitFirstPartyDifferOnlyBySelection(t *testing.T) {
 func TestBadExplicitRepositoryNeverFallsBack(t *testing.T) {
 	t.Parallel()
 
-	input, err := githubsource.NewSelectionInput("https://evil.example/alx4j/ai4j.git", true, "", false)
+	input, err := gitremote.NewSelectionInput("https://user:secret@evil.example/alx4j/ai4j.git", true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	probe := &recordingProbe{}
-	if _, err := githubsource.Qualify(context.Background(), input, probe); err == nil {
+	if _, err := gitremote.Qualify(context.Background(), input, probe); err == nil {
 		t.Fatal("invalid explicit repository succeeded")
 	}
 	if probe.calls != 0 {
@@ -131,7 +133,7 @@ func TestCredentialFreeHandoffAndTransportReconstruction(t *testing.T) {
 
 	for _, repository := range []string{"https://github.com/private/repository.git", "git@github.com:private/repository.git"} {
 		effective := mustEffective(t, repository, true, "main", true)
-		reconstructed, err := githubsource.ReconstructRemote(effective.Repository(), effective.Transport())
+		reconstructed, err := gitremote.ReconstructRemote(effective.Repository(), effective.Transport())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,7 +157,7 @@ func TestCredentialFreeHandoffAndTransportReconstruction(t *testing.T) {
 		}
 	}
 
-	typeOf := reflect.TypeOf(githubsource.EffectiveSource{})
+	typeOf := reflect.TypeOf(gitremote.EffectiveSource{})
 	for index := 0; index < typeOf.NumField(); index++ {
 		name := strings.ToLower(typeOf.Field(index).Name)
 		if strings.Contains(name, "credential") || strings.Contains(name, "password") || strings.Contains(name, "token") || strings.Contains(name, "helper") {
@@ -180,12 +182,12 @@ func TestQualificationPassesAuthenticationThroughWithoutPersistenceOrFallback(t 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			input, err := githubsource.NewSelectionInput(test.repository, true, "main", true)
+			input, err := gitremote.NewSelectionInput(test.repository, true, "main", true)
 			if err != nil {
 				t.Fatal(err)
 			}
 			probe := &recordingProbe{externalCredential: test.credential}
-			got, err := githubsource.Qualify(context.Background(), input, probe)
+			got, err := gitremote.Qualify(context.Background(), input, probe)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,27 +204,27 @@ func TestQualificationPassesAuthenticationThroughWithoutPersistenceOrFallback(t 
 func TestQualificationMapsAccessErrorsWithoutRawOutputAndPreservesCancellation(t *testing.T) {
 	t.Parallel()
 
-	input, err := githubsource.NewSelectionInput("private/repository", true, "", false)
+	input, err := gitremote.NewSelectionInput("private/repository", true, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret := "AUTH_SECRET_CANARY"
 	probe := &recordingProbe{err: errors.New(secret)}
-	if _, err := githubsource.Qualify(context.Background(), input, probe); err == nil || strings.Contains(err.Error(), secret) {
+	if _, err := gitremote.Qualify(context.Background(), input, probe); err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("unsafe access error: %v", err)
 	} else {
-		var selectionErr githubsource.SelectionError
-		if !errors.As(err, &selectionErr) || selectionErr.Code() != githubsource.ErrorAccessFailed {
+		var selectionErr gitremote.SelectionError
+		if !errors.As(err, &selectionErr) || selectionErr.Code() != gitremote.ErrorAccessFailed {
 			t.Fatalf("access error = %T %v", err, err)
 		}
 	}
 
 	probe.err = context.Canceled
-	if _, err := githubsource.Qualify(context.Background(), input, probe); !errors.Is(err, context.Canceled) {
+	if _, err := gitremote.Qualify(context.Background(), input, probe); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation = %v", err)
 	}
 	probe.err = context.DeadlineExceeded
-	if _, err := githubsource.Qualify(context.Background(), input, probe); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := gitremote.Qualify(context.Background(), input, probe); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline = %v", err)
 	}
 
@@ -230,7 +232,7 @@ func TestQualificationMapsAccessErrorsWithoutRawOutputAndPreservesCancellation(t
 	cancel()
 	probe.calls = 0
 	probe.err = nil
-	if _, err := githubsource.Qualify(cancelled, input, probe); !errors.Is(err, context.Canceled) {
+	if _, err := gitremote.Qualify(cancelled, input, probe); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancelled context = %v", err)
 	}
 	if probe.calls != 0 {
@@ -238,13 +240,13 @@ func TestQualificationMapsAccessErrorsWithoutRawOutputAndPreservesCancellation(t
 	}
 }
 
-func mustEffective(t *testing.T, repository string, hasRepository bool, reference string, hasReference bool) githubsource.EffectiveSource {
+func mustEffective(t *testing.T, repository string, hasRepository bool, reference string, hasReference bool) gitremote.EffectiveSource {
 	t.Helper()
-	input, err := githubsource.NewSelectionInput(repository, hasRepository, reference, hasReference)
+	input, err := gitremote.NewSelectionInput(repository, hasRepository, reference, hasReference)
 	if err != nil {
 		t.Fatal(err)
 	}
-	effective, err := githubsource.Resolve(input)
+	effective, err := gitremote.Resolve(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,12 +255,12 @@ func mustEffective(t *testing.T, repository string, hasRepository bool, referenc
 
 type recordingProbe struct {
 	calls              int
-	request            githubsource.EffectiveSource
+	request            gitremote.EffectiveSource
 	externalCredential string
 	err                error
 }
 
-func (p *recordingProbe) Probe(_ context.Context, request githubsource.EffectiveSource) error {
+func (p *recordingProbe) Probe(_ context.Context, request gitremote.EffectiveSource) error {
 	p.calls++
 	p.request = request
 	_ = p.externalCredential // Fixture-owned Git/SSH state; deliberately not copied into request.

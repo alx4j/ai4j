@@ -51,6 +51,7 @@ type Source struct {
 	SourceMode      string                `json:"sourceMode"`
 	SourceSelection string                `json:"sourceSelection"`
 	Repository      *string               `json:"repository"`
+	Transport       *string               `json:"transport"`
 	RequestedRef    *string               `json:"requestedRef"`
 	ResolvedRefKind *string               `json:"resolvedRefKind"`
 	ResolvedRefName *string               `json:"resolvedRefName"`
@@ -211,6 +212,7 @@ type RecordedSource struct {
 	SourceMode      string                `json:"sourceMode"`
 	SourceSelection string                `json:"sourceSelection"`
 	Repository      *string               `json:"repository"`
+	Transport       *string               `json:"transport"`
 	RequestedRef    *string               `json:"requestedRef"`
 	ResolvedRefKind *string               `json:"resolvedRefKind"`
 	Commit          *SourceCommit         `json:"commit"`

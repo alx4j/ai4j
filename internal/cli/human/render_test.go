@@ -14,7 +14,7 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 func TestRenderMatchesIndependentGolden(t *testing.T) {
@@ -124,7 +124,7 @@ func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
 	t.Parallel()
 
 	source := testSource(t)
-	recorded, err := cli.NewRecordedSource(source.Selection(), source.Repository(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID())
+	recorded, err := cli.NewRecordedSource(source.Selection(), source.Repository(), source.Transport(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,8 +428,8 @@ func validationResponse(t *testing.T, reverse bool) cli.Response {
 
 func testSource(t *testing.T) cli.Source {
 	t.Helper()
-	input, _ := githubsource.NewSelectionInput("", false, "", false)
-	effective, _ := githubsource.Resolve(input)
+	input, _ := gitremote.NewSelectionInput("", false, "", false)
+	effective, _ := gitremote.Resolve(input)
 	request, _ := gitsource.NewResolutionRequest(effective)
 	commitOID := strings.Repeat("a", 40)
 	advertisement, err := gitsource.ParseRemoteAdvertisement(request, []byte(

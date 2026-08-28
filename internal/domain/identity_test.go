@@ -73,7 +73,6 @@ func TestIdentityConstructorsRejectNonCanonicalValues(t *testing.T) {
 	t.Parallel()
 
 	for _, value := range []string{
-		"alx4j/ai4j",
 		"https://github.com/alx4j/ai4j",
 		"github.com/Alx4j/ai4j",
 		"github.com/alx4j/ai4j.git",
@@ -93,6 +92,30 @@ func TestIdentityConstructorsRejectNonCanonicalValues(t *testing.T) {
 		}
 		if _, err := domain.NewExecutableDigest(value); err == nil {
 			t.Errorf("NewExecutableDigest(%q) succeeded", value)
+		}
+	}
+}
+
+func TestRepositoryIdentitySupportsEnterpriseHostAndNestedNamespace(t *testing.T) {
+	t.Parallel()
+
+	value := "gitlab.barclays.example/division/team/Barclays"
+	repository, err := domain.NewRepositoryIdentity(value)
+	if err != nil || !repository.Valid() || repository.String() != value {
+		t.Fatalf("enterprise repository = %q, %v", repository.String(), err)
+	}
+	shortHost, err := domain.NewRepositoryIdentity("gitlab/division/team/toolkit")
+	if err != nil || !shortHost.Valid() {
+		t.Fatalf("single-label enterprise host = %q, %v", shortHost.String(), err)
+	}
+	for _, invalid := range []string{
+		"GitLab.barclays.example/division/team/repository",
+		"127.0.0.1/division/team/repository",
+		"gitlab.barclays.example/division/../repository",
+		"gitlab.barclays.example/division//repository",
+	} {
+		if _, err := domain.NewRepositoryIdentity(invalid); err == nil {
+			t.Errorf("NewRepositoryIdentity(%q) succeeded", invalid)
 		}
 	}
 }

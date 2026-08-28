@@ -18,7 +18,7 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 	"github.com/alx4j/ai4j/internal/workspace"
 )
 
@@ -138,10 +138,10 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	}
 	if inspect != nil {
 		if acquired.local() {
-			return failureReport(FailureSource, "source_history_unavailable", "local development sources do not have a GitHub update history")
+			return failureReport(FailureSource, "source_history_unavailable", "local development sources do not have a remote Git update history")
 		}
 		if err := inspect(operationContext, workspacePath, acquired); err != nil {
-			return failureReport(FailureSource, "source_history_unavailable", "GitHub source history could not be evaluated")
+			return failureReport(FailureSource, "source_history_unavailable", "Git source history could not be evaluated")
 		}
 	}
 	validated, err := validatePackage(workspacePath, acquired.inventory)
@@ -315,7 +315,7 @@ func (s Service) probeExecutable(ctx context.Context, executable string, environ
 	return err == nil && observation.ExitCode == 0 && len(observation.Stdout) != 0 && len(observation.Stderr) == 0
 }
 
-func (s Service) acquire(ctx context.Context, workspace string, effective githubsource.EffectiveSource) (acquisition, error) {
+func (s Service) acquire(ctx context.Context, workspace string, effective gitremote.EffectiveSource) (acquisition, error) {
 	gitExecutable, err := s.config.Runner.LookPath("git")
 	if err != nil {
 		return acquisition{}, err
@@ -324,7 +324,7 @@ func (s Service) acquire(ctx context.Context, workspace string, effective github
 	if err != nil {
 		return acquisition{}, err
 	}
-	authMode := gitsource.AuthenticationKeychainHTTPS
+	authMode := gitsource.AuthenticationCredentialHelperHTTPS
 	if effective.Transport() == domain.SSHGitTransport() {
 		authMode = gitsource.AuthenticationDefaultKeySSH
 	}
@@ -497,11 +497,11 @@ func (s Service) acquireOptions(ctx context.Context, workspace string, options c
 	if options.HasCheckout() {
 		return s.acquireLocal(ctx, workspace, options)
 	}
-	selection, err := githubsource.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
+	selection, err := gitremote.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
 	if err != nil {
 		return acquisition{}, err
 	}
-	effective, err := githubsource.Resolve(selection)
+	effective, err := gitremote.Resolve(selection)
 	if err != nil {
 		return acquisition{}, err
 	}
@@ -563,7 +563,7 @@ func gitEnvironment() []string {
 
 func gitAuthenticatedEnvironment() []string {
 	return []string{
-		"GIT_ATTR_NOSYSTEM=1", "GIT_CONFIG_NOSYSTEM=1", "GIT_LFS_SKIP_SMUDGE=1",
+		"GIT_ATTR_NOSYSTEM=1", "GIT_LFS_SKIP_SMUDGE=1",
 		"GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0",
 		"LANG=C", "LC_ALL=C",
 	}

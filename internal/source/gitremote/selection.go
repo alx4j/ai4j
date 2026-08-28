@@ -1,4 +1,4 @@
-package github
+package gitremote
 
 import (
 	"context"
@@ -55,7 +55,8 @@ type Remote struct{ endpoint string }
 
 func (r Remote) Endpoint() string { return r.endpoint }
 func (r Remote) valid() bool {
-	return strings.HasPrefix(r.endpoint, "https://github.com/") || strings.HasPrefix(r.endpoint, "git@github.com:")
+	parsed, err := ParseRepository(r.endpoint)
+	return err == nil && parsed.valid()
 }
 
 // ReconstructRemote creates one sanitized endpoint from typed identity and
@@ -64,16 +65,20 @@ func ReconstructRemote(repository domain.RepositoryIdentity, transport domain.Gi
 	if !repository.Valid() || validateTransport(transport) != nil {
 		return Remote{}, newError(ErrorInvalidSelection)
 	}
-	path := strings.TrimPrefix(repository.String(), "github.com/")
-	parsed, err := ParseRepository(path)
-	if err != nil || parsed.Identity() != repository {
+	host, path, ok := strings.Cut(repository.String(), "/")
+	if !ok || host == "" || path == "" {
 		return Remote{}, newError(ErrorInvalidSelection)
 	}
-	endpoint := "https://github.com/" + path + ".git"
+	endpoint := "https://" + host + "/" + path + ".git"
 	if transport == domain.SSHGitTransport() {
-		endpoint = "git@github.com:" + path + ".git"
+		endpoint = "git@" + host + ":" + path + ".git"
 	}
-	return Remote{endpoint: endpoint}, nil
+	remote := Remote{endpoint: endpoint}
+	parsed, err := ParseRepository(remote.endpoint)
+	if err != nil || parsed.Identity() != repository || parsed.Transport() != transport {
+		return Remote{}, newError(ErrorInvalidSelection)
+	}
+	return remote, nil
 }
 
 // EffectiveSource is the immutable, credential-free handoff to the Git source

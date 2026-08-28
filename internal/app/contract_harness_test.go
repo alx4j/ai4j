@@ -20,7 +20,7 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 const (
@@ -515,8 +515,8 @@ type contractFixture struct {
 
 func newContractFixture(t *testing.T, reverse bool) contractFixture {
 	t.Helper()
-	input := mustFixture(githubsource.NewSelectionInput("", false, "", false))
-	effective := mustFixture(githubsource.Resolve(input))
+	input := mustFixture(gitremote.NewSelectionInput("", false, "", false))
+	effective := mustFixture(gitremote.Resolve(input))
 	request := mustFixture(gitsource.NewResolutionRequest(effective))
 	commitOID := strings.Repeat("a", 40)
 	advertisement := mustFixture(gitsource.ParseRemoteAdvertisement(request, []byte(
@@ -561,7 +561,7 @@ func newContractFixture(t *testing.T, reverse bool) contractFixture {
 
 	finalPresent := mustFixture(cli.NewFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent))
 	finalAbsent := mustFixture(cli.NewFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent))
-	recordedSource := mustFixture(cli.NewRecordedSource(source.Selection(), source.Repository(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID()))
+	recordedSource := mustFixture(cli.NewRecordedSource(source.Selection(), source.Repository(), source.Transport(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID()))
 	installation := mustFixture(cli.NewInstallation(installationID, "ai4j", []string{"ai4j-default"}, recordedSource, "1.0.0", "0.0.0-dev", "2.0.0"))
 	nativePresent := mustFixture(cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "2.0.0", cli.NativeVersionMatches))
 	recoveryNone := mustFixture(cli.NewRecoveryState(cli.RecoveryStateNone, ""))

@@ -12,7 +12,7 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/lifecycle"
 	"github.com/alx4j/ai4j/internal/pathsafe"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	"github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 const (
@@ -365,7 +365,7 @@ func networkEndpoint(request ResolutionRequest, auth AuthenticationProjection) (
 		request.Transport() != auth.Transport() {
 		return "", ErrExecutorContract
 	}
-	remote, err := githubsource.ReconstructRemote(request.Repository(), request.Transport())
+	remote, err := gitremote.ReconstructRemote(request.Repository(), request.Transport())
 	if err != nil {
 		return "", ErrExecutorContract
 	}

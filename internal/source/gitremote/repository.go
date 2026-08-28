@@ -1,9 +1,10 @@
-// Package github parses and normalizes the closed GitHub source forms accepted
-// by AI4J. It never performs authentication or repository I/O.
-package github
+// Package gitremote parses and normalizes the credential-free Git remote forms
+// accepted by AI4J. It never performs authentication or repository I/O.
+package gitremote
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -12,11 +13,11 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 )
 
-const maxRepositoryInputBytes = 256
+const maxRepositoryInputBytes = 768
 
 var (
-	ownerPattern      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$`)
-	repositoryPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
+	githubOwnerPattern      = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?$`)
+	githubRepositoryPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,99}$`)
 )
 
 // ErrorCode is a bounded public-safe classification. The rejected input is
@@ -37,13 +38,13 @@ type SelectionError struct{ code ErrorCode }
 func (e SelectionError) Error() string {
 	switch e.code {
 	case ErrorInvalidRepository:
-		return "GitHub repository is not in a supported canonical form"
+		return "Git repository is not in a supported canonical form"
 	case ErrorInvalidReference:
 		return "Git reference is not a safe explicit value"
 	case ErrorInvalidSelection:
 		return "source selection is internally inconsistent"
 	case ErrorAccessFailed:
-		return "GitHub source access failed"
+		return "Git source access failed"
 	default:
 		return "source selection failed"
 	}
@@ -72,37 +73,19 @@ func (r ParsedRepository) valid() bool {
 	return r.identity.Valid() && r.transport.Valid()
 }
 
-// ParseRepository accepts exactly owner/repository, the canonical GitHub HTTPS
-// URL, or the canonical GitHub SSH form. HTTPS and SSH URLs require the .git
-// suffix; shorthand must not contain it.
+// ParseRepository accepts GitHub owner/repository shorthand, a canonical HTTPS
+// URL, or a canonical SCP-style SSH endpoint. Network endpoints require the
+// .git suffix. Authentication material is deliberately outside this contract.
 func ParseRepository(value string) (ParsedRepository, error) {
 	if !safeInput(value, maxRepositoryInputBytes) || strings.HasPrefix(value, "-") {
 		return ParsedRepository{}, newError(ErrorInvalidRepository)
 	}
 
-	var owner, repository string
-	transport := domain.HTTPSGitTransport()
-	switch {
-	case strings.HasPrefix(value, "https://github.com/"):
-		path := strings.TrimPrefix(value, "https://github.com/")
-		owner, repository = splitRepositoryPath(path, true)
-	case strings.HasPrefix(value, "git@github.com:"):
-		path := strings.TrimPrefix(value, "git@github.com:")
-		owner, repository = splitRepositoryPath(path, true)
-		transport = domain.SSHGitTransport()
-	default:
-		owner, repository = splitRepositoryPath(value, false)
-	}
-	if owner == "" || repository == "" {
+	identityValue, transport, ok := parseRepository(value)
+	if !ok {
 		return ParsedRepository{}, newError(ErrorInvalidRepository)
 	}
-
-	owner = strings.ToLower(owner)
-	repository = strings.ToLower(repository)
-	if !ownerPattern.MatchString(owner) || strings.Contains(owner, "--") || !repositoryPattern.MatchString(repository) || strings.HasSuffix(repository, ".git") {
-		return ParsedRepository{}, newError(ErrorInvalidRepository)
-	}
-	identity, err := domain.NewRepositoryIdentity("github.com/" + owner + "/" + repository)
+	identity, err := domain.NewRepositoryIdentity(identityValue)
 	if err != nil {
 		return ParsedRepository{}, newError(ErrorInvalidRepository)
 	}
@@ -113,20 +96,45 @@ func ParseRepository(value string) (ParsedRepository, error) {
 	return parsed, nil
 }
 
-func splitRepositoryPath(value string, requireGitSuffix bool) (string, string) {
-	if strings.Count(value, "/") != 1 || strings.ContainsAny(value, `\:@?#`) {
-		return "", ""
-	}
-	parts := strings.SplitN(value, "/", 2)
-	if requireGitSuffix {
-		if !strings.HasSuffix(parts[1], ".git") {
-			return "", ""
+func parseRepository(value string) (string, domain.GitTransport, bool) {
+	var noTransport domain.GitTransport
+	switch {
+	case strings.HasPrefix(value, "https://"):
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Host == "" || parsed.Host != parsed.Hostname() || parsed.Port() != "" ||
+			parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.ContainsAny(value, "%?#") ||
+			!strings.HasSuffix(parsed.Path, ".git") || !strings.HasPrefix(parsed.Path, "/") {
+			return "", noTransport, false
 		}
-		parts[1] = strings.TrimSuffix(parts[1], ".git")
-	} else if strings.HasSuffix(parts[1], ".git") {
-		return "", ""
+		path := strings.TrimSuffix(strings.TrimPrefix(parsed.Path, "/"), ".git")
+		return canonicalIdentity(parsed.Hostname(), path), domain.HTTPSGitTransport(), true
+	case strings.HasPrefix(value, "git@"):
+		remainder := strings.TrimPrefix(value, "git@")
+		separator := strings.IndexByte(remainder, ':')
+		if separator <= 0 || strings.Count(remainder, ":") != 1 || strings.ContainsAny(remainder, `@\?#`) || !strings.HasSuffix(remainder, ".git") {
+			return "", noTransport, false
+		}
+		host := strings.ToLower(remainder[:separator])
+		path := strings.TrimSuffix(remainder[separator+1:], ".git")
+		return canonicalIdentity(host, path), domain.SSHGitTransport(), true
+	default:
+		if strings.Count(value, "/") != 1 || strings.ContainsAny(value, `\:@?#`) || strings.HasSuffix(value, ".git") {
+			return "", noTransport, false
+		}
+		owner, repository, _ := strings.Cut(strings.ToLower(value), "/")
+		if !githubOwnerPattern.MatchString(owner) || strings.Contains(owner, "--") || !githubRepositoryPattern.MatchString(repository) || strings.HasSuffix(repository, ".git") {
+			return "", noTransport, false
+		}
+		return "github.com/" + owner + "/" + repository, domain.HTTPSGitTransport(), true
 	}
-	return parts[0], parts[1]
+}
+
+func canonicalIdentity(host, path string) string {
+	host = strings.ToLower(host)
+	if host == "github.com" {
+		path = strings.ToLower(path)
+	}
+	return host + "/" + path
 }
 
 func safeInput(value string, maxBytes int) bool {

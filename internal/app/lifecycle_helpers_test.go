@@ -8,7 +8,7 @@ import (
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 func TestStoredSourceOptionsPreserveSelection(t *testing.T) {
@@ -37,11 +37,11 @@ func TestStoredSourceOptionsPreserveSelection(t *testing.T) {
 		if options.Repository() != "https://github.com/alx4j/ai4j.git" || !options.HasRepository() {
 			t.Fatalf("explicit repository = %q/%t", options.Repository(), options.HasRepository())
 		}
-		input, inputErr := githubsource.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
+		input, inputErr := gitremote.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
 		if inputErr != nil {
 			t.Fatal(inputErr)
 		}
-		effective, resolveErr := githubsource.Resolve(input)
+		effective, resolveErr := gitremote.Resolve(input)
 		if resolveErr != nil || effective.Repository().String() != explicit.Source.Repository {
 			t.Fatalf("effective repository = %q, err = %v", effective.Repository().String(), resolveErr)
 		}
@@ -57,6 +57,21 @@ func TestStoredSourceOptionsPreserveSelection(t *testing.T) {
 		if options.Repository() != "git@github.com:alx4j/ai4j.git" || !options.HasRepository() {
 			t.Fatalf("SSH repository = %q/%t", options.Repository(), options.HasRepository())
 		}
+	}
+}
+
+func TestStoredSourceTransportDefaultsOnlyLegacyGitHubState(t *testing.T) {
+	t.Parallel()
+	legacy := testInstallationRecord("branch", strings.Repeat("a", 40)).Source
+	legacy.Transport = ""
+	transport, err := storedSourceTransport(legacy)
+	if err != nil || transport != domain.HTTPSGitTransport() {
+		t.Fatalf("legacy GitHub transport = %q, %v", transport.String(), err)
+	}
+
+	legacy.Repository = "gitlab.barclays.example/division/team/toolkit"
+	if _, err := storedSourceTransport(legacy); err == nil {
+		t.Fatal("custom-host legacy source unexpectedly acquired an implicit transport")
 	}
 }
 

@@ -277,6 +277,45 @@ func TestRecordRejectsContradictorySourceMetadata(t *testing.T) {
 	}
 }
 
+func TestRecordAcceptsEnterpriseGitSourceAndLegacyGitHubState(t *testing.T) {
+	t.Parallel()
+
+	enterprise := testRecord()
+	enterprise.Source.Mode = "git"
+	enterprise.Source.Repository = "gitlab.barclays.example/division/team/toolkit"
+	enterprise.Source.Transport = "ssh"
+	if err := enterprise.Validate(); err != nil {
+		t.Fatalf("enterprise Git state = %v", err)
+	}
+
+	missingTransport := enterprise
+	missingTransport.Source.Transport = ""
+	if err := missingTransport.Validate(); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("missing transport = %v", err)
+	}
+
+	legacy := testRecord()
+	legacy.Source.Mode = "github"
+	legacy.Source.Transport = ""
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("legacy GitHub state = %v", err)
+	}
+
+	legacyCustomHost := legacy
+	legacyCustomHost.Source.Repository = "gitlab.barclays.example/division/team/toolkit"
+	if err := legacyCustomHost.Validate(); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("legacy custom-host state = %v", err)
+	}
+
+	contradictoryBuiltIn := testRecord()
+	contradictoryBuiltIn.Source.Mode = "git"
+	contradictoryBuiltIn.Source.Selection = "built_in_default"
+	contradictoryBuiltIn.Source.Transport = "ssh"
+	if err := contradictoryBuiltIn.Validate(); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("built-in SSH transport = %v", err)
+	}
+}
+
 func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

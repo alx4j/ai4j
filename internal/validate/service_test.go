@@ -18,6 +18,18 @@ import (
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
 )
 
+func TestAuthenticatedGitEnvironmentAllowsConfiguredCredentialHelpersWithoutPrompting(t *testing.T) {
+	t.Parallel()
+
+	environment := gitAuthenticatedEnvironment()
+	if slices.Contains(environment, "GIT_CONFIG_NOSYSTEM=1") || slices.Contains(environment, "GIT_CONFIG_GLOBAL=/dev/null") {
+		t.Fatalf("authenticated Git environment disables configured credential helpers: %#v", environment)
+	}
+	if !slices.Contains(environment, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(environment, "GIT_PROTOCOL_FROM_USER=0") {
+		t.Fatalf("authenticated Git environment permits interactive or implicit protocol selection: %#v", environment)
+	}
+}
+
 const (
 	testCommit = "1111111111111111111111111111111111111111"
 	testTree   = "2222222222222222222222222222222222222222"
@@ -34,12 +46,15 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 		repository string
 		selection  string
 		kind       string
+		transport  string
 	}{
-		{name: "built in default branch", arguments: []string{"ai4j", "validate", "--target", "claude"}, repository: "github.com/alx4j/ai4j", selection: "built_in_default", kind: "default_branch"},
-		{name: "explicit branch", arguments: []string{"ai4j", "validate", "--repo", "https://github.com/example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
-		{name: "explicit tag", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", "refs/tags/v1", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "tag"},
-		{name: "explicit commit", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", testCommit, "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "commit"},
-		{name: "existing SSH authentication", arguments: []string{"ai4j", "validate", "--repo", "git@github.com:example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch"},
+		{name: "built in default branch", arguments: []string{"ai4j", "validate", "--target", "claude"}, repository: "github.com/alx4j/ai4j", selection: "built_in_default", kind: "default_branch", transport: "https"},
+		{name: "explicit branch", arguments: []string{"ai4j", "validate", "--repo", "https://github.com/example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch", transport: "https"},
+		{name: "explicit tag", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", "refs/tags/v1", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "tag", transport: "https"},
+		{name: "explicit commit", arguments: []string{"ai4j", "validate", "--repo", "example/toolkit", "--ref", testCommit, "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "commit", transport: "https"},
+		{name: "existing SSH authentication", arguments: []string{"ai4j", "validate", "--repo", "git@github.com:example/toolkit.git", "--ref", "main", "--target", "claude"}, repository: "github.com/example/toolkit", selection: "explicit", kind: "branch", transport: "ssh"},
+		{name: "enterprise HTTPS tag", arguments: []string{"ai4j", "validate", "--repo", "https://git.everpure.example/platform/toolkits/ai4j.git", "--ref", "refs/tags/v1", "--target", "claude"}, repository: "git.everpure.example/platform/toolkits/ai4j", selection: "explicit", kind: "tag", transport: "https"},
+		{name: "enterprise SSH tag", arguments: []string{"ai4j", "validate", "--repo", "git@gitlab.barclays.example:division/team/ai4j.git", "--ref", "refs/tags/v1", "--target", "claude"}, repository: "gitlab.barclays.example/division/team/ai4j", selection: "explicit", kind: "tag", transport: "ssh"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -64,6 +79,7 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 				t.Fatalf("failure=%s problems=%d content=%d", report.Failure, len(report.Problems), len(report.Content))
 			}
 			if report.Source.Repository().String() != test.repository || report.Source.Selection().String() != test.selection ||
+				report.Source.Transport().String() != test.transport ||
 				report.Source.Commit().OID().String() != testCommit || report.Source.RootTree().String() != testTree ||
 				string(report.Source.ResolvedRefKind()) != test.kind {
 				t.Fatalf("source = repository=%s selection=%s commit=%s tree=%s", report.Source.Repository(), report.Source.Selection(), report.Source.Commit().OID(), report.Source.RootTree())

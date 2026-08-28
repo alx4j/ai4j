@@ -258,7 +258,11 @@ func recordedSourceFromRecord(record installstate.Record) (cli.RecordedSource, e
 	if hasRequested {
 		requested = *record.Source.RequestedRef
 	}
-	source, err := cli.NewRecordedSource(selection, repository, requested, hasRequested, cli.RefKind(record.Source.RefKind), commit)
+	transport, err := storedSourceTransport(record.Source)
+	if err != nil {
+		return cli.RecordedSource{}, err
+	}
+	source, err := cli.NewRecordedSource(selection, repository, transport, requested, hasRequested, cli.RefKind(record.Source.RefKind), commit)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
@@ -372,7 +376,7 @@ func (s statusService) checkUpdates(ctx context.Context, record installstate.Rec
 		return result.UpdateUnknown, &problem
 	}
 	if update.Report.Failure != validation.FailureNone || !update.Report.HasSource() {
-		return result.UpdateUnknown, statusProblem("update_check_failed", "public GitHub source could not be checked")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked")
 	}
 	if record.Source.RefKind == cli.RefTag.String() {
 		if update.Report.Source.Commit().OID() == installed {
@@ -388,7 +392,7 @@ func (s statusService) checkUpdates(ctx context.Context, record installstate.Rec
 	case gitsource.UpdateRefRewritten:
 		return result.UpdateRefRewritten, nil
 	default:
-		return result.UpdateUnknown, statusProblem("update_check_failed", "public GitHub source could not be checked")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked")
 	}
 }
 

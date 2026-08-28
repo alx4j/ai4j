@@ -62,7 +62,7 @@ const (
 type SourceMode string
 
 const (
-	SourceGitHub      SourceMode = "github"
+	SourceGit         SourceMode = "git"
 	SourceDevelopment SourceMode = "development_source"
 )
 
@@ -80,7 +80,7 @@ func NewSource(provenance gitsource.RenderedProvenance) (Source, error) {
 	if !provenance.Valid() {
 		return Source{}, fmt.Errorf("source provenance is invalid")
 	}
-	return Source{provenance: provenance, mode: SourceGitHub}, nil
+	return Source{provenance: provenance, mode: SourceGit}, nil
 }
 
 func NewDevelopmentSource(checkout string, sourceDigest, renderedDigest domain.RenderedDigest, buildCommit domain.BuildCommit, dirty bool) (Source, error) {
@@ -103,6 +103,13 @@ func (s Source) Selection() domain.SourceSelection {
 }
 func (s Source) Repository() domain.RepositoryIdentity {
 	return s.provenance.Source().Repository()
+}
+func (s Source) Transport() domain.GitTransport {
+	if s.mode == SourceDevelopment {
+		var transport domain.GitTransport
+		return transport
+	}
+	return s.provenance.Source().Transport()
 }
 func (s Source) RequestedRef() string {
 	value, _ := s.provenance.Source().RequestedReference().Value()
@@ -137,7 +144,7 @@ func (s Source) CLIBuildCommit() domain.BuildCommit {
 }
 func (s Source) Valid() bool { return s.valid() }
 func (s Source) valid() bool {
-	if s.mode == SourceGitHub {
+	if s.mode == SourceGit {
 		return s.provenance.Valid()
 	}
 	return s.mode == SourceDevelopment && filepath.IsAbs(s.checkout) && s.sourceDigest.Valid() && s.renderedDigest.Valid() && s.buildCommit.Valid()
@@ -876,6 +883,7 @@ type RecordedSource struct {
 	mode         SourceMode
 	selection    domain.SourceSelection
 	repository   domain.RepositoryIdentity
+	transport    domain.GitTransport
 	requestedRef string
 	hasRequested bool
 	refKind      RefKind
@@ -885,12 +893,12 @@ type RecordedSource struct {
 	dirty        bool
 }
 
-func NewRecordedSource(selection domain.SourceSelection, repository domain.RepositoryIdentity, requestedRef string, hasRequested bool, refKind RefKind, commit domain.CommitOID) (RecordedSource, error) {
-	if (selection != domain.BuiltInDefaultSource() && selection != domain.ExplicitSource()) || !repository.Valid() || !refKind.Valid() || !commit.Valid() ||
+func NewRecordedSource(selection domain.SourceSelection, repository domain.RepositoryIdentity, transport domain.GitTransport, requestedRef string, hasRequested bool, refKind RefKind, commit domain.CommitOID) (RecordedSource, error) {
+	if (selection != domain.BuiltInDefaultSource() && selection != domain.ExplicitSource()) || !repository.Valid() || !transport.Valid() || !refKind.Valid() || !commit.Valid() ||
 		(refKind == RefDefaultBranch) != !hasRequested || !hasRequested && requestedRef != "" {
 		return RecordedSource{}, fmt.Errorf("recorded source is incomplete")
 	}
-	if selection == domain.BuiltInDefaultSource() && repository.String() != "github.com/alx4j/ai4j" {
+	if selection == domain.BuiltInDefaultSource() && (repository.String() != "github.com/alx4j/ai4j" || transport != domain.HTTPSGitTransport()) {
 		return RecordedSource{}, fmt.Errorf("recorded source is incomplete")
 	}
 	if hasRequested {
@@ -901,7 +909,7 @@ func NewRecordedSource(selection domain.SourceSelection, repository domain.Repos
 	if refKind == RefCommit && requestedRef != commit.String() {
 		return RecordedSource{}, fmt.Errorf("recorded source is incomplete")
 	}
-	return RecordedSource{mode: SourceGitHub, selection: selection, repository: repository, requestedRef: requestedRef, hasRequested: hasRequested, refKind: refKind, commit: commit}, nil
+	return RecordedSource{mode: SourceGit, selection: selection, repository: repository, transport: transport, requestedRef: requestedRef, hasRequested: hasRequested, refKind: refKind, commit: commit}, nil
 }
 
 func NewRecordedDevelopmentSource(checkout string, sourceDigest domain.RenderedDigest, dirty bool) (RecordedSource, error) {
@@ -918,6 +926,7 @@ func (s RecordedSource) Dirty() bool                         { return s.dirty }
 
 func (s RecordedSource) Selection() domain.SourceSelection     { return s.selection }
 func (s RecordedSource) Repository() domain.RepositoryIdentity { return s.repository }
+func (s RecordedSource) Transport() domain.GitTransport        { return s.transport }
 func (s RecordedSource) RequestedRef() string                  { return s.requestedRef }
 func (s RecordedSource) HasRequestedRef() bool                 { return s.hasRequested }
 func (s RecordedSource) RefKind() RefKind                      { return s.refKind }
@@ -927,7 +936,7 @@ func (s RecordedSource) valid() bool {
 		_, err := NewRecordedDevelopmentSource(s.checkout, s.sourceDigest, s.dirty)
 		return err == nil
 	}
-	_, err := NewRecordedSource(s.selection, s.repository, s.requestedRef, s.hasRequested, s.refKind, s.commit)
+	_, err := NewRecordedSource(s.selection, s.repository, s.transport, s.requestedRef, s.hasRequested, s.refKind, s.commit)
 	return err == nil
 }
 

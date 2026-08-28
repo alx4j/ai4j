@@ -3,23 +3,57 @@ package domain
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-var repositoryPattern = regexp.MustCompile(`^github\.com/[a-z0-9]([a-z0-9-]{0,38})/[a-z0-9]([a-z0-9._-]{0,99})$`)
+var (
+	repositoryHostLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	repositoryPathPartPattern  = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$`)
+)
 
 type RepositoryIdentity struct{ value string }
 
 func NewRepositoryIdentity(value string) (RepositoryIdentity, error) {
-	if strings.HasSuffix(value, ".git") || !repositoryPattern.MatchString(value) {
-		return RepositoryIdentity{}, fmt.Errorf("repository %q is not a canonical GitHub identity", value)
+	if !validRepositoryIdentity(value) {
+		return RepositoryIdentity{}, fmt.Errorf("repository %q is not a canonical Git identity", value)
 	}
 	return RepositoryIdentity{value: value}, nil
 }
 func (v RepositoryIdentity) String() string { return v.value }
-func (v RepositoryIdentity) Valid() bool {
-	return !strings.HasSuffix(v.value, ".git") && repositoryPattern.MatchString(v.value)
+func (v RepositoryIdentity) Valid() bool    { return validRepositoryIdentity(v.value) }
+
+func validRepositoryIdentity(value string) bool {
+	if value == "" || len(value) > 768 || !utf8.ValidString(value) || strings.TrimSpace(value) != value || strings.HasSuffix(value, ".git") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return false
+		}
+	}
+	host, repositoryPath, ok := strings.Cut(value, "/")
+	if !ok || host == "" || repositoryPath == "" || host != strings.ToLower(host) || len(host) > 253 || net.ParseIP(host) != nil || host == "github.com" && repositoryPath != strings.ToLower(repositoryPath) {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !repositoryHostLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	parts := strings.Split(repositoryPath, "/")
+	if len(parts) == 0 || len(parts) > 32 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "." || part == ".." || !repositoryPathPartPattern.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 type CommitOID struct{ value [20]byte }

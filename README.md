@@ -261,11 +261,12 @@ The output directory must not already exist.
    ```
 
 The generated toolkit is now ready for local development or publication in a
-GitHub repository.
+Git repository.
 
 ## Use another toolkit source
 
-To work from GitHub, replace `OWNER/REPOSITORY` with the toolkit repository:
+For a repository on GitHub.com, replace `OWNER/REPOSITORY` with the toolkit
+repository:
 
 ```sh
 ai4j validate --repo OWNER/REPOSITORY --ref main --target claude
@@ -273,8 +274,26 @@ ai4j install --repo OWNER/REPOSITORY --ref main \
   --target claude --scope user --bundle BUNDLE_ID
 ```
 
-`--repo` accepts GitHub repositories. Use it with Claude installation or with
-either target's build command; install a built Codex plugin from Codex.
+`--repo` also accepts credential-free HTTPS and SSH clone endpoints on private
+Git servers, including nested GitLab namespaces:
+
+```sh
+ai4j validate \
+  --repo https://github.company.example/platform/toolkits/company.git \
+  --ref refs/tags/v1.0.0 --target claude
+
+ai4j install \
+  --repo git@gitlab.company.example:division/team/company.git \
+  --ref refs/tags/v1.0.0 \
+  --target claude --scope user --bundle company
+```
+
+HTTPS uses your configured Git credential helper. SSH uses your SSH config,
+keys, agent, and `known_hosts`. AI4J neither accepts nor stores credentials;
+authenticate with Git before running AI4J. Full clone endpoints must end in
+`.git` and may not contain user information, tokens, query strings, or
+fragments. Use `--repo` with Claude installation or either target's build
+command; install a built Codex plugin from Codex.
 
 Use `--source PATH` when `PATH` is the root of a local Git checkout. Local
 sources cannot use the `project-shared` scope. For a project installation, use
