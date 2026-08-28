@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/alx4j/ai4j/internal/domain"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 const (
@@ -129,7 +129,7 @@ func TestRuntimeProfileChildAllowlistDistinguishesHTTPSAndSSH(t *testing.T) {
 	httpsRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "", false)
 	sshRequest := mustResolutionRequest(t, "git@github.com:alx4j/ai4j.git", "", false)
 	anonymous := mustAuthentication(t, httpsRequest, AuthenticationAnonymousHTTPS)
-	keychain := mustAuthentication(t, httpsRequest, AuthenticationKeychainHTTPS)
+	keychain := mustAuthentication(t, httpsRequest, AuthenticationCredentialHelperHTTPS)
 	ssh := mustAuthentication(t, sshRequest, AuthenticationDefaultKeySSH)
 
 	tests := []struct {
@@ -180,7 +180,7 @@ func TestAuthenticationProjectionIsTransportExactAndRedacted(t *testing.T) {
 		mode      AuthenticationMode
 	}{
 		{domain.HTTPSGitTransport(), AuthenticationAnonymousHTTPS},
-		{domain.HTTPSGitTransport(), AuthenticationKeychainHTTPS},
+		{domain.HTTPSGitTransport(), AuthenticationCredentialHelperHTTPS},
 		{domain.SSHGitTransport(), AuthenticationDefaultKeySSH},
 	} {
 		projection, err := NewAuthenticationProjection(repository, test.transport, test.mode)
@@ -203,7 +203,7 @@ func TestAuthenticationProjectionIsTransportExactAndRedacted(t *testing.T) {
 		mode      AuthenticationMode
 	}{
 		{domain.SSHGitTransport(), AuthenticationAnonymousHTTPS},
-		{domain.SSHGitTransport(), AuthenticationKeychainHTTPS},
+		{domain.SSHGitTransport(), AuthenticationCredentialHelperHTTPS},
 		{domain.HTTPSGitTransport(), AuthenticationDefaultKeySSH},
 		{domain.HTTPSGitTransport(), "agent_ssh"},
 	} {
@@ -365,6 +365,21 @@ func TestLocalCommandArgvPinsExactRepository(t *testing.T) {
 	}
 }
 
+func TestNetworkCommandUsesCanonicalEnterpriseSSHEndpoint(t *testing.T) {
+	t.Parallel()
+
+	request := mustResolutionRequest(t, "git@gitlab.barclays.example:division/team/toolkit.git", "refs/tags/v1.0.0", true)
+	auth := mustAuthentication(t, request, AuthenticationDefaultKeySSH)
+	command, err := NewEnumerateReferencesCommand(request, auth)
+	if err != nil || !command.Valid() {
+		t.Fatalf("NewEnumerateReferencesCommand = %#v, %v", command, err)
+	}
+	arguments := command.Arguments()
+	if !slices.Contains(arguments, "git@gitlab.barclays.example:division/team/toolkit.git") || slices.Contains(arguments, "https://gitlab.barclays.example/division/team/toolkit.git") {
+		t.Fatalf("enterprise argv = %#v", arguments)
+	}
+}
+
 func TestEveryRemainingCommandConstructorHasExactGoldenArgv(t *testing.T) {
 	t.Parallel()
 
@@ -502,11 +517,11 @@ func testCommonArguments(repositoryBound bool) []string {
 
 func mustResolutionRequest(t *testing.T, repository, reference string, referenceProvided bool) ResolutionRequest {
 	t.Helper()
-	input, err := githubsource.NewSelectionInput(repository, true, reference, referenceProvided)
+	input, err := gitremote.NewSelectionInput(repository, true, reference, referenceProvided)
 	if err != nil {
 		t.Fatal(err)
 	}
-	effective, err := githubsource.Resolve(input)
+	effective, err := gitremote.Resolve(input)
 	if err != nil {
 		t.Fatal(err)
 	}

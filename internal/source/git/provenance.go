@@ -22,12 +22,14 @@ const (
 func (p TrackingPolicy) String() string { return string(p) }
 func (p TrackingPolicy) Valid() bool    { return p == TrackFastForward || p == TrackPinned }
 
-// SourceProvenance is the immutable repository/ref/commit/tree proof. Access
-// transport and authentication facts remain outside persisted provenance.
+// SourceProvenance is the immutable repository/ref/commit/tree proof. The
+// credential-free transport is retained so exact source access can be
+// reconstructed without retaining an endpoint or authentication material.
 type SourceProvenance struct {
 	proof      CommitTreeProof
 	selection  domain.SourceSelection
 	repository domain.RepositoryIdentity
+	transport  domain.GitTransport
 	requested  RequestedReference
 	resolved   ResolvedReference
 	commit     domain.CommitIdentity
@@ -53,6 +55,7 @@ func NewSourceProvenance(proof CommitTreeProof) (SourceProvenance, error) {
 		proof:      proof,
 		selection:  request.SourceSelection(),
 		repository: request.Repository(),
+		transport:  request.Transport(),
 		requested:  request.RequestedReference(),
 		resolved:   resolution.Resolved(),
 		commit:     commit,
@@ -67,6 +70,7 @@ func NewSourceProvenance(proof CommitTreeProof) (SourceProvenance, error) {
 
 func (p SourceProvenance) SourceSelection() domain.SourceSelection { return p.selection }
 func (p SourceProvenance) Repository() domain.RepositoryIdentity   { return p.repository }
+func (p SourceProvenance) Transport() domain.GitTransport          { return p.transport }
 func (p SourceProvenance) RequestedReference() RequestedReference  { return p.requested }
 func (p SourceProvenance) ResolvedReference() ResolvedReference    { return p.resolved }
 func (p SourceProvenance) Commit() domain.CommitIdentity           { return p.commit }
@@ -74,7 +78,7 @@ func (p SourceProvenance) RootTree() domain.TreeOID                { return p.tr
 func (p SourceProvenance) TrackingPolicy() TrackingPolicy          { return p.tracking }
 
 func (p SourceProvenance) Valid() bool {
-	if !p.proof.Valid() || !validSelection(p.selection) || !p.repository.Valid() || !p.requested.Valid() ||
+	if !p.proof.Valid() || !validSelection(p.selection) || !p.repository.Valid() || !p.transport.Valid() || !p.requested.Valid() ||
 		!p.resolved.Valid() || !p.commit.Valid() || p.commit.Repository() != p.repository ||
 		p.commit.ObjectFormat() != domain.SHA1ObjectFormat() || !p.tree.Valid() || !p.tracking.Valid() {
 		return false
@@ -82,7 +86,7 @@ func (p SourceProvenance) Valid() bool {
 	resolution := p.proof.CommitProof().Resolution()
 	request := resolution.Request()
 	expectedTracking, ok := trackingFor(resolution.Resolved().Kind())
-	if !ok || p.selection != request.SourceSelection() || p.repository != request.Repository() ||
+	if !ok || p.selection != request.SourceSelection() || p.repository != request.Repository() || p.transport != request.Transport() ||
 		p.requested != request.RequestedReference() || p.resolved != resolution.Resolved() ||
 		p.commit.OID() != p.proof.Commit() || p.tree != p.proof.Tree() || p.tracking != expectedTracking {
 		return false

@@ -293,7 +293,7 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 	if !reactivation {
 		installationID = installationIDFor(report, scope, scopeRoot)
 	}
-	desired, document, err := s.recordForSelection(report, source, selection, installationID, scope, scopeRoot)
+	desired, document, err := s.recordForSelection(report, selection, installationID, scope, scopeRoot)
 	if err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
 	}
@@ -350,7 +350,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	selection := selectionFromRecord(record)
 	if record.Source.Mode == "development_source" {
 		if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_change_unsupported", "GitHub and local source modes cannot be changed in place")
+			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_change_unsupported", "remote Git and local source modes cannot be changed in place")
 		}
 		options, optionErr := cli.NewDevelopmentSourceOptions(record.Source.Checkout, requested.AllowDirty())
 		if optionErr != nil {
@@ -367,7 +367,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
 	}
 	if requested.AllowDirty() || requested.HasCheckout() {
-		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a GitHub installation")
+		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a remote Git installation")
 	}
 	installed, err := domain.NewCommitOID(record.Source.Commit)
 	if err != nil {
@@ -449,7 +449,7 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 }
 
 func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.BundleSelection, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
-	desired, document, err := s.recordForSelection(report, sourceOptions, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
+	desired, document, err := s.recordForSelection(report, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
 	}

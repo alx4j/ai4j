@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/alx4j/ai4j/internal/domain"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	"github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 var ErrInvalidResolutionRequest = errors.New("Git resolution request is invalid")
@@ -18,14 +18,14 @@ type ResolutionRequest struct {
 	requested  RequestedReference
 }
 
-func NewResolutionRequest(source githubsource.EffectiveSource) (ResolutionRequest, error) {
+func NewResolutionRequest(source gitremote.EffectiveSource) (ResolutionRequest, error) {
 	selection := source.Selection()
 	repository := source.Repository()
 	transport := source.Transport()
 	if !validSelection(selection) || !repository.Valid() || !transport.Valid() {
 		return ResolutionRequest{}, ErrInvalidResolutionRequest
 	}
-	reconstructed, err := githubsource.ReconstructRemote(repository, transport)
+	reconstructed, err := gitremote.ReconstructRemote(repository, transport)
 	if err != nil || reconstructed.Endpoint() != source.Remote().Endpoint() {
 		return ResolutionRequest{}, ErrInvalidResolutionRequest
 	}

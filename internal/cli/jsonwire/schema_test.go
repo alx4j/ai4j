@@ -15,7 +15,7 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -195,7 +195,7 @@ func TestSourceProvenanceGoldenKeepsTypedIdentitiesDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(source) error = %v", err)
 	}
-	want := `{"sourceMode":"github","sourceSelection":"built_in_default","repository":"github.com/alx4j/ai4j","requestedRef":null,"resolvedRefKind":"default_branch","resolvedRefName":"main","trackingPolicy":"track_fast_forward","commit":{"objectFormat":"sha1","oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"rootTree":{"objectFormat":"sha1","oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"checkout":null,"sourceDigest":null,"dirty":false,"renderedDigest":{"algorithm":"sha256","digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"cliBuildCommit":{"objectFormat":"sha1","oid":"dddddddddddddddddddddddddddddddddddddddd"}}`
+	want := `{"sourceMode":"git","sourceSelection":"built_in_default","repository":"github.com/alx4j/ai4j","transport":"https","requestedRef":null,"resolvedRefKind":"default_branch","resolvedRefName":"main","trackingPolicy":"track_fast_forward","commit":{"objectFormat":"sha1","oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"rootTree":{"objectFormat":"sha1","oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"checkout":null,"sourceDigest":null,"dirty":false,"renderedDigest":{"algorithm":"sha256","digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"cliBuildCommit":{"objectFormat":"sha1","oid":"dddddddddddddddddddddddddddddddddddddddd"}}`
 	if string(source) != want {
 		t.Fatalf("source provenance golden mismatch\ngot:  %s\nwant: %s", source, want)
 	}
@@ -373,6 +373,11 @@ func TestSchemaCompatibilityAndClosedEnums(t *testing.T) {
 	dotGitSource["data"].(map[string]any)["source"].(map[string]any)["repository"] = "github.com/alx4j/ai4j.git"
 	if err := schema.Validate(dotGitSource); err == nil {
 		t.Fatal("repository identity ending in .git was accepted")
+	}
+	ipv4Source := decodeDocument(t, encoded)
+	ipv4Source["data"].(map[string]any)["source"].(map[string]any)["repository"] = "127.0.0.1/alx4j/ai4j"
+	if err := schema.Validate(ipv4Source); err == nil {
+		t.Fatal("repository identity with an IPv4 host was accepted")
 	}
 	for _, field := range []string{"trackingPolicy", "rootTree", "renderedDigest", "cliBuildCommit"} {
 		missing := decodeDocument(t, encoded)
@@ -1192,6 +1197,7 @@ func testRecordedSource(t *testing.T) cli.RecordedSource {
 	value, err := cli.NewRecordedSource(
 		source.Selection(),
 		source.Repository(),
+		source.Transport(),
 		source.RequestedRef(),
 		source.HasRequestedRef(),
 		source.ResolvedRefKind(),
@@ -1205,11 +1211,11 @@ func testRecordedSource(t *testing.T) cli.RecordedSource {
 
 func testSourceWithReference(t *testing.T, reference string, kind gitsource.ResolvedReferenceKind, resolvedName string, tracking gitsource.TrackingPolicy) cli.Source {
 	t.Helper()
-	selection, err := githubsource.NewSelectionInput("", false, reference, reference != "")
+	selection, err := gitremote.NewSelectionInput("", false, reference, reference != "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	effective, err := githubsource.Resolve(selection)
+	effective, err := gitremote.Resolve(selection)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/alx4j/ai4j/internal/domain"
+	"github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 type Document struct {
@@ -21,30 +22,30 @@ type Package struct {
 	ID          string
 	Path        string
 	Description string
+	Repository  domain.RepositoryIdentity
+	Transport   domain.GitTransport
+	Commit      domain.CommitOID
 }
 
 func (d Document) Bytes() []byte  { return append([]byte(nil), d.bytes...) }
 func (d Document) Digest() string { return d.digest }
 
-func Render(repository domain.RepositoryIdentity, commit domain.CommitOID) (Document, error) {
+func Render(repository domain.RepositoryIdentity, transport domain.GitTransport, commit domain.CommitOID) (Document, error) {
 	return RenderPackages("ai4j", []Package{
-		{ID: "ai4j-review", Path: "plugins/ai4j-review", Description: "Practical repository review guidance and a focused review agent"},
-		{ID: "ai4j-tools", Path: "plugins/ai4j-tools", Description: "Claude-backed tools for AI4J workflows"},
-	}, repository, commit)
+		{ID: "ai4j-review", Path: "plugins/ai4j-review", Description: "Practical repository review guidance and a focused review agent", Repository: repository, Transport: transport, Commit: commit},
+		{ID: "ai4j-tools", Path: "plugins/ai4j-tools", Description: "Claude-backed tools for AI4J workflows", Repository: repository, Transport: transport, Commit: commit},
+	})
 }
 
 // RenderPackage renders a one-package exact-commit Claude marketplace catalog.
-func RenderPackage(marketplaceID, packageID, packagePath, description string, repository domain.RepositoryIdentity, commit domain.CommitOID) (Document, error) {
-	return RenderPackages(marketplaceID, []Package{{ID: packageID, Path: packagePath, Description: description}}, repository, commit)
+func RenderPackage(marketplaceID, packageID, packagePath, description string, repository domain.RepositoryIdentity, transport domain.GitTransport, commit domain.CommitOID) (Document, error) {
+	return RenderPackages(marketplaceID, []Package{{ID: packageID, Path: packagePath, Description: description, Repository: repository, Transport: transport, Commit: commit}})
 }
 
 // RenderPackages renders an exact-commit Claude marketplace catalog. Packages
 // are ordered by ID so equivalent selections always produce identical bytes.
-func RenderPackages(marketplaceID string, packages []Package, repository domain.RepositoryIdentity, commit domain.CommitOID) (Document, error) {
-	if !repository.Valid() || !commit.Valid() {
-		return Document{}, fmt.Errorf("catalog source is invalid")
-	}
-	ordered, err := validateAndSort(marketplaceID, packages)
+func RenderPackages(marketplaceID string, packages []Package) (Document, error) {
+	ordered, err := validateAndSort(marketplaceID, packages, true)
 	if err != nil {
 		return Document{}, err
 	}
@@ -69,13 +70,17 @@ func RenderPackages(marketplaceID string, packages []Package, repository domain.
 	document.Owner.Name = "AI4J"
 	document.Plugins = make([]plugin, 0, len(ordered))
 	for _, descriptor := range ordered {
+		remote, remoteErr := gitremote.ReconstructRemote(descriptor.Repository, descriptor.Transport)
+		if remoteErr != nil {
+			return Document{}, fmt.Errorf("catalog source is invalid")
+		}
 		document.Plugins = append(document.Plugins, plugin{
 			Name: descriptor.ID,
 			Source: source{
 				Source: "git-subdir",
-				URL:    "https://" + repository.String() + ".git",
+				URL:    remote.Endpoint(),
 				Path:   descriptor.Path,
-				SHA:    commit.String(),
+				SHA:    descriptor.Commit.String(),
 			},
 			Description: descriptor.Description,
 		})
@@ -98,7 +103,7 @@ func RenderLocalPackage(marketplaceID, packageID, packagePath, description strin
 // RenderLocalPackages renders a local Claude marketplace. Packages are ordered
 // by ID and each source is relative to the catalog root.
 func RenderLocalPackages(marketplaceID string, packages []Package) (Document, error) {
-	ordered, err := validateAndSort(marketplaceID, packages)
+	ordered, err := validateAndSort(marketplaceID, packages, false)
 	if err != nil {
 		return Document{}, err
 	}
@@ -135,7 +140,7 @@ func RenderLocalPackages(marketplaceID string, packages []Package) (Document, er
 	return Document{bytes: contents, digest: hex.EncodeToString(digest[:])}, nil
 }
 
-func validateAndSort(marketplaceID string, packages []Package) ([]Package, error) {
+func validateAndSort(marketplaceID string, packages []Package, requireSource bool) ([]Package, error) {
 	if marketplaceID == "" || len(packages) == 0 {
 		return nil, fmt.Errorf("catalog package identity is invalid")
 	}
@@ -144,7 +149,8 @@ func validateAndSort(marketplaceID string, packages []Package) ([]Package, error
 		return ordered[i].ID < ordered[j].ID
 	})
 	for i, descriptor := range ordered {
-		if descriptor.ID == "" || descriptor.Path == "" || descriptor.Description == "" {
+		if descriptor.ID == "" || descriptor.Path == "" || descriptor.Description == "" ||
+			requireSource && (!descriptor.Repository.Valid() || !descriptor.Transport.Valid() || !descriptor.Commit.Valid()) {
 			return nil, fmt.Errorf("catalog package identity is invalid")
 		}
 		if i > 0 && descriptor.ID == ordered[i-1].ID {

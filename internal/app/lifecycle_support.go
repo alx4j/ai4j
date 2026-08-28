@@ -186,7 +186,7 @@ func rollbackUnavailableWarning() result.Warning {
 
 func installationIDFor(report validation.LifecycleSelection, scope cli.Scope, scopeRoot string) domain.InstallationID {
 	sourceIdentity := report.Source.Checkout()
-	if report.Source.Mode() == cli.SourceGitHub {
+	if report.Source.Mode() == cli.SourceGit {
 		sourceIdentity = report.Source.Repository().String()
 	}
 	digest := sha256.Sum256([]byte(report.ToolkitID + "\x00" + sourceIdentity + "\x00" + string(scope) + "\x00" + filepath.Clean(scopeRoot)))

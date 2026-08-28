@@ -469,22 +469,26 @@ func TestLifecycleUninstallRejectsArchivedInstallation(t *testing.T) {
 	}
 }
 
-func TestLifecyclePersistsCredentialFreeSSHSourceTransport(t *testing.T) {
+func TestLifecyclePreservesEnterpriseSSHSourceThroughStateAndCatalog(t *testing.T) {
 	t.Parallel()
 	harness := newLifecycleHarness(t)
-	install := parseRequest[cli.InstallRequest](t, "install", "--repo", "git@github.com:alx4j/ai4j.git", "--ref", "main", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	install := parseRequest[cli.InstallRequest](t, "install", "--repo", "git@gitlab.barclays.example:division/team/ai4j.git", "--ref", "main", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 
 	response, err := harness.service.Install(context.Background(), install, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("SSH install = %#v, %v", response.Result(), err)
 	}
 	records, err := harness.store.LoadAll()
-	if err != nil || len(records) != 1 || records[0].Source.Transport != domain.SSHGitTransport().String() {
+	if err != nil || len(records) != 1 || records[0].Source.Mode != "git" || records[0].Source.Repository != "gitlab.barclays.example/division/team/ai4j" || records[0].Source.Transport != domain.SSHGitTransport().String() {
 		t.Fatalf("stored SSH source = %#v, error=%v", records, err)
 	}
 	options, err := updateSourceOptions(records[0])
-	if err != nil || options.Repository() != "git@github.com:alx4j/ai4j.git" {
+	if err != nil || options.Repository() != "git@gitlab.barclays.example:division/team/ai4j.git" {
 		t.Fatalf("reconstructed SSH source = %q, error=%v", options.Repository(), err)
+	}
+	catalogBytes, err := os.ReadFile(filepath.Join(harness.store.DataRoot(), filepath.FromSlash(records[0].Catalog.Path)))
+	if err != nil || !bytes.Contains(catalogBytes, []byte(`"url": "git@gitlab.barclays.example:division/team/ai4j.git"`)) || !bytes.Contains(catalogBytes, []byte(`"sha": "`+records[0].Source.Commit+`"`)) {
+		t.Fatalf("enterprise catalog = %s, error=%v", catalogBytes, err)
 	}
 }
 
@@ -808,7 +812,7 @@ func TestLifecycleProjectLocalRejectsPreexistingOwnedExclusion(t *testing.T) {
 	harness.native.projectRoot = project
 	request := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "project-local", "--project", project, "--bundle", "default", "--yes")
 	selection := harness.validator.SelectLifecycle(context.Background(), request.Source(), request.Selection().Bundle())
-	record, _, err := harness.service.recordForSelection(selection, request.Source(), request.Selection(), installationIDFor(selection, request.Scope(), project), request.Scope(), project)
+	record, _, err := harness.service.recordForSelection(selection, request.Selection(), installationIDFor(selection, request.Scope(), project), request.Scope(), project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1318,7 +1322,7 @@ func TestLifecycleNativeUninstallFailureDoesNotRemoveMarketplace(t *testing.T) {
 	}
 }
 
-func TestLifecycleUpdateChangesExplicitGitHubSourceWithoutChangingInstallationIdentity(t *testing.T) {
+func TestLifecycleUpdateChangesExplicitRemoteGitSourceWithoutChangingInstallationIdentity(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 	if response, err := harness.service.Install(context.Background(), install, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {

@@ -12,7 +12,7 @@ import (
 	"github.com/alx4j/ai4j/internal/source/git/protocol"
 )
 
-// AdvertisedReferenceKind is the closed ref namespace accepted from GitHub.
+// AdvertisedReferenceKind is the closed ref namespace accepted from Git.
 type AdvertisedReferenceKind string
 
 const (

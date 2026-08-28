@@ -72,7 +72,7 @@ func (v SourceSelection) String() string { return v.value }
 func (v SourceSelection) Valid() bool    { return symbolPattern.MatchString(v.value) }
 
 // GitTransport is the credential-free access preference retained for a
-// GitHub source. It is deliberately separate from RepositoryIdentity: two
+// Git source. It is deliberately separate from RepositoryIdentity: two
 // transports that reach the same repository must compare as one source.
 type GitTransport struct{ value string }
 

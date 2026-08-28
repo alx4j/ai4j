@@ -283,7 +283,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 	}
 	sourceCommit := ""
 	sourceDigest := source.RenderedDigest().String()
-	if source.Mode() == cli.SourceGitHub {
+	if source.Mode() == cli.SourceGit {
 		sourceCommit = source.Commit().OID().String()
 	} else {
 		sourceDigest = source.SourceDigest().String()

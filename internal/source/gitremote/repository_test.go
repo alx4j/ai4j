@@ -1,4 +1,4 @@
-package github_test
+package gitremote_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/alx4j/ai4j/internal/domain"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 )
 
 func TestParseRepositoryAcceptedCanonicalForms(t *testing.T) {
@@ -23,13 +23,19 @@ func TestParseRepositoryAcceptedCanonicalForms(t *testing.T) {
 		{name: "shorthand", input: "alx4j/ai4j", identity: "github.com/alx4j/ai4j", transport: domain.HTTPSGitTransport()},
 		{name: "mixed case components", input: "AlX4J/Ai4J", identity: "github.com/alx4j/ai4j", transport: domain.HTTPSGitTransport()},
 		{name: "https", input: "https://github.com/alx4j/ai4j.git", identity: "github.com/alx4j/ai4j", transport: domain.HTTPSGitTransport()},
+		{name: "mixed case GitHub https path", input: "https://GitHub.com/AlX4J/Ai4J.git", identity: "github.com/alx4j/ai4j", transport: domain.HTTPSGitTransport()},
 		{name: "ssh", input: "git@github.com:alx4j/ai4j.git", identity: "github.com/alx4j/ai4j", transport: domain.SSHGitTransport()},
+		{name: "mixed case GitHub ssh path", input: "git@github.com:AlX4J/Ai4J.git", identity: "github.com/alx4j/ai4j", transport: domain.SSHGitTransport()},
+		{name: "enterprise https", input: "https://Git.Everpure.Example/platform/toolkits/everpure.git", identity: "git.everpure.example/platform/toolkits/everpure", transport: domain.HTTPSGitTransport()},
+		{name: "enterprise ssh nested namespace", input: "git@gitlab.barclays.example:division/team/Barclays.git", identity: "gitlab.barclays.example/division/team/Barclays", transport: domain.SSHGitTransport()},
+		{name: "intranet https", input: "https://gitlab/division/toolkit.git", identity: "gitlab/division/toolkit", transport: domain.HTTPSGitTransport()},
+		{name: "intranet ssh", input: "git@gitlab:division/toolkit.git", identity: "gitlab/division/toolkit", transport: domain.SSHGitTransport()},
 		{name: "component boundaries", input: longOwner + "/" + longRepository, identity: "github.com/" + longOwner + "/" + longRepository, transport: domain.HTTPSGitTransport()},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := githubsource.ParseRepository(test.input)
+			got, err := gitremote.ParseRepository(test.input)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,13 +63,18 @@ func TestParseRepositoryRejectsEveryUnsupportedFamilyWithoutDisclosure(t *testin
 		"github.com/alx4j/ai4j",
 		"https://github.com/alx4j/ai4j",
 		"HTTPS://github.com/alx4j/ai4j.git",
-		"https://GitHub.com/alx4j/ai4j.git",
 		"https://github.com/alx4j/ai4j.git/",
 		"https://github.com/alx4j/ai4j.git?token=" + secret,
+		"https://github.com/alx4j/ai4j.git?",
 		"https://github.com/alx4j/ai4j.git#fragment",
+		"https://github.com/alx4j/ai4j.git#",
+		"https://github.com:/alx4j/ai4j.git",
+		"https://127.0.0.1/alx4j/ai4j.git",
 		"https://user:" + secret + "@github.com/alx4j/ai4j.git",
 		"git@github.com:alx4j/ai4j",
-		"git@evil.example:alx4j/ai4j.git",
+		"git@127.0.0.1:alx4j/ai4j.git",
+		"git@evil.example:../alx4j/ai4j.git",
+		"git@evil.example:/alx4j/ai4j.git",
 		"ssh://git@github.com/alx4j/ai4j.git",
 		"http://github.com/alx4j/ai4j.git",
 		"file:///tmp/ai4j",
@@ -82,11 +93,11 @@ func TestParseRepositoryRejectsEveryUnsupportedFamilyWithoutDisclosure(t *testin
 		strings.Repeat("x", 257),
 	}
 	for _, input := range tests {
-		if _, err := githubsource.ParseRepository(input); err == nil {
+		if _, err := gitremote.ParseRepository(input); err == nil {
 			t.Errorf("ParseRepository(%q) succeeded", input)
 		} else {
-			var selectionErr githubsource.SelectionError
-			if !errors.As(err, &selectionErr) || selectionErr.Code() != githubsource.ErrorInvalidRepository {
+			var selectionErr gitremote.SelectionError
+			if !errors.As(err, &selectionErr) || selectionErr.Code() != gitremote.ErrorInvalidRepository {
 				t.Errorf("ParseRepository(%q) error = %T %v", input, err, err)
 			}
 			if strings.Contains(err.Error(), secret) || len(err.Error()) > 128 {
@@ -107,14 +118,16 @@ func FuzzParseRepositoryIsBounded(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, input string) {
-		parsed, err := githubsource.ParseRepository(input)
+		parsed, err := gitremote.ParseRepository(input)
 		if err != nil {
 			if len(err.Error()) > 128 {
 				t.Fatalf("unbounded error: %d", len(err.Error()))
 			}
 			return
 		}
-		if !parsed.Identity().Valid() || !parsed.Transport().Valid() || strings.HasSuffix(parsed.Identity().String(), ".git") || parsed.Identity().String() != strings.ToLower(parsed.Identity().String()) {
+		identity := parsed.Identity().String()
+		host, _, _ := strings.Cut(identity, "/")
+		if !parsed.Identity().Valid() || !parsed.Transport().Valid() || strings.HasSuffix(identity, ".git") || host != strings.ToLower(host) {
 			t.Fatalf("noncanonical parse result: %q", parsed.Identity().String())
 		}
 	})

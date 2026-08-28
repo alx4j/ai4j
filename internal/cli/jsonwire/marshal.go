@@ -138,6 +138,7 @@ func source(value cli.Source) Source {
 	commit := value.Commit()
 	tree := value.RootTree()
 	result.Repository = optionalString(value.Repository().String(), true)
+	result.Transport = optionalString(value.Transport().String(), true)
 	result.RequestedRef = optionalString(value.RequestedRef(), value.HasRequestedRef())
 	result.ResolvedRefKind = optionalString(string(value.ResolvedRefKind()), true)
 	result.ResolvedRefName = optionalString(value.ResolvedRefName(), true)
@@ -248,6 +249,7 @@ func recordedSource(value cli.RecordedSource) RecordedSource {
 		return result
 	}
 	result.Repository = optionalString(value.Repository().String(), true)
+	result.Transport = optionalString(value.Transport().String(), true)
 	result.RequestedRef = optionalString(value.RequestedRef(), value.HasRequestedRef())
 	result.ResolvedRefKind = optionalString(value.RefKind().String(), true)
 	result.Commit = &SourceCommit{ObjectFormat: "sha1", OID: value.Commit().String()}

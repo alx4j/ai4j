@@ -9,17 +9,17 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
-	githubsource "github.com/alx4j/ai4j/internal/source/github"
+	gitremote "github.com/alx4j/ai4j/internal/source/gitremote"
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
 func testPlanSourceFrom(t *testing.T, options cli.SourceOptions, commit string) cli.Source {
 	t.Helper()
-	input, err := githubsource.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
+	input, err := gitremote.NewSelectionInput(options.Repository(), options.HasRepository(), options.Reference(), options.HasReference())
 	if err != nil {
 		t.Fatal(err)
 	}
-	effective, err := githubsource.Resolve(input)
+	effective, err := gitremote.Resolve(input)
 	if err != nil {
 		t.Fatal(err)
 	}
