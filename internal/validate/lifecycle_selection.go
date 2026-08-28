@@ -24,7 +24,22 @@ import (
 type LifecyclePackage struct {
 	ID             string
 	Path           string
+	Component      string
+	Source         cli.Source
 	NativeArtifact []byte
+}
+
+// LifecycleComponent retains the independently resolved selection that
+// contributed content to one composed installation.
+type LifecycleComponent struct {
+	Name             string
+	Tag              string
+	Source           cli.Source
+	ToolkitVersion   string
+	RequestedBundle  string
+	ResolvedBundles  []string
+	ResolvedPackages []string
+	ResolvedAssets   []string
 }
 
 // LifecycleSelection is the selected, validated Claude package set needed by the
@@ -40,6 +55,7 @@ type LifecycleSelection struct {
 	ResolvedPackages []string
 	ResolvedAssets   []string
 	Packages         []LifecyclePackage
+	Components       []LifecycleComponent
 	Content          []cli.ContentItem
 	Rules            []byte
 	RulesChecksum    string
@@ -146,7 +162,7 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 		}
 		retainedBytes += len(artifact)
 		resolvedPackageIDs[index] = selectedPackage.ID
-		lifecyclePackages[index] = LifecyclePackage{ID: selectedPackage.ID, Path: selectedPackage.Path, NativeArtifact: artifact}
+		lifecyclePackages[index] = LifecyclePackage{ID: selectedPackage.ID, Path: selectedPackage.Path, Source: source, NativeArtifact: artifact}
 	}
 	resolvedAssetIDs := make([]string, len(resolved.assets))
 	for index, selectedAsset := range resolved.assets {

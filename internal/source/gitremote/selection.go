@@ -51,12 +51,18 @@ func (i SelectionInput) valid() bool {
 
 // Remote is an operation-local sanitized endpoint. It intentionally has no
 // text or JSON marshaler so it cannot be mistaken for persisted identity.
-type Remote struct{ endpoint string }
+type Remote struct {
+	endpoint  string
+	identity  domain.RepositoryIdentity
+	transport domain.GitTransport
+}
 
-func (r Remote) Endpoint() string { return r.endpoint }
+func (r Remote) Endpoint() string                    { return r.endpoint }
+func (r Remote) Identity() domain.RepositoryIdentity { return r.identity }
+func (r Remote) Transport() domain.GitTransport      { return r.transport }
 func (r Remote) valid() bool {
 	parsed, err := ParseRepository(r.endpoint)
-	return err == nil && parsed.valid()
+	return err == nil && parsed.valid() && parsed.Identity() == r.identity && parsed.Transport() == r.transport
 }
 
 // ReconstructRemote creates one sanitized endpoint from typed identity and
@@ -73,7 +79,7 @@ func ReconstructRemote(repository domain.RepositoryIdentity, transport domain.Gi
 	if transport == domain.SSHGitTransport() {
 		endpoint = "git@" + host + ":" + path + ".git"
 	}
-	remote := Remote{endpoint: endpoint}
+	remote := Remote{endpoint: endpoint, identity: repository, transport: transport}
 	parsed, err := ParseRepository(remote.endpoint)
 	if err != nil || parsed.Identity() != repository || parsed.Transport() != transport {
 		return Remote{}, newError(ErrorInvalidSelection)

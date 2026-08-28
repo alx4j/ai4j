@@ -27,11 +27,15 @@ func testPlanSourceFrom(t *testing.T, options cli.SourceOptions, commit string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	advertisement, err := gitsource.ParseRemoteAdvertisement(request, []byte("ref: refs/heads/main\tHEAD\n"+commit+"\tHEAD\n"+commit+"\trefs/heads/main\n"))
+	advertisement := "ref: refs/heads/main\tHEAD\n" + commit + "\tHEAD\n" + commit + "\trefs/heads/main\n"
+	if options.HasReference() && strings.HasPrefix(options.Reference(), "refs/") {
+		advertisement += commit + "\t" + options.Reference() + "\n"
+	}
+	parsedAdvertisement, err := gitsource.ParseRemoteAdvertisement(request, []byte(advertisement))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := gitsource.ResolveReference(request, advertisement)
+	resolution, err := gitsource.ResolveReference(request, parsedAdvertisement)
 	if err != nil {
 		t.Fatal(err)
 	}

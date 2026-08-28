@@ -19,6 +19,9 @@ import (
 )
 
 func (s *lifecycleService) recordForSelection(report validation.LifecycleSelection, selection cli.BundleSelection, installationID domain.InstallationID, scope cli.Scope, scopeRoot string) (installstate.Record, catalog.Document, error) {
+	if len(report.Components) != 0 {
+		return s.recordForComposition(report, installationID, scope, scopeRoot)
+	}
 	marketplaceID := marketplaceIDFor(installationID)
 	if scope == cli.ScopeProjectShared {
 		marketplaceID = report.DeclarationID
@@ -92,6 +95,78 @@ func (s *lifecycleService) recordForSelection(report validation.LifecycleSelecti
 	return record, document, record.Validate()
 }
 
+func (s *lifecycleService) recordForComposition(report validation.LifecycleSelection, installationID domain.InstallationID, scope cli.Scope, scopeRoot string) (installstate.Record, catalog.Document, error) {
+	marketplaceID := marketplaceIDFor(installationID)
+	if scope == cli.ScopeProjectShared {
+		marketplaceID = report.DeclarationID
+	}
+	packages := make([]installstate.NativePackage, len(report.Packages))
+	catalogPackages := make([]catalog.Package, len(report.Packages))
+	for index, pkg := range report.Packages {
+		if !pkg.Source.Valid() || pkg.Component == "" {
+			return installstate.Record{}, catalog.Document{}, errors.New("composition package provenance is incomplete")
+		}
+		packages[index] = installstate.NativePackage{ID: pkg.ID, Path: pkg.Path, Component: pkg.Component}
+		catalogPackages[index] = catalog.Package{
+			ID: pkg.ID, Path: pkg.Path, Description: "AI4J toolkit package " + pkg.ID,
+			Repository: pkg.Source.Repository(), Transport: pkg.Source.Transport(), Commit: pkg.Source.Commit().OID(),
+		}
+	}
+	document, err := catalog.RenderPackages(marketplaceID, catalogPackages)
+	if err != nil {
+		return installstate.Record{}, catalog.Document{}, err
+	}
+	components := make([]installstate.Component, len(report.Components))
+	for index, component := range report.Components {
+		source, sourceErr := stateSourceFromCLI(component.Source)
+		if sourceErr != nil {
+			return installstate.Record{}, catalog.Document{}, sourceErr
+		}
+		components[index] = installstate.Component{
+			Name: component.Name, Tag: component.Tag, Source: source, ToolkitVersion: component.ToolkitVersion,
+			Selection: installstate.Selection{RequestedBundle: component.RequestedBundle, ResolvedBundles: slices.Clone(component.ResolvedBundles), ResolvedAssets: slices.Clone(component.ResolvedAssets)},
+			Packages:  slices.Clone(component.ResolvedPackages),
+		}
+	}
+	record := installstate.Record{
+		SchemaVersion: installstate.SchemaVersion, InstallationID: installationID.String(), ToolkitID: "composition", DeclarationID: marketplaceID, ToolkitVersion: "composed",
+		Components: components, Packages: packages, MarketplaceID: marketplaceID,
+		Target: "claude", Host: s.host(), Scope: string(scope), ScopeRoot: scopeRoot, Lifecycle: "active",
+		Selection:       installstate.Selection{RequestedBundle: "composition", ResolvedBundles: []string{"composition"}, ResolvedAssets: slices.Clone(report.ResolvedAssets)},
+		NativeResources: nativeResources(packages, marketplaceID),
+		Health:          "healthy", AI4JVersion: s.build.Version(),
+		Catalog:       installstate.OwnedFile{Path: "state/catalogs/" + installationID.String() + "/.claude-plugin/marketplace.json", Checksum: document.Digest()},
+		LastOperation: installstate.LastOperation{ID: "operation-pending", Timestamp: time.Unix(0, 0).UTC().Format(time.RFC3339)},
+	}
+	if len(report.Rules) != 0 {
+		rulesID := "ai4j-" + installationID.String()
+		rulesRoot := "rules/"
+		if scope != cli.ScopeUser {
+			rulesRoot = ".claude/rules/"
+		}
+		if scope == cli.ScopeProjectShared {
+			rulesID = marketplaceID
+		}
+		record.Rules = installstate.OwnedFile{Path: rulesRoot + rulesID + ".md", Checksum: report.RulesChecksum}
+	}
+	if scope == cli.ScopeProjectShared {
+		record.NativeCatalog = record.Catalog
+	}
+	slices.Sort(record.NativeResources)
+	return record, document, record.Validate()
+}
+
+func stateSourceFromCLI(source cli.Source) (installstate.Source, error) {
+	if !source.Valid() || source.Mode() != cli.SourceGit || !source.HasRequestedRef() {
+		return installstate.Source{}, errors.New("composition source provenance is incomplete")
+	}
+	requested := source.RequestedRef()
+	return installstate.Source{
+		Mode: "git", Selection: source.Selection().String(), Repository: source.Repository().String(), Transport: source.Transport().String(),
+		RequestedRef: &requested, RefKind: source.ResolvedRefKind().String(), Commit: source.Commit().OID().String(), RenderedDigest: source.RenderedDigest().String(),
+	}, nil
+}
+
 func localBundleDigest(source installstate.Source, selection cli.BundleSelection, report validation.LifecycleSelection, catalogDigest string) string {
 	parts := []string{"claude-local-bundle", source.Checkout, source.SourceDigest, source.RenderedDigest, report.ToolkitID, selection.Bundle(), catalogDigest, strings.Join(report.ResolvedBundles, ","), strings.Join(report.ResolvedPackages, ","), strings.Join(report.ResolvedAssets, ",")}
 	for _, pkg := range report.Packages {
@@ -119,7 +194,16 @@ func (s *lifecycleService) planResponse(command cli.Command, execution lifecycle
 	}
 	var data cli.PlanData
 	var err error
-	if execution.source.HasSource() {
+	if len(execution.source.Components) != 0 && execution.source.HasSource() {
+		components := make([]cli.PlanComponent, len(execution.source.Components))
+		for index, component := range execution.source.Components {
+			components[index], err = cli.NewPlanComponent(component.Name, component.Tag, component.Source)
+			if err != nil {
+				return cli.Response{}, err
+			}
+		}
+		data, err = cli.NewCompositionPlanData(execution.operation, components, *installation, execution.actions, execution.content, execution.conflicts, execution.final, execution.disposition)
+	} else if execution.source.HasSource() {
 		data, err = cli.NewPlanData(execution.operation, execution.source.Source, *installation, execution.actions, execution.content, execution.conflicts, execution.final, execution.disposition)
 	} else {
 		data, err = cli.NewOfflinePlanData(execution.operation, *installation, execution.actions, execution.conflicts, execution.final)

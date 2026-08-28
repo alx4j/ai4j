@@ -37,17 +37,63 @@ type statusService struct {
 }
 
 func inspectRecordNative(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, *result.Problem) {
+	status, _, problem := inspectRecordNativeDetailed(ctx, inspector, record)
+	return status, problem
+}
+
+func inspectRecordNativeDetailed(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, []result.Warning, *result.Problem) {
 	status := validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}
-	for _, pluginID := range nativePluginIDs(record) {
+	var warnings []result.Warning
+	var firstProblem *result.Problem
+	warningKeys := make(map[string]struct{})
+	addWarning := func(key, code, message, component, resourceValue string) {
+		if _, present := warningKeys[key]; present {
+			return
+		}
+		warningKeys[key] = struct{}{}
+		context := compositionContext(component)
+		resource, _ := result.NewContext("resource", resourceValue)
+		context = append(context, resource)
+		warning, _ := result.NewWarning(code, message, context)
+		warnings = append(warnings, warning)
+	}
+	for _, pkg := range record.Packages {
+		pluginID := nativePluginID(pkg, record.MarketplaceID)
 		observed, problem := inspector.InspectNativeStatusAt(ctx, nativeDirectory(record), record.MarketplaceID, pluginID)
 		if problem != nil {
-			return validation.NativeStatus{}, problem
+			if pkg.Component == "" {
+				return validation.NativeStatus{}, nil, problem
+			}
+			annotated := annotateCompositionProblem(*problem, pkg.Component)
+			resource, _ := result.NewContext("resource", pluginID)
+			context := append(annotated.Context(), resource)
+			annotated, _ = result.NewProblem(annotated.Code(), annotated.Message(), context)
+			addWarning(pkg.Component+"\x00inspection", annotated.Code(), annotated.Message(), pkg.Component, pluginID)
+			if firstProblem == nil {
+				firstProblem = &annotated
+			}
+			continue
 		}
 		status.MarketplaceRegistered = status.MarketplaceRegistered && observed.MarketplaceRegistered
 		status.PluginInstalled = status.PluginInstalled && observed.PluginInstalled
 		status.PluginEnabled = status.PluginEnabled && observed.PluginEnabled
+		if pkg.Component != "" {
+			for _, issue := range []struct {
+				unhealthy bool
+				code      string
+				message   string
+			}{
+				{!observed.MarketplaceRegistered, "native_registration_missing", "Claude does not have the component marketplace registered"},
+				{!observed.PluginInstalled, "native_plugin_missing", "Claude does not have the component plugin installed"},
+				{observed.PluginInstalled && !observed.PluginEnabled, "native_plugin_disabled", "Claude has the component plugin disabled"},
+			} {
+				if issue.unhealthy {
+					addWarning(pkg.Component+"\x00"+issue.code, issue.code, issue.message, pkg.Component, pluginID)
+				}
+			}
+		}
 	}
-	return status, nil
+	return status, warnings, firstProblem
 }
 
 func inspectAnyRecordNative(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, *result.Problem) {
@@ -92,14 +138,17 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 			if err != nil {
 				return cli.Response{}, err
 			}
-			observation, problem := inspectRecordNative(ctx, s.validation, record)
+			observation, nativeWarnings, problem := inspectRecordNativeDetailed(ctx, s.validation, record)
+			warnings = append(warnings, nativeWarnings...)
 			if problem != nil {
 				native, err = unknownNative()
-				warning, warningErr := result.NewWarning(problem.Code(), problem.Message(), nil)
-				if warningErr != nil {
-					return cli.Response{}, warningErr
+				if len(record.Components) == 0 {
+					warning, warningErr := result.NewWarning(problem.Code(), problem.Message(), nil)
+					if warningErr != nil {
+						return cli.Response{}, warningErr
+					}
+					warnings = append(warnings, warning)
 				}
-				warnings = append(warnings, warning)
 			} else {
 				if record.Scope == "project-shared" && inspectProjectMarketplaceDrift(record) == cli.DriftUnchanged {
 					observation.MarketplaceRegistered = true
@@ -121,7 +170,9 @@ func (s statusService) Status(ctx context.Context, request cli.StatusRequest) (c
 
 	var updateProblem *result.Problem
 	if installed && record.Lifecycle == "active" && recovery.State() == cli.RecoveryStateNone {
-		disposition, updateProblem = s.checkUpdates(ctx, record)
+		var updateWarnings []result.Warning
+		disposition, updateProblem, updateWarnings = s.checkUpdates(ctx, record)
+		warnings = append(warnings, updateWarnings...)
 	}
 	data, err := cli.NewDetailedStatusData(installation, summary, native, drift, recovery, disposition)
 	if err != nil {
@@ -185,6 +236,16 @@ func summaryFromRecord(record installstate.Record) (cli.InstallationSummary, err
 	if err != nil {
 		return cli.InstallationSummary{}, err
 	}
+	if len(record.Components) != 0 {
+		components, componentErr := recordedComponentsFromRecord(record)
+		if componentErr != nil {
+			return cli.InstallationSummary{}, componentErr
+		}
+		return cli.NewDetailedCompositionSummary(
+			id, cli.BuildTarget(record.Target), cli.Scope(record.Scope), record.ScopeRoot, record.Lifecycle, components,
+			packageIDs(record.Packages), record.Selection.ResolvedAssets, record.Health, len(record.History), lastOperation,
+		)
+	}
 	return cli.NewDetailedInstallationSummary(
 		id, record.ToolkitID, cli.BuildTarget(record.Target), cli.Scope(record.Scope), record.ScopeRoot, record.Lifecycle, source,
 		record.Selection.RequestedBundle, record.Selection.ResolvedBundles, packageIDs(record.Packages), record.Selection.ResolvedAssets,
@@ -222,7 +283,32 @@ func installationFromRecord(record installstate.Record) (cli.Installation, error
 	if toolkitVersion == "" {
 		toolkitVersion = "unversioned"
 	}
+	if len(record.Components) != 0 {
+		components, componentErr := recordedComponentsFromRecord(record)
+		if componentErr != nil {
+			return cli.Installation{}, componentErr
+		}
+		return cli.NewComposedInstallation(installationID, packageIDs(record.Packages), components, record.AI4JVersion)
+	}
 	return cli.NewInstallation(installationID, record.ToolkitID, packageIDs(record.Packages), source, toolkitVersion, record.AI4JVersion, "")
+}
+
+func recordedComponentsFromRecord(record installstate.Record) ([]cli.RecordedComponent, error) {
+	components := make([]cli.RecordedComponent, len(record.Components))
+	for index, component := range record.Components {
+		source, err := recordedSourceFromStateSource(component.Source)
+		if err != nil {
+			return nil, err
+		}
+		components[index], err = cli.NewRecordedComponent(
+			component.Name, component.Tag, source, component.ToolkitVersion,
+			component.Selection.ResolvedBundles, component.Packages, component.Selection.ResolvedAssets,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return components, nil
 }
 
 func packageIDs(packages []installstate.NativePackage) []string {
@@ -234,35 +320,42 @@ func packageIDs(packages []installstate.NativePackage) []string {
 }
 
 func recordedSourceFromRecord(record installstate.Record) (cli.RecordedSource, error) {
-	if record.Source.Mode == "development_source" {
-		digest, err := domain.NewRenderedDigest(record.Source.SourceDigest)
+	if len(record.Components) != 0 {
+		return recordedSourceFromStateSource(record.Components[0].Source)
+	}
+	return recordedSourceFromStateSource(record.Source)
+}
+
+func recordedSourceFromStateSource(sourceState installstate.Source) (cli.RecordedSource, error) {
+	if sourceState.Mode == "development_source" {
+		digest, err := domain.NewRenderedDigest(sourceState.SourceDigest)
 		if err != nil {
 			return cli.RecordedSource{}, err
 		}
-		return cli.NewRecordedDevelopmentSource(record.Source.Checkout, digest, record.Source.Dirty)
+		return cli.NewRecordedDevelopmentSource(sourceState.Checkout, digest, sourceState.Dirty)
 	}
-	selection, err := domain.NewSourceSelection(record.Source.Selection)
+	selection, err := domain.NewSourceSelection(sourceState.Selection)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
-	repository, err := domain.NewRepositoryIdentity(record.Source.Repository)
+	repository, err := domain.NewRepositoryIdentity(sourceState.Repository)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
-	commit, err := domain.NewCommitOID(record.Source.Commit)
+	commit, err := domain.NewCommitOID(sourceState.Commit)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
 	requested := ""
-	hasRequested := record.Source.RequestedRef != nil
+	hasRequested := sourceState.RequestedRef != nil
 	if hasRequested {
-		requested = *record.Source.RequestedRef
+		requested = *sourceState.RequestedRef
 	}
-	transport, err := storedSourceTransport(record.Source)
+	transport, err := storedSourceTransport(sourceState)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
-	source, err := cli.NewRecordedSource(selection, repository, transport, requested, hasRequested, cli.RefKind(record.Source.RefKind), commit)
+	source, err := cli.NewRecordedSource(selection, repository, transport, requested, hasRequested, cli.RefKind(sourceState.RefKind), commit)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
@@ -339,61 +432,114 @@ func inspectFileDrift(path, expectedChecksum string) cli.DriftState {
 	return cli.DriftUnchanged
 }
 
-func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem) {
+func (s statusService) checkUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem, []result.Warning) {
+	if len(record.Components) != 0 {
+		return s.checkCompositionUpdates(ctx, record)
+	}
 	selection := selectionFromRecord(record)
 	if record.Source.Mode == "development_source" {
 		options, err := cli.NewDevelopmentSourceOptions(record.Source.Checkout, true)
 		if err != nil {
-			return result.UpdateUnknown, statusProblem("update_check_failed", "stored local source could not be checked")
+			return result.UpdateUnknown, statusProblem("update_check_failed", "stored local source could not be checked"), nil
 		}
 		report := s.validation.SelectLifecycle(ctx, options, selection.Bundle())
 		if len(report.Problems) != 0 {
 			problem := report.Problems[0]
-			return result.UpdateUnknown, &problem
+			return result.UpdateUnknown, &problem, nil
 		}
 		if !report.HasSource() {
-			return result.UpdateUnknown, statusProblem("update_check_failed", "local source could not be checked")
+			return result.UpdateUnknown, statusProblem("update_check_failed", "local source could not be checked"), nil
 		}
 		if report.Source.SourceDigest().String() == record.Source.SourceDigest {
-			return result.UpdateUpToDate, nil
+			return result.UpdateUpToDate, nil, nil
 		}
-		return result.UpdateAvailable, nil
+		return result.UpdateAvailable, nil, nil
 	}
 	if record.Source.RefKind == cli.RefCommit.String() {
-		return result.UpdatePinned, nil
+		return result.UpdatePinned, nil, nil
 	}
 	installed, err := domain.NewCommitOID(record.Source.Commit)
 	if err != nil {
-		return result.UpdateUnknown, statusProblem("update_check_failed", "installed source commit is invalid")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "installed source commit is invalid"), nil
 	}
 	options, err := updateSourceOptions(record)
 	if err != nil {
-		return result.UpdateUnknown, statusProblem("update_check_failed", "installed source selection is invalid")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "installed source selection is invalid"), nil
 	}
 	update := s.validation.ValidateUpdate(ctx, options, installed)
 	if len(update.Report.Problems) != 0 {
 		problem := update.Report.Problems[0]
-		return result.UpdateUnknown, &problem
+		return result.UpdateUnknown, &problem, nil
 	}
 	if update.Report.Failure != validation.FailureNone || !update.Report.HasSource() {
-		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked"), nil
 	}
 	if record.Source.RefKind == cli.RefTag.String() {
 		if update.Report.Source.Commit().OID() == installed {
-			return result.UpdatePinned, nil
+			return result.UpdatePinned, nil, nil
 		}
-		return result.UpdateRefRewritten, nil
+		return result.UpdateRefRewritten, nil, nil
 	}
 	switch update.Disposition {
 	case gitsource.UpdateNoChange:
-		return result.UpdateUpToDate, nil
+		return result.UpdateUpToDate, nil, nil
 	case gitsource.UpdateAvailable:
-		return result.UpdateAvailable, nil
+		return result.UpdateAvailable, nil, nil
 	case gitsource.UpdateRefRewritten:
-		return result.UpdateRefRewritten, nil
+		return result.UpdateRefRewritten, nil, nil
 	default:
-		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked")
+		return result.UpdateUnknown, statusProblem("update_check_failed", "Git source could not be checked"), nil
 	}
+}
+
+func (s statusService) checkCompositionUpdates(ctx context.Context, record installstate.Record) (result.UpdateDisposition, *result.Problem, []result.Warning) {
+	var unavailable []string
+	var rewritten []string
+	for _, component := range record.Components {
+		remote, err := storedSourceRemote(component.Source)
+		if err != nil {
+			unavailable = append(unavailable, component.Name)
+			continue
+		}
+		options, err := cli.NewSourceOptions(remote.Endpoint(), true, "refs/tags/"+component.Tag, true)
+		if err != nil {
+			unavailable = append(unavailable, component.Name)
+			continue
+		}
+		installed, err := domain.NewCommitOID(component.Source.Commit)
+		if err != nil {
+			unavailable = append(unavailable, component.Name)
+			continue
+		}
+		update := s.validation.ValidateUpdate(ctx, options, installed)
+		if len(update.Report.Problems) != 0 || update.Report.Failure != validation.FailureNone || !update.Report.HasSource() {
+			unavailable = append(unavailable, component.Name)
+			continue
+		}
+		if update.Report.Source.Commit().OID() != installed {
+			rewritten = append(rewritten, component.Name)
+		}
+	}
+	warnings := make([]result.Warning, len(rewritten))
+	for index, component := range rewritten {
+		warnings[index], _ = result.NewWarning("component_ref_rewritten", "a pinned component tag now resolves to a different commit", compositionContext(component))
+	}
+	if len(unavailable) != 0 {
+		problem, _ := result.NewProblem("update_check_failed", "one or more composition components could not be checked", compositionContexts(unavailable))
+		return result.UpdateUnknown, &problem, warnings
+	}
+	if len(rewritten) != 0 {
+		return result.UpdateRefRewritten, nil, warnings
+	}
+	return result.UpdatePinned, nil, nil
+}
+
+func compositionContexts(components []string) []result.Context {
+	contexts := make([]result.Context, len(components))
+	for index, component := range components {
+		contexts[index], _ = result.NewContext("component", component)
+	}
+	return contexts
 }
 
 func statusResponse(data cli.StatusData, warnings []result.Warning, updateProblem *result.Problem) (cli.Response, error) {
@@ -495,6 +641,9 @@ func appendStatusWarnings(warnings []result.Warning, data cli.StatusData) ([]res
 		warnings = append(warnings, warning)
 	}
 	native := data.NativeState()
+	if installation, present := data.Installation(); present && len(installation.Components()) != 0 {
+		return warnings, nil
+	}
 	checks := []struct {
 		unhealthy bool
 		code      string

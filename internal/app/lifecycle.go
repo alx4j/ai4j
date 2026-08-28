@@ -83,8 +83,14 @@ func newLifecycleService(validationService lifecycleValidation, state installsta
 
 func (s *lifecycleService) Install(ctx context.Context, request cli.InstallRequest, commandIO CommandIO) (cli.Response, error) {
 	project, hasProject := request.Project()
+	prepare := func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
+		if gitRoot, composed := request.GitRoot(); composed {
+			return s.prepareCompositionInstall(ctx, gitRoot, request.BundleCoordinates(), request.Target(), request.Scope(), project, hasProject, policy)
+		}
+		return s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), policy)
+	}
 	if request.DryRun() {
-		execution, response, stop, err := s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), cli.ConflictFail)
+		execution, response, stop, err := prepare(cli.ConflictFail)
 		if err != nil {
 			return cli.Response{}, err
 		}
@@ -99,13 +105,13 @@ func (s *lifecycleService) Install(ctx context.Context, request cli.InstallReque
 		command: cli.CommandInstall, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
 		conflictPolicy: cli.ConflictFail, expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
 		expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
-		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
-			return s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), policy)
-		},
+		prepare: prepare,
 	})
 }
 
 func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest, commandIO CommandIO) (cli.Response, error) {
+	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
+	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
 	if request.DryRun() {
 		execution, response, stop, err := s.prepareUpdate(ctx, request.InstallationID(), request.Source(), request.ConflictPolicy())
 		if err != nil {
@@ -116,13 +122,11 @@ func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest
 		}
 		return s.planResponse(cli.CommandUpdate, execution)
 	}
-	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
 	if request.Source().HasRepository() || request.Source().HasReference() {
 		if !hasExpectedCommit {
 			return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_required", "changing source or reference requires --expected-commit", result.UpdateNotChecked, nil)
 		}
 	}
-	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
 	return s.apply(ctx, applyRequest{
 		command: cli.CommandUpdate, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
 		conflictPolicy: request.ConflictPolicy(), expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
@@ -134,6 +138,7 @@ func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest
 }
 
 func (s *lifecycleService) Sync(ctx context.Context, request cli.SyncRequest, commandIO CommandIO) (cli.Response, error) {
+	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
 	if request.DryRun() {
 		execution, response, stop, err := s.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), request.ConflictPolicy())
 		if err != nil {
@@ -144,7 +149,6 @@ func (s *lifecycleService) Sync(ctx context.Context, request cli.SyncRequest, co
 		}
 		return s.planResponse(cli.CommandSync, execution)
 	}
-	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
 	return s.apply(ctx, applyRequest{
 		command: cli.CommandSync, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
 		conflictPolicy: request.ConflictPolicy(), expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
@@ -219,6 +223,9 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 	}
 	if len(execution.conflicts) != 0 {
 		return lifecycleConflict(request.command, execution.conflicts, execution.disposition, execution.source.Warnings)
+	}
+	if len(execution.source.Components) != 0 && (request.hasExpectedCommit || request.hasExpectedDigest) {
+		return lifecycleFailure(request.command, result.FailureConflict, "composition_precondition_unsupported", "single-source commit and digest preconditions do not apply to a composition", result.UpdateNotChecked, execution.source.Warnings)
 	}
 	if request.hasExpectedCommit && execution.source.Source.Commit().OID() != request.expectedCommit {
 		return lifecycleFailure(request.command, result.FailureConflict, "expected_commit_mismatch", "resolved source commit does not match --expected-commit", execution.disposition, execution.source.Warnings)
@@ -347,6 +354,9 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	if err != nil || !present || record.Lifecycle != "active" {
 		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
+	if len(record.Components) != 0 {
+		return s.prepareCompositionUpdate(ctx, record, requested, policy)
+	}
 	selection := selectionFromRecord(record)
 	if record.Source.Mode == "development_source" {
 		if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() {
@@ -432,6 +442,16 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 	if err != nil || !present || record.Lifecycle != "active" {
 		return stopLifecycle(cli.CommandSync, result.FailureConflict, "installation_not_active", "the selected installation is not active")
 	}
+	if len(record.Components) != 0 {
+		if allowDirty || selection.Bundle() != "composition" {
+			return stopLifecycle(cli.CommandSync, result.FailureConflict, "composition_selection_invalid", "a composed installation must be synchronized as the complete composition")
+		}
+		report := s.selectRecordedComposition(ctx, record)
+		if len(report.Problems) != 0 || len(report.Components) == 0 {
+			return stopSelection(cli.CommandSync, report)
+		}
+		return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, cli.SourceOptions{}, selection, policy, result.UpdateNotChecked)
+	}
 	options, err := exactSourceOptions(record)
 	if record.Source.Mode == "development_source" {
 		options, err = cli.NewDevelopmentSourceOptions(record.Source.Checkout, allowDirty)
@@ -474,7 +494,13 @@ func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Comm
 	var beforeArtifacts []installstate.NativeArtifact
 	var content []cli.ContentItem
 	installedSelection := selectionFromRecord(record)
-	if record.Source.Mode == "development_source" {
+	if len(record.Components) != 0 {
+		beforeArtifacts = s.currentArtifacts(&record)
+		if len(beforeArtifacts) == 0 && len(actions) != 0 {
+			return stopLifecycle(command, result.FailureConflict, "rollback_artifact_unavailable", "exact native rollback material is unavailable")
+		}
+		content, err = recordedTransitionContent(record.Selection.ResolvedAssets, report.Content)
+	} else if record.Source.Mode == "development_source" {
 		beforeArtifacts = s.currentArtifacts(&record)
 		if len(beforeArtifacts) == 0 && len(actions) != 0 {
 			return stopLifecycle(command, result.FailureConflict, "rollback_artifact_unavailable", "exact native rollback material is unavailable")
@@ -519,7 +545,14 @@ func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID 
 	var beforeArtifacts []installstate.NativeArtifact
 	selection := selectionFromRecord(record)
 	nonRestorable := false
-	if record.Source.Mode == "development_source" {
+	if len(record.Components) != 0 {
+		beforeArtifacts = s.currentArtifacts(&record)
+		report = recordedLifecycleSelection(record)
+		if len(beforeArtifacts) == 0 {
+			nonRestorable = true
+			report.Warnings = append(report.Warnings, rollbackUnavailableWarning())
+		}
+	} else if record.Source.Mode == "development_source" {
 		beforeArtifacts = s.currentArtifacts(&record)
 		report = recordedLifecycleSelection(record)
 		if len(beforeArtifacts) == 0 {
@@ -600,7 +633,9 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	}
 	selection := selectionFromRecord(desired)
 	var report validation.LifecycleSelection
-	if desired.Source.Mode == "development_source" {
+	if len(desired.Components) != 0 {
+		report = recordedLifecycleSelection(desired)
+	} else if desired.Source.Mode == "development_source" {
 		report = recordedLifecycleSelection(desired)
 	} else {
 		options, optionsErr := exactSourceOptions(desired)
