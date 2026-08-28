@@ -172,7 +172,12 @@ func planData(value cli.PlanData) PlanData {
 		converted := source(value.Source())
 		wireSource = &converted
 	}
-	return PlanData{Operation: value.Operation().String(), Source: wireSource, InstallationID: value.InstallationID().String(), Actions: actions(value.Actions()), ActiveContent: content(value.ActiveContent()), Conflicts: conflicts(value.Conflicts()), ExpectedFinalState: finalState(value.ExpectedFinalState()), UpdateDisposition: value.UpdateDisposition().String()}
+	components := value.Components()
+	wireComponents := make([]PlanComponent, len(components))
+	for index, component := range components {
+		wireComponents[index] = PlanComponent{Name: component.Name(), Tag: component.Tag(), Source: source(component.Source())}
+	}
+	return PlanData{Operation: value.Operation().String(), Source: wireSource, Components: wireComponents, InstallationID: value.InstallationID().String(), Actions: actions(value.Actions()), ActiveContent: content(value.ActiveContent()), Conflicts: conflicts(value.Conflicts()), ExpectedFinalState: finalState(value.ExpectedFinalState()), UpdateDisposition: value.UpdateDisposition().String()}
 }
 
 func mutationData(value cli.MutationData) MutationData {
@@ -194,7 +199,7 @@ func statusData(value cli.StatusData) StatusData {
 	var summary *InstallationSummary
 	var expectedNativeVersion *string
 	if item, ok := value.Installation(); ok {
-		installation = &Installation{InstallationID: item.ID().String(), ToolkitID: item.ToolkitID(), NativePluginIDs: item.NativePluginIDs(), Source: recordedSource(item.Source()), ToolkitVersion: item.ToolkitVersion(), CLIVersion: item.CLIVersion()}
+		installation = &Installation{InstallationID: item.ID().String(), ToolkitID: item.ToolkitID(), NativePluginIDs: item.NativePluginIDs(), Source: recordedSource(item.Source()), Components: recordedComponents(item.Components()), ToolkitVersion: item.ToolkitVersion(), CLIVersion: item.CLIVersion()}
 		expectedNativeVersion = optionalString(item.ExpectedNativeVersion(), item.HasExpectedNativeVersion())
 	}
 	if item, ok := value.Summary(); ok {
@@ -235,9 +240,23 @@ func doctorData(value cli.DoctorData) DoctorData {
 func installationSummary(installation cli.InstallationSummary) InstallationSummary {
 	return InstallationSummary{
 		InstallationID: installation.ID().String(), ToolkitID: installation.ToolkitID(), Target: string(installation.Target()), Scope: string(installation.Scope()), ScopeRoot: installation.ScopeRoot(), Lifecycle: installation.Lifecycle(),
-		Source: recordedSource(installation.Source()), RequestedBundle: installation.RequestedBundle(), ResolvedBundles: installation.ResolvedBundles(), Packages: installation.Packages(), ResolvedAssets: installation.ResolvedAssets(),
+		Source: recordedSource(installation.Source()), Components: recordedComponents(installation.Components()), RequestedBundle: installation.RequestedBundle(), ResolvedBundles: installation.ResolvedBundles(), Packages: installation.Packages(), ResolvedAssets: installation.ResolvedAssets(),
 		Health: installation.Health(), HistoryCount: installation.HistoryCount(), LastOperationID: optionalString(installation.LastOperationID().String(), installation.HasLastOperationID()),
 	}
+}
+
+func recordedComponents(values []cli.RecordedComponent) []RecordedComponent {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]RecordedComponent, len(values))
+	for index, value := range values {
+		result[index] = RecordedComponent{
+			Name: value.Name(), Tag: value.Tag(), Source: recordedSource(value.Source()), ToolkitVersion: value.ToolkitVersion(),
+			ResolvedBundles: value.ResolvedBundles(), Packages: value.Packages(), ResolvedAssets: value.ResolvedAssets(),
+		}
+	}
+	return result
 }
 
 func recordedSource(value cli.RecordedSource) RecordedSource {

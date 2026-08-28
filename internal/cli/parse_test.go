@@ -203,7 +203,7 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--asset", "review-skill"}, cli.UsageInapplicableOption, "asset"},
 		{[]string{"ai4j", "sync", "installation-001", "--all"}, cli.UsageInapplicableOption, "all"},
 		{[]string{"ai4j", "sync", "installation-001", "--asset", "review-skill"}, cli.UsageInapplicableOption, "asset"},
-		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--bundle", "review"}, cli.UsageDuplicateOption, "bundle"},
+		{[]string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--bundle", "review"}, cli.UsageInvalidOptionValue, "bundle"},
 		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--bundle", "review"}, cli.UsageDuplicateOption, "bundle"},
 	}
 	for _, test := range rejected {
@@ -212,6 +212,87 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
 			t.Fatalf("Parse(%q) = %v, want %s for %q", test.argv, err, test.issue, test.option)
 		}
+	}
+}
+
+func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	twoRequest, err := parser.Parse([]string{
+		"ai4j", "install", "--git-root", "https://github.com/alx4j", "--target", "claude", "--scope", "user",
+		"--bundle", "common@v1", "--bundle", "company@v2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coordinates := twoRequest.(cli.InstallRequest).BundleCoordinates(); len(coordinates) != 2 {
+		t.Fatalf("two-coordinate composition = %#v", coordinates)
+	}
+
+	request, err := parser.Parse([]string{
+		"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user",
+		"--bundle", "common@v1.2.3", "--bundle", "company@release/2026-08", "--bundle", "team@v4",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := request.(cli.InstallRequest)
+	gitRoot, present := install.GitRoot()
+	coordinates := install.BundleCoordinates()
+	if !present || gitRoot != "git@github.com:alx4j" || install.Selection().Bundle() != "" || len(coordinates) != 3 {
+		t.Fatalf("composition request = root %q/%v selection %q coordinates %#v", gitRoot, present, install.Selection().Bundle(), coordinates)
+	}
+	want := [][2]string{{"common", "v1.2.3"}, {"company", "release/2026-08"}, {"team", "v4"}}
+	for index, coordinate := range coordinates {
+		if coordinate.Name() != want[index][0] || coordinate.Tag() != want[index][1] {
+			t.Fatalf("coordinate %d = %s@%s", index, coordinate.Name(), coordinate.Tag())
+		}
+	}
+	coordinates[0] = cli.BundleCoordinate{}
+	if got := install.BundleCoordinates()[0]; got.Name() != "common" || got.Tag() != "v1.2.3" {
+		t.Fatalf("BundleCoordinates() exposed mutable state: %#v", got)
+	}
+}
+
+func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
+	t.Parallel()
+
+	parser := cli.NewParser("darwin")
+	digest := strings.Repeat("a", 64)
+	base := []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1", "--bundle", "company@v2"}
+	tests := []struct {
+		name   string
+		argv   []string
+		issue  cli.UsageIssue
+		option string
+	}{
+		{name: "one coordinate", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "four coordinates", argv: append(slices.Clone(base), "--bundle", "team@v3", "--bundle", "extra@v4"), issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "duplicate name", argv: append(slices.Clone(base), "--bundle", "common@v3"), issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "mixed legacy bundle", argv: append(slices.Clone(base), "--bundle", "default"), issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "coordinate without Git root", argv: []string{"ai4j", "install", "--target", "claude", "--scope", "user", "--bundle", "common@v1", "--bundle", "company@v2"}, issue: cli.UsageMissingOptionValue, option: "git-root"},
+		{name: "repository", argv: append(slices.Clone(base), "--repo", "alx4j/ai4j"), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "reference", argv: append(slices.Clone(base), "--ref", "main"), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "local source", argv: append(slices.Clone(base), "--source", "."), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "dirty source", argv: append(slices.Clone(base), "--allow-dirty"), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "expected commit", argv: append(slices.Clone(base), "--expected-commit", commitOID), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "expected digest", argv: append(slices.Clone(base), "--expected-source-digest", digest), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "installation", argv: append(slices.Clone(base), "--installation", "installation-001"), issue: cli.UsageInvalidOptionValue, option: "git-root"},
+		{name: "invalid tag", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1..2", "--bundle", "company@v2"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
+	}
+	for _, test := range tests {
+		_, err := parser.Parse(test.argv)
+		var usage *cli.UsageError
+		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
+			t.Fatalf("%s: Parse(%q) = %v, want %s %s", test.name, test.argv, err, test.issue, test.option)
+		}
+	}
+
+	_, err := parser.Parse([]string{"ai4j", "sync", "installation-001", "--git-root", "git@github.com:alx4j", "--bundle", "default"})
+	var usage *cli.UsageError
+	if !errors.As(err, &usage) || usage.Issue() != cli.UsageInapplicableOption || usage.Option() != "git-root" {
+		t.Fatalf("sync --git-root = %v", err)
 	}
 }
 
@@ -535,7 +616,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 		options []option
 	}{
 		{name: "validate", command: []string{"validate"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "target", value: "claude"}, {name: "allow-dirty", boolean: true}, {name: "json", boolean: true}}},
-		{name: "install", command: []string{"install"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "installation", value: "installation-001"}, {name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "project", value: "."}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
+		{name: "install", command: []string{"install"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "source", value: "."}, {name: "git-root", value: "git@github.com:alx4j"}, {name: "installation", value: "installation-001"}, {name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "project", value: "."}, {name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "update", command: []string{"update", "installation-001"}, options: []option{{name: "repo", value: "alx4j/ai4j"}, {name: "ref", value: "main"}, {name: "allow-dirty", boolean: true}, {name: "expected-commit", value: commitOID}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "sync", command: []string{"sync", "installation-001"}, options: []option{{name: "bundle", value: "bundle-id"}, {name: "allow-dirty", boolean: true}, {name: "expected-source-digest", value: strings.Repeat("a", 64)}, {name: "conflict-policy", value: "fail"}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "list", command: []string{"list"}, options: []option{{name: "target", value: "claude"}, {name: "scope", value: "user"}, {name: "json", boolean: true}}},
@@ -559,7 +640,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 					token += "=" + candidate.value
 				}
 				duplicateIssue := cli.UsageDuplicateOption
-				if test.name == "build" && (candidate.name == "asset" || candidate.name == "bundle") || test.name == "validate" && candidate.name == "target" {
+				if (test.name == "build" || test.name == "install") && candidate.name == "bundle" || test.name == "build" && candidate.name == "asset" || test.name == "validate" && candidate.name == "target" {
 					duplicateIssue = cli.UsageInvalidOptionValue
 				}
 				assertUsageIssue(t, parser, appendCommand(test.command, token, token), duplicateIssue)
@@ -570,7 +651,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 					assertUsageIssue(t, parser, appendCommand(test.command, "--"+candidate.name+"="), cli.UsageEmptyOptionValue)
 				}
 			}
-			for _, name := range []string{"repo", "ref", "source", "expected-commit", "expected-source-digest", "yes", "json", "allow-dirty", "target", "host", "output", "all", "asset", "bundle", "examples", "scope", "project", "installation", "conflict-policy", "operation", "test-mcp", "expired", "selection", "force", "dry-run"} {
+			for _, name := range []string{"repo", "ref", "source", "git-root", "expected-commit", "expected-source-digest", "yes", "json", "allow-dirty", "target", "host", "output", "all", "asset", "bundle", "examples", "scope", "project", "installation", "conflict-policy", "operation", "test-mcp", "expired", "selection", "force", "dry-run"} {
 				if _, ok := allowed[name]; ok {
 					continue
 				}

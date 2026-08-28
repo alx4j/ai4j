@@ -161,14 +161,21 @@ type FinalState struct {
 }
 
 type PlanData struct {
-	Operation          string        `json:"operation"`
-	Source             *Source       `json:"source"`
-	InstallationID     string        `json:"installationId"`
-	Actions            []Action      `json:"actions"`
-	ActiveContent      []ContentItem `json:"activeContent"`
-	Conflicts          []Conflict    `json:"conflicts"`
-	ExpectedFinalState FinalState    `json:"expectedFinalState"`
-	UpdateDisposition  string        `json:"updateDisposition"`
+	Operation          string          `json:"operation"`
+	Source             *Source         `json:"source"`
+	Components         []PlanComponent `json:"components,omitempty"`
+	InstallationID     string          `json:"installationId"`
+	Actions            []Action        `json:"actions"`
+	ActiveContent      []ContentItem   `json:"activeContent"`
+	Conflicts          []Conflict      `json:"conflicts"`
+	ExpectedFinalState FinalState      `json:"expectedFinalState"`
+	UpdateDisposition  string          `json:"updateDisposition"`
+}
+
+type PlanComponent struct {
+	Name   string `json:"name"`
+	Tag    string `json:"tag"`
+	Source Source `json:"source"`
 }
 
 type OperationResult struct {
@@ -200,12 +207,13 @@ type HistoryData struct {
 }
 
 type Installation struct {
-	InstallationID  string         `json:"installationId"`
-	ToolkitID       string         `json:"toolkitId"`
-	NativePluginIDs []string       `json:"nativePluginIds"`
-	Source          RecordedSource `json:"source"`
-	ToolkitVersion  string         `json:"toolkitVersion"`
-	CLIVersion      string         `json:"cliVersion"`
+	InstallationID  string              `json:"installationId"`
+	ToolkitID       string              `json:"toolkitId"`
+	NativePluginIDs []string            `json:"nativePluginIds"`
+	Source          RecordedSource      `json:"source"`
+	Components      []RecordedComponent `json:"components,omitempty"`
+	ToolkitVersion  string              `json:"toolkitVersion"`
+	CLIVersion      string              `json:"cliVersion"`
 }
 
 type RecordedSource struct {
@@ -219,6 +227,16 @@ type RecordedSource struct {
 	Checkout        *string               `json:"checkout"`
 	SourceDigest    *SourceRenderedDigest `json:"sourceDigest"`
 	Dirty           bool                  `json:"dirty"`
+}
+
+type RecordedComponent struct {
+	Name            string         `json:"name"`
+	Tag             string         `json:"tag"`
+	Source          RecordedSource `json:"source"`
+	ToolkitVersion  string         `json:"toolkitVersion"`
+	ResolvedBundles []string       `json:"resolvedBundles"`
+	Packages        []string       `json:"packages"`
+	ResolvedAssets  []string       `json:"resolvedAssets"`
 }
 
 type NativeState struct {
@@ -281,20 +299,21 @@ type DoctorData struct {
 }
 
 type InstallationSummary struct {
-	InstallationID  string         `json:"installationId"`
-	ToolkitID       string         `json:"toolkitId"`
-	Target          string         `json:"target"`
-	Scope           string         `json:"scope"`
-	ScopeRoot       string         `json:"scopeRoot"`
-	Lifecycle       string         `json:"lifecycle"`
-	Source          RecordedSource `json:"source"`
-	RequestedBundle string         `json:"requestedBundle"`
-	ResolvedBundles []string       `json:"resolvedBundles"`
-	Packages        []string       `json:"packages"`
-	ResolvedAssets  []string       `json:"resolvedAssets"`
-	Health          string         `json:"health"`
-	HistoryCount    int            `json:"historyCount"`
-	LastOperationID *string        `json:"lastOperationId"`
+	InstallationID  string              `json:"installationId"`
+	ToolkitID       string              `json:"toolkitId"`
+	Target          string              `json:"target"`
+	Scope           string              `json:"scope"`
+	ScopeRoot       string              `json:"scopeRoot"`
+	Lifecycle       string              `json:"lifecycle"`
+	Source          RecordedSource      `json:"source"`
+	Components      []RecordedComponent `json:"components,omitempty"`
+	RequestedBundle string              `json:"requestedBundle"`
+	ResolvedBundles []string            `json:"resolvedBundles"`
+	Packages        []string            `json:"packages"`
+	ResolvedAssets  []string            `json:"resolvedAssets"`
+	Health          string              `json:"health"`
+	HistoryCount    int                 `json:"historyCount"`
+	LastOperationID *string             `json:"lastOperationId"`
 }
 
 type ListData struct {

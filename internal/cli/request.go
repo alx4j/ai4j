@@ -125,6 +125,23 @@ func NewBundleSelection(bundle string) (BundleSelection, error) {
 
 func (s BundleSelection) Bundle() string { return s.bundle }
 
+// BundleCoordinate identifies one named toolkit repository and the Git tag
+// that must be resolved for it.
+type BundleCoordinate struct {
+	name string
+	tag  string
+}
+
+func NewBundleCoordinate(name, tag string) (BundleCoordinate, error) {
+	if !selectionIdentifier(name) || !bundleTag(tag) {
+		return BundleCoordinate{}, fmt.Errorf("bundle coordinate is invalid")
+	}
+	return BundleCoordinate{name: name, tag: tag}, nil
+}
+
+func (c BundleCoordinate) Name() string { return c.name }
+func (c BundleCoordinate) Tag() string  { return c.tag }
+
 type ConflictPolicy string
 
 const (
@@ -145,6 +162,9 @@ type InstallRequest struct {
 	project           string
 	hasProject        bool
 	selection         BundleSelection
+	gitRoot           string
+	hasGitRoot        bool
+	coordinates       []BundleCoordinate
 	installation      domain.InstallationID
 	hasInstallation   bool
 	expectedCommit    domain.CommitOID
@@ -156,14 +176,18 @@ type InstallRequest struct {
 	output            OutputMode
 }
 
-func (InstallRequest) request()                                {}
-func (InstallRequest) Command() Command                        { return CommandInstall }
-func (r InstallRequest) OutputMode() OutputMode                { return r.output }
-func (r InstallRequest) Source() SourceOptions                 { return r.source }
-func (r InstallRequest) Target() BuildTarget                   { return r.target }
-func (r InstallRequest) Scope() Scope                          { return r.scope }
-func (r InstallRequest) Project() (string, bool)               { return r.project, r.hasProject }
-func (r InstallRequest) Selection() BundleSelection            { return r.selection }
+func (InstallRequest) request()                     {}
+func (InstallRequest) Command() Command             { return CommandInstall }
+func (r InstallRequest) OutputMode() OutputMode     { return r.output }
+func (r InstallRequest) Source() SourceOptions      { return r.source }
+func (r InstallRequest) Target() BuildTarget        { return r.target }
+func (r InstallRequest) Scope() Scope               { return r.scope }
+func (r InstallRequest) Project() (string, bool)    { return r.project, r.hasProject }
+func (r InstallRequest) Selection() BundleSelection { return r.selection }
+func (r InstallRequest) GitRoot() (string, bool)    { return r.gitRoot, r.hasGitRoot }
+func (r InstallRequest) BundleCoordinates() []BundleCoordinate {
+	return append([]BundleCoordinate(nil), r.coordinates...)
+}
 func (r InstallRequest) InstallationID() domain.InstallationID { return r.installation }
 func (r InstallRequest) HasInstallationID() bool               { return r.hasInstallation }
 func (r InstallRequest) ExpectedCommit() (domain.CommitOID, bool) {

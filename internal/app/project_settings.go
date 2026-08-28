@@ -22,10 +22,6 @@ type jsonObjectMember struct {
 }
 
 func projectMarketplaceEntry(record installstate.Record) ([]byte, error) {
-	remote, err := storedSourceRemote(record.Source)
-	if err != nil || record.Source.Commit == "" {
-		return nil, errors.New("project-shared source must be an exact Git commit")
-	}
 	entry := struct {
 		Source struct {
 			Source  string `json:"source"`
@@ -53,11 +49,19 @@ func projectMarketplaceEntry(record installstate.Record) ([]byte, error) {
 		} `json:"source"`
 	}, len(record.Packages))
 	for index, pkg := range record.Packages {
+		source, sourceErr := packageStateSource(record, pkg)
+		if sourceErr != nil || source.Commit == "" {
+			return nil, errors.New("project-shared source must be an exact Git commit")
+		}
+		remote, remoteErr := storedSourceRemote(source)
+		if remoteErr != nil {
+			return nil, errors.New("project-shared source must be an exact Git commit")
+		}
 		entry.Source.Plugins[index].Name = pkg.ID
 		entry.Source.Plugins[index].Source.Source = "git-subdir"
 		entry.Source.Plugins[index].Source.URL = remote.Endpoint()
 		entry.Source.Plugins[index].Source.Path = pkg.Path
-		entry.Source.Plugins[index].Source.SHA = record.Source.Commit
+		entry.Source.Plugins[index].Source.SHA = source.Commit
 	}
 	return json.Marshal(entry)
 }
@@ -655,20 +659,24 @@ func projectSharedOwnedEntry(record *installstate.Record) []byte {
 }
 
 func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
-	repository, err := domain.NewRepositoryIdentity(record.Source.Repository)
-	if err != nil {
-		return nil, err
-	}
-	commit, err := domain.NewCommitOID(record.Source.Commit)
-	if err != nil {
-		return nil, err
-	}
-	transport, err := storedSourceTransport(record.Source)
-	if err != nil {
-		return nil, err
-	}
 	packages := make([]catalog.Package, len(record.Packages))
 	for index, pkg := range record.Packages {
+		source, err := packageStateSource(record, pkg)
+		if err != nil {
+			return nil, err
+		}
+		repository, err := domain.NewRepositoryIdentity(source.Repository)
+		if err != nil {
+			return nil, err
+		}
+		commit, err := domain.NewCommitOID(source.Commit)
+		if err != nil {
+			return nil, err
+		}
+		transport, err := storedSourceTransport(source)
+		if err != nil {
+			return nil, err
+		}
 		packages[index] = catalog.Package{ID: pkg.ID, Path: pkg.Path, Description: "AI4J toolkit package " + pkg.ID, Repository: repository, Transport: transport, Commit: commit}
 	}
 	document, err := catalog.RenderPackages(record.MarketplaceID, packages)
@@ -676,6 +684,18 @@ func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
 		return nil, err
 	}
 	return document.Bytes(), nil
+}
+
+func packageStateSource(record installstate.Record, pkg installstate.NativePackage) (installstate.Source, error) {
+	if len(record.Components) == 0 {
+		return record.Source, nil
+	}
+	for _, component := range record.Components {
+		if component.Name == pkg.Component {
+			return component.Source, nil
+		}
+	}
+	return installstate.Source{}, errors.New("package component source is unavailable")
 }
 
 func projectSharedNativeCatalogFile(record installstate.Record) (installstate.OwnedFile, error) {

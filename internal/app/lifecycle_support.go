@@ -165,7 +165,7 @@ func selectionFromRecord(record installstate.Record) cli.BundleSelection {
 }
 
 func recordedLifecycleSelection(record installstate.Record) validation.LifecycleSelection {
-	return validation.LifecycleSelection{
+	report := validation.LifecycleSelection{
 		ToolkitID:        record.ToolkitID,
 		DeclarationID:    record.DeclarationID,
 		ToolkitVersion:   record.ToolkitVersion,
@@ -174,6 +174,14 @@ func recordedLifecycleSelection(record installstate.Record) validation.Lifecycle
 		ResolvedPackages: packageIDs(record.Packages),
 		ResolvedAssets:   slices.Clone(record.Selection.ResolvedAssets),
 	}
+	for _, component := range record.Components {
+		report.Components = append(report.Components, validation.LifecycleComponent{
+			Name: component.Name, Tag: component.Tag, ToolkitVersion: component.ToolkitVersion,
+			RequestedBundle: component.Selection.RequestedBundle, ResolvedBundles: slices.Clone(component.Selection.ResolvedBundles),
+			ResolvedPackages: slices.Clone(component.Packages), ResolvedAssets: slices.Clone(component.Selection.ResolvedAssets),
+		})
+	}
+	return report
 }
 
 func rollbackUnavailableWarning() result.Warning {
@@ -273,6 +281,16 @@ func cloneRecord(record installstate.Record) installstate.Record {
 	record.Selection.ResolvedBundles = slices.Clone(record.Selection.ResolvedBundles)
 	record.Selection.ResolvedAssets = slices.Clone(record.Selection.ResolvedAssets)
 	record.Packages = slices.Clone(record.Packages)
+	record.Components = slices.Clone(record.Components)
+	for index := range record.Components {
+		record.Components[index].Selection.ResolvedBundles = slices.Clone(record.Components[index].Selection.ResolvedBundles)
+		record.Components[index].Selection.ResolvedAssets = slices.Clone(record.Components[index].Selection.ResolvedAssets)
+		record.Components[index].Packages = slices.Clone(record.Components[index].Packages)
+		if record.Components[index].Source.RequestedRef != nil {
+			value := *record.Components[index].Source.RequestedRef
+			record.Components[index].Source.RequestedRef = &value
+		}
+	}
 	record.NativeResources = slices.Clone(record.NativeResources)
 	record.History = slices.Clone(record.History)
 	if record.Source.RequestedRef != nil {
@@ -302,6 +320,14 @@ func sameCurrentState(current, expected installstate.Record) bool {
 }
 
 func recordSourceRevision(record installstate.Record) string {
+	if len(record.Components) != 0 {
+		parts := []string{"composition-source-revision"}
+		for _, component := range record.Components {
+			parts = append(parts, component.Name, component.Tag, component.Source.Repository, component.Source.Transport, component.Source.Commit, component.Source.RenderedDigest)
+		}
+		digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+		return hex.EncodeToString(digest[:])
+	}
 	if record.Source.Mode == "development_source" {
 		return record.Source.SourceDigest
 	}

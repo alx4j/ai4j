@@ -26,6 +26,7 @@ type ErrorCode string
 
 const (
 	ErrorInvalidRepository ErrorCode = "invalid_repository"
+	ErrorInvalidRoot       ErrorCode = "invalid_git_root"
 	ErrorInvalidReference  ErrorCode = "invalid_reference"
 	ErrorInvalidSelection  ErrorCode = "invalid_source_selection"
 	ErrorAccessFailed      ErrorCode = "source_access_failed"
@@ -39,6 +40,8 @@ func (e SelectionError) Error() string {
 	switch e.code {
 	case ErrorInvalidRepository:
 		return "Git repository is not in a supported canonical form"
+	case ErrorInvalidRoot:
+		return "Git root is not in a supported canonical form"
 	case ErrorInvalidReference:
 		return "Git reference is not a safe explicit value"
 	case ErrorInvalidSelection:

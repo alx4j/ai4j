@@ -18,6 +18,7 @@ import (
 	"github.com/alx4j/ai4j/internal/diskcapacity"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/host/privatepath"
+	gitsource "github.com/alx4j/ai4j/internal/source/git"
 )
 
 const (
@@ -56,9 +57,19 @@ type Selection struct {
 	ResolvedAssets  []string `json:"resolvedAssets"`
 }
 
+type Component struct {
+	Name           string    `json:"name"`
+	Tag            string    `json:"tag"`
+	Source         Source    `json:"source"`
+	ToolkitVersion string    `json:"toolkitVersion"`
+	Selection      Selection `json:"selection"`
+	Packages       []string  `json:"packages"`
+}
+
 type NativePackage struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Component string `json:"component,omitempty"`
 }
 
 type OwnedFile struct {
@@ -78,6 +89,7 @@ type Record struct {
 	DeclarationID   string          `json:"declarationId,omitempty"`
 	SettingsCreated bool            `json:"settingsCreated,omitempty"`
 	ToolkitVersion  string          `json:"toolkitVersion,omitempty"`
+	Components      []Component     `json:"components,omitempty"`
 	Packages        []NativePackage `json:"packages"`
 	MarketplaceID   string          `json:"marketplaceId,omitempty"`
 	Source          Source          `json:"source"`
@@ -108,7 +120,8 @@ func (r Record) Validate() error {
 	if _, err := domain.NewInstallationID(r.InstallationID); err != nil {
 		return ErrMalformedState
 	}
-	if !validStateSource(r.Source) {
+	composition := len(r.Components) != 0
+	if composition && !validComposition(r) || !composition && (!validStateSource(r.Source) || !validLegacyPackageOwnership(r.Packages)) {
 		return ErrMalformedState
 	}
 	if _, err := domain.NewOperationID(r.LastOperation.ID); err != nil {
@@ -154,6 +167,78 @@ func validStoredSelection(selection Selection) bool {
 	return identifierPattern.MatchString(selection.RequestedBundle) && len(selection.ResolvedBundles) != 0 &&
 		slices.Contains(selection.ResolvedBundles, selection.RequestedBundle) &&
 		validIdentifiers(selection.ResolvedBundles) && validIdentifiers(selection.ResolvedAssets)
+}
+
+func validComposition(record Record) bool {
+	if record.ToolkitID != "composition" || record.Source != (Source{}) || record.Selection.RequestedBundle != "composition" ||
+		!slices.Equal(record.Selection.ResolvedBundles, []string{"composition"}) || len(record.Components) < 2 || len(record.Components) > 3 {
+		return false
+	}
+	packageOwners := make(map[string]string, len(record.Packages))
+	assetIDs := make(map[string]struct{}, len(record.Selection.ResolvedAssets))
+	compositionRoot := ""
+	compositionTransport := ""
+	for index, component := range record.Components {
+		if !validComponent(component) || index > 0 && record.Components[index-1].Name >= component.Name {
+			return false
+		}
+		root := path.Dir(component.Source.Repository)
+		if index == 0 {
+			compositionRoot = root
+			compositionTransport = component.Source.Transport
+		} else if root != compositionRoot || component.Source.Transport != compositionTransport {
+			return false
+		}
+		for _, packageID := range component.Packages {
+			if _, exists := packageOwners[packageID]; exists {
+				return false
+			}
+			packageOwners[packageID] = component.Name
+		}
+		for _, assetID := range component.Selection.ResolvedAssets {
+			if _, exists := assetIDs[assetID]; exists {
+				return false
+			}
+			assetIDs[assetID] = struct{}{}
+		}
+	}
+	if len(packageOwners) != len(record.Packages) || len(assetIDs) != len(record.Selection.ResolvedAssets) {
+		return false
+	}
+	for _, unit := range record.Packages {
+		if owner, exists := packageOwners[unit.ID]; !exists || unit.Component != owner {
+			return false
+		}
+	}
+	for _, assetID := range record.Selection.ResolvedAssets {
+		if _, exists := assetIDs[assetID]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func validComponent(component Component) bool {
+	if !identifierPattern.MatchString(component.Name) || component.ToolkitVersion == "" || len(component.ToolkitVersion) > 64 ||
+		strings.ContainsAny(component.ToolkitVersion, "\x00\r\n") || !validStoredSelection(component.Selection) ||
+		component.Selection.RequestedBundle != component.Name || !validIdentifiers(component.Packages) ||
+		component.Source.Mode != "git" || component.Source.Selection != domain.ExplicitSource().String() ||
+		component.Source.RefKind != "tag" || component.Source.RequestedRef == nil ||
+		*component.Source.RequestedRef != "refs/tags/"+component.Tag || !digestPattern.MatchString(component.Source.RenderedDigest) ||
+		path.Base(component.Source.Repository) != component.Name || !validStateSource(component.Source) {
+		return false
+	}
+	_, err := gitsource.NewResolvedReference(gitsource.ResolvedTag, component.Tag)
+	return err == nil
+}
+
+func validLegacyPackageOwnership(packages []NativePackage) bool {
+	for _, unit := range packages {
+		if unit.Component != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func validStateSource(source Source) bool {
@@ -309,7 +394,7 @@ func (s Store) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{SchemaVersion: SchemaVersion, Installations: slices.Clone(document.Installations)}, nil
+	return Snapshot{SchemaVersion: SchemaVersion, Installations: cloneRecords(document.Installations)}, nil
 }
 
 func (s Store) LoadAll() ([]Record, error) {
@@ -317,7 +402,7 @@ func (s Store) LoadAll() ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return slices.Clone(snapshot.Installations), nil
+	return cloneRecords(snapshot.Installations), nil
 }
 
 func (s Store) LoadByID(id string) (Record, bool, error) {
@@ -348,6 +433,7 @@ func (s Store) Load() (Record, bool, error) {
 }
 
 func (s Store) Save(record Record) error {
+	record = cloneRecord(record)
 	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
@@ -373,6 +459,7 @@ func (s Store) Save(record Record) error {
 }
 
 func (s Store) SaveNew(record Record) error {
+	record = cloneRecord(record)
 	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
@@ -390,6 +477,7 @@ func (s Store) SaveNew(record Record) error {
 }
 
 func (s Store) Delete(record Record) error {
+	record = cloneRecord(record)
 	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
@@ -431,7 +519,7 @@ func (s Store) recordsForWrite() ([]Record, stateExpectation, error) {
 	if err != nil {
 		return nil, stateExpectation{}, err
 	}
-	return slices.Clone(snapshot.Installations), stateExpectation{contents: expectedContents, present: expectedPresent}, nil
+	return cloneRecords(snapshot.Installations), stateExpectation{contents: expectedContents, present: expectedPresent}, nil
 }
 
 func (s Store) readState() ([]byte, bool, error) {
@@ -478,12 +566,53 @@ func normalizeRecord(record *Record) error {
 	}
 	slices.Sort(record.Selection.ResolvedBundles)
 	slices.Sort(record.Selection.ResolvedAssets)
+	for index := range record.Components {
+		slices.Sort(record.Components[index].Selection.ResolvedBundles)
+		slices.Sort(record.Components[index].Selection.ResolvedAssets)
+		slices.Sort(record.Components[index].Packages)
+	}
+	slices.SortFunc(record.Components, func(left, right Component) int {
+		return strings.Compare(left.Name, right.Name)
+	})
 	slices.SortFunc(record.Packages, func(left, right NativePackage) int {
 		return strings.Compare(left.ID, right.ID)
 	})
 	slices.Sort(record.NativeResources)
 	slices.Sort(record.History)
 	return record.Validate()
+}
+
+func cloneRecords(records []Record) []Record {
+	cloned := make([]Record, len(records))
+	for index, record := range records {
+		cloned[index] = cloneRecord(record)
+	}
+	return cloned
+}
+
+func cloneRecord(record Record) Record {
+	record.Source = cloneSource(record.Source)
+	record.Selection.ResolvedBundles = slices.Clone(record.Selection.ResolvedBundles)
+	record.Selection.ResolvedAssets = slices.Clone(record.Selection.ResolvedAssets)
+	record.Components = slices.Clone(record.Components)
+	for index := range record.Components {
+		record.Components[index].Source = cloneSource(record.Components[index].Source)
+		record.Components[index].Selection.ResolvedBundles = slices.Clone(record.Components[index].Selection.ResolvedBundles)
+		record.Components[index].Selection.ResolvedAssets = slices.Clone(record.Components[index].Selection.ResolvedAssets)
+		record.Components[index].Packages = slices.Clone(record.Components[index].Packages)
+	}
+	record.Packages = slices.Clone(record.Packages)
+	record.NativeResources = slices.Clone(record.NativeResources)
+	record.History = slices.Clone(record.History)
+	return record
+}
+
+func cloneSource(source Source) Source {
+	if source.RequestedRef != nil {
+		requestedRef := *source.RequestedRef
+		source.RequestedRef = &requestedRef
+	}
+	return source
 }
 
 func sameLogicalIdentity(left, right Record) bool {

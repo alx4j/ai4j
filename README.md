@@ -302,6 +302,61 @@ sources cannot use the `project-shared` scope. For a project installation, use
 the `project-shared` scope writes the toolkit declaration to the project's
 Claude settings.
 
+## Compose toolkits from several repositories
+
+AI4J can install two or three toolkit bundles as one Claude installation. Pass
+their shared Git namespace with `--git-root`, then repeat `--bundle` once for
+each `NAME@TAG` coordinate:
+
+```sh
+ai4j install \
+  --git-root git@github.com:my-company \
+  --bundle common@v1.4.0 \
+  --bundle everpure@v2.1.0 \
+  --bundle team@v1.0.0 \
+  --target claude --scope user
+```
+
+For each coordinate, AI4J derives the repository as `<GIT_ROOT>/<NAME>.git`.
+The example reads `common`, `everpure`, and `team` from
+`git@github.com:my-company/common.git`,
+`git@github.com:my-company/everpure.git`, and
+`git@github.com:my-company/team.git`. Each repository must use `NAME` as both
+its toolkit ID and the selected top-level bundle ID.
+
+`--git-root` accepts the same credential-free HTTPS and SSH forms as other
+remote sources. HTTPS uses your system Git credential helper; SSH uses your SSH
+configuration, keys, agent, and `known_hosts`. AI4J does not accept or store
+credentials.
+
+Each `TAG` is resolved through `refs/tags/<TAG>` and pinned to its exact commit.
+AI4J resolves and validates every component before showing one combined plan
+and asking for confirmation. The composition is then managed as one
+installation, with the normal rollback and recovery protections. Use
+`--dry-run` to inspect the complete plan without applying it.
+
+Components do not override one another. AI4J stops before confirmation if two
+components select the same package or asset ID, or if they would own the same
+managed output.
+
+To change tags, the Git root, or the optional team component, rerun the complete
+`install` command with the desired two or three coordinates. Do not omit a
+component that should remain installed; partial composition commands are not
+supported.
+
+Use the installation ID returned by `install` with the lifecycle commands:
+
+```sh
+ai4j status <INSTALLATION_ID>
+ai4j sync <INSTALLATION_ID> --bundle composition
+ai4j update <INSTALLATION_ID>
+ai4j uninstall <INSTALLATION_ID>
+```
+
+`status` checks the complete installation. `sync` reapplies the recorded
+composition, and `update` verifies the pinned tags without selecting newer
+tags. `uninstall` removes the complete composition.
+
 ## Update or remove AI4J
 
 Removing the AI4J executable does not remove a Claude toolkit. If you want to
