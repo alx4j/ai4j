@@ -16,7 +16,24 @@ on:
       - .claude-plugin/**
       - go.mod
       - go.sum
+  pull_request:
+    paths:
+      - .github/workflows/claude-macos-qualification.yml
+      - cmd/**
+      - internal/**
+      - schemas/**
+      - plugins/**
+      - scripts/qualify-claude-macos.sh
+      - toolkit/**
+      - toolkit.json
+      - .claude-plugin/**
+      - go.mod
+      - go.sum
   workflow_dispatch:
+
+concurrency:
+  group: claude-macos-qualification-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -30,6 +47,7 @@ env:
 jobs:
   qualify:
     name: Claude on macOS ARM64
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -38,6 +56,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install the pinned Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -61,8 +80,8 @@ jobs:
       - name: Run the live Claude lifecycle
         shell: bash
         env:
-          AI4J_QUALIFICATION_REF: ${{ github.sha }}
-          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.ref_name }}
+          AI4J_QUALIFICATION_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.ref_name }}
           AI4J_QUALIFICATION_EVIDENCE: ${{ runner.temp }}/ai4j-qualification-evidence
           AI4J_QUALIFICATION_GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/qualify-claude-macos.sh

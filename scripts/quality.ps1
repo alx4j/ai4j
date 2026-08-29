@@ -31,7 +31,7 @@ Invoke-Checked -Arguments @('mod', 'verify')
 Invoke-Checked -Arguments @('list', '-m', '-mod=readonly', 'all')
 Invoke-Checked -Arguments @('test', '-mod=readonly', './...')
 Invoke-Checked -Arguments @('vet', '-mod=readonly', './...')
-Invoke-Checked -Arguments @('run', '-mod=readonly', './internal/repocheck/cmd/repocheck', 'authorship', '--range', 'HEAD')
+Invoke-Checked -Arguments @('run', '-mod=readonly', './internal/repocheck/cmd/repocheck', 'authorship', '--range', 'HEAD', '--allow-github-committer')
 
 & git diff --exit-code -- .
 if ($LASTEXITCODE -ne 0) { throw 'Quality checks modified tracked files.' }

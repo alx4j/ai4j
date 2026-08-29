@@ -69,6 +69,7 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             commit_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+            authorship_options=()
           else
             before="${{ github.event.before }}"
             if [[ "$before" =~ ^0+$ ]]; then
@@ -76,8 +77,9 @@ jobs:
             else
               commit_range="$before..${{ github.sha }}"
             fi
+            authorship_options=(--allow-github-committer)
           fi
-          go run -mod=readonly ./internal/repocheck/cmd/repocheck authorship --range "$commit_range"
+          go run -mod=readonly ./internal/repocheck/cmd/repocheck authorship --range "$commit_range" "${authorship_options[@]}"
 
       - name: Build the release profile
         shell: bash
