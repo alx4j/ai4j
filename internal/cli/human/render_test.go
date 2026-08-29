@@ -98,7 +98,7 @@ func TestRenderLifecycleUsageRequiresOneBundle(t *testing.T) {
 		command cli.Command
 		usage   string
 	}{
-		{cli.CommandInstall, "Usage: ai4j install [source options] --target claude --scope <SCOPE> --bundle <ID>\n"},
+		{cli.CommandInstall, "Usage: ai4j install --target claude --scope <SCOPE> ([source options] --bundle <ID> | --git-root <ROOT> --bundle <NAME@TAG> --bundle <NAME@TAG> [--bundle <NAME@TAG>])\n"},
 		{cli.CommandSync, "Usage: ai4j sync <INSTALLATION_ID> --bundle <ID> [options]\n"},
 	}
 	for _, test := range tests {
@@ -170,6 +170,63 @@ func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
 		}
 		if name == "status" && !strings.Contains(output.String(), "Claude plugins: ai4j-review, ai4j-tools") {
 			t.Fatalf("Render(status) = %q", output.String())
+		}
+	}
+}
+
+func TestRenderDisclosesCompositionProvenanceForListAndStatus(t *testing.T) {
+	t.Parallel()
+
+	id, _ := domain.NewInstallationID("installation_composed")
+	components := testRecordedComponents(t)
+	installation, err := cli.NewComposedInstallation(id, []string{"common-tools", "everpure-tools"}, components, "1.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := cli.NewDetailedCompositionSummary(
+		id, cli.BuildTargetClaude, cli.ScopeUser, t.TempDir(), "active", components,
+		[]string{"common-tools", "everpure-tools"}, []string{"code-review", "purelogin"}, "healthy", 0, domain.OperationID{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
+	status, err := cli.NewDetailedStatusData(&installation, &summary, native, nil, recovery, result.UpdateNotChecked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := cli.NewListData([]cli.InstallationSummary{summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	statusResponse, _ := cli.NewResponse(cli.CommandStatus, successResult(t, result.UpdateNotChecked), nil, status)
+	listResponse, _ := cli.NewResponse(cli.CommandList, successResult(t, result.UpdateNotChecked), nil, list)
+	for name, response := range map[string]cli.Response{"status": statusResponse, "list": listResponse} {
+		var output bytes.Buffer
+		if _, err := human.Render(&output, response); err != nil {
+			t.Fatalf("Render(%s) error = %v", name, err)
+		}
+		for _, want := range []string{
+			"Composition (2 components)",
+			"common@v1.3.0",
+			"Repository: git.example.com/platform/common",
+			"Exact commit: " + strings.Repeat("a", 40),
+			"Toolkit version: 1.3.0",
+			"Resolved bundles: common, shared",
+			"everpure@v0.6.0",
+			"Repository: git.example.com/platform/everpure",
+			"Exact commit: " + strings.Repeat("b", 40),
+			"Toolkit version: 0.6.0",
+			"Resolved assets: purelogin",
+		} {
+			if !strings.Contains(output.String(), want) {
+				t.Fatalf("Render(%s) = %q, want %q", name, output.String(), want)
+			}
+		}
+		if strings.Contains(output.String(), "Requested bundle: composition") {
+			t.Fatalf("Render(%s) exposed the internal aggregate selection: %q", name, output.String())
 		}
 	}
 }
@@ -466,6 +523,38 @@ func testSource(t *testing.T) cli.Source {
 		t.Fatalf("NewSource() error = %v", err)
 	}
 	return source
+}
+
+func testRecordedComponents(t *testing.T) []cli.RecordedComponent {
+	t.Helper()
+
+	values := []struct {
+		name, tag, repository, commit, version string
+		bundles, packages, assets              []string
+	}{
+		{"common", "v1.3.0", "https://git.example.com/platform/common.git", strings.Repeat("a", 40), "1.3.0", []string{"common", "shared"}, []string{"common-tools"}, []string{"code-review"}},
+		{"everpure", "v0.6.0", "https://git.example.com/platform/everpure.git", strings.Repeat("b", 40), "0.6.0", []string{"everpure"}, []string{"everpure-tools"}, []string{"purelogin"}},
+	}
+	components := make([]cli.RecordedComponent, len(values))
+	for index, value := range values {
+		parsed, err := gitremote.ParseRepository(value.repository)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit, err := domain.NewCommitOID(value.commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := cli.NewRecordedSource(domain.ExplicitSource(), parsed.Identity(), parsed.Transport(), "refs/tags/"+value.tag, true, cli.RefTag, commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		components[index], err = cli.NewRecordedComponent(value.name, value.tag, source, value.version, value.bundles, value.packages, value.assets)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return components
 }
 
 func successResult(t *testing.T, disposition result.UpdateDisposition) result.Result {

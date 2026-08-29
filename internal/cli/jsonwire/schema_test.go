@@ -91,6 +91,9 @@ func TestListResponseValidatesAgainstPublishedSchema(t *testing.T) {
 			t.Fatalf("obsolete %s was emitted: %#v", obsolete, item)
 		}
 	}
+	if _, present := item["components"]; present {
+		t.Fatalf("legacy installation summary emitted composition components: %#v", item)
+	}
 	delete(item, "requestedBundle")
 	if err := schema.Validate(document); err == nil {
 		t.Fatal("response without requestedBundle was accepted")
@@ -134,6 +137,97 @@ func TestStatusResponseUsesSortedPluralNativePluginIDs(t *testing.T) {
 	}
 	if _, present := record["nativePluginId"]; present {
 		t.Fatalf("obsolete nativePluginId was emitted: %#v", record)
+	}
+	if _, present := record["components"]; present {
+		t.Fatalf("legacy installation emitted composition components: %#v", record)
+	}
+}
+
+func TestCompositionComponentsValidateAndMarshalForListAndStatus(t *testing.T) {
+	t.Parallel()
+
+	id, _ := domain.NewInstallationID("installation_composed")
+	components := testRecordedComponents(t)
+	installation, err := cli.NewComposedInstallation(id, []string{"common-tools", "everpure-tools"}, components, "1.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := cli.NewDetailedCompositionSummary(
+		id, cli.BuildTargetClaude, cli.ScopeUser, t.TempDir(), "active", components,
+		[]string{"common-tools", "everpure-tools"}, []string{"code-review", "purelogin"}, "healthy", 0, domain.OperationID{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
+	status, err := cli.NewDetailedStatusData(&installation, &summary, native, nil, recovery, result.UpdateNotChecked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := cli.NewListData([]cli.InstallationSummary{summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusResponse, _ := cli.NewResponse(cli.CommandStatus, successResult(t), nil, status)
+	listResponse, _ := cli.NewResponse(cli.CommandList, successResult(t), nil, list)
+
+	for name, fixture := range map[string]struct {
+		response         cli.Response
+		schema           string
+		selectComponents func(map[string]any) []any
+	}{
+		"status": {statusResponse, "status.json", func(document map[string]any) []any {
+			return document["data"].(map[string]any)["installation"].(map[string]any)["components"].([]any)
+		}},
+		"list": {listResponse, "list.json", func(document map[string]any) []any {
+			return document["data"].(map[string]any)["installations"].([]any)[0].(map[string]any)["components"].([]any)
+		}},
+	} {
+		encoded, err := jsonwire.Marshal(fixture.response)
+		if err != nil {
+			t.Fatalf("Marshal(%s) error = %v", name, err)
+		}
+		schema := compileSchemas(t)[fixture.schema]
+		validateJSON(t, schema, encoded)
+		document := decodeDocument(t, encoded)
+		wireComponents := fixture.selectComponents(document)
+		if len(wireComponents) != 2 {
+			t.Fatalf("%s components = %#v", name, wireComponents)
+		}
+		first := wireComponents[0].(map[string]any)
+		want := map[string]any{
+			"name":            "common",
+			"tag":             "v1.3.0",
+			"toolkitVersion":  "1.3.0",
+			"resolvedBundles": []any{"common", "shared"},
+			"packages":        []any{"common-tools"},
+			"resolvedAssets":  []any{"code-review"},
+		}
+		for field, expected := range want {
+			if got := first[field]; !reflect.DeepEqual(got, expected) {
+				t.Fatalf("%s first component %s = %#v, want %#v", name, field, got, expected)
+			}
+		}
+		source := first["source"].(map[string]any)
+		if source["repository"] != "git.example.com/platform/common" || source["transport"] != "https" || source["requestedRef"] != "refs/tags/v1.3.0" || source["resolvedRefKind"] != "tag" {
+			t.Fatalf("%s first component source = %#v", name, source)
+		}
+		second := wireComponents[1].(map[string]any)
+		packages, assets := second["packages"], second["resolvedAssets"]
+		second["packages"] = []any{}
+		if err := schema.Validate(document); err != nil {
+			t.Fatalf("%s rules-only component was rejected: %v", name, err)
+		}
+		second["resolvedAssets"] = []any{}
+		if err := schema.Validate(document); err == nil {
+			t.Fatalf("%s empty component selection was accepted", name)
+		}
+		second["packages"], second["resolvedAssets"] = packages, assets
+		delete(first, "toolkitVersion")
+		if err := schema.Validate(document); err == nil {
+			t.Fatalf("%s component without toolkitVersion was accepted", name)
+		}
 	}
 }
 
@@ -1207,6 +1301,38 @@ func testRecordedSource(t *testing.T) cli.RecordedSource {
 		t.Fatalf("NewRecordedSource() error = %v", err)
 	}
 	return value
+}
+
+func testRecordedComponents(t *testing.T) []cli.RecordedComponent {
+	t.Helper()
+
+	values := []struct {
+		name, tag, repository, commit, version string
+		bundles, packages, assets              []string
+	}{
+		{"common", "v1.3.0", "https://git.example.com/platform/common.git", strings.Repeat("a", 40), "1.3.0", []string{"common", "shared"}, []string{"common-tools"}, []string{"code-review"}},
+		{"everpure", "v0.6.0", "git@git.example.com:platform/everpure.git", strings.Repeat("b", 40), "0.6.0", []string{"everpure"}, []string{"everpure-tools"}, []string{"purelogin"}},
+	}
+	components := make([]cli.RecordedComponent, len(values))
+	for index, value := range values {
+		parsed, err := gitremote.ParseRepository(value.repository)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commit, err := domain.NewCommitOID(value.commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source, err := cli.NewRecordedSource(domain.ExplicitSource(), parsed.Identity(), parsed.Transport(), "refs/tags/"+value.tag, true, cli.RefTag, commit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		components[index], err = cli.NewRecordedComponent(value.name, value.tag, source, value.version, value.bundles, value.packages, value.assets)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return components
 }
 
 func testSourceWithReference(t *testing.T, reference string, kind gitsource.ResolvedReferenceKind, resolvedName string, tracking gitsource.TrackingPolicy) cli.Source {

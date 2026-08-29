@@ -5,6 +5,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/fault"
@@ -36,11 +37,14 @@ type parsedOptions struct {
 	hasScope          bool
 	project           string
 	hasProject        bool
+	gitRoot           string
+	hasGitRoot        bool
 	host              BuildHost
 	output            string
 	all               bool
 	assets            []string
 	bundles           []string
+	coordinates       []BundleCoordinate
 	examples          bool
 	conflictPolicy    string
 	hasConflictPolicy bool
@@ -62,7 +66,7 @@ var commandOptions = map[Command]map[string]optionKind{
 	CommandInit:         {"target": valueOption, "output": valueOption, "examples": booleanOption, "json": booleanOption},
 	CommandValidate:     {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
 	CommandBuild:        {"repo": valueOption, "ref": valueOption, "source": valueOption, "target": valueOption, "host": valueOption, "output": valueOption, "all": booleanOption, "asset": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "json": booleanOption},
-	CommandInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
+	CommandInstall:      {"repo": valueOption, "ref": valueOption, "source": valueOption, "git-root": valueOption, "installation": valueOption, "target": valueOption, "scope": valueOption, "project": valueOption, "bundle": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandUpdate:       {"repo": valueOption, "ref": valueOption, "allow-dirty": booleanOption, "expected-commit": valueOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandSync:         {"bundle": valueOption, "allow-dirty": booleanOption, "expected-source-digest": valueOption, "conflict-policy": valueOption, "dry-run": booleanOption, "yes": booleanOption, "json": booleanOption},
 	CommandList:         {"target": valueOption, "scope": valueOption, "json": booleanOption},
@@ -76,7 +80,7 @@ var commandOptions = map[Command]map[string]optionKind{
 }
 
 var knownOptions = map[string]struct{}{
-	"repo": {}, "ref": {}, "source": {}, "expected-commit": {}, "expected-source-digest": {}, "yes": {}, "json": {}, "allow-dirty": {},
+	"repo": {}, "ref": {}, "source": {}, "git-root": {}, "expected-commit": {}, "expected-source-digest": {}, "yes": {}, "json": {}, "allow-dirty": {},
 	"target": {}, "host": {}, "output": {}, "all": {}, "asset": {}, "bundle": {}, "examples": {}, "scope": {}, "project": {}, "installation": {}, "conflict-policy": {}, "operation": {}, "test-mcp": {}, "expired": {}, "selection": {}, "force": {}, "dry-run": {},
 }
 
@@ -155,7 +159,7 @@ func (p Parser) Parse(argv []string) (Request, error) {
 		}
 		return BuildRequest{source: source, target: options.targets[0], host: options.host, output: options.output, all: options.all, assets: append([]string(nil), options.assets...), bundles: append([]string(nil), options.bundles...), mode: output}, nil
 	case CommandInstall:
-		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: bundleSelection(options), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
+		return InstallRequest{source: source, target: firstTarget(options.targets), scope: options.scope, project: options.project, hasProject: options.hasProject, selection: bundleSelection(options), gitRoot: options.gitRoot, hasGitRoot: options.hasGitRoot, coordinates: append([]BundleCoordinate(nil), options.coordinates...), installation: options.installation, hasInstallation: options.hasInstallation, expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandUpdate:
 		return UpdateRequest{installation: options.installation, source: source, policy: conflictPolicy(options), expectedCommit: options.expectedCommit, hasExpected: options.hasExpected, expectedDigest: options.expectedDigest, hasExpectedDigest: options.hasExpectedDigest, dryRun: options.dryRun, yes: options.yes, output: output}, nil
 	case CommandSync:
@@ -271,7 +275,7 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 			}
 			return parsedOptions{}, newUsageError(issue, command, safeOption, jsonRequested, "cli.option", fault.ReasonUnknownValue, nil)
 		}
-		repeatable := command == CommandBuild && (name == "asset" || name == "bundle") || (command == CommandInit || command == CommandValidate) && name == "target"
+		repeatable := command == CommandBuild && (name == "asset" || name == "bundle") || command == CommandInstall && name == "bundle" || (command == CommandInit || command == CommandValidate) && name == "target"
 		if _, duplicate := seen[name]; duplicate && !repeatable {
 			return parsedOptions{}, newUsageError(UsageDuplicateOption, command, name, jsonRequested, "cli.option", fault.ReasonInvalidFormat, nil)
 		}
@@ -296,7 +300,7 @@ func parseOptions(command Command, arguments []string, jsonRequested bool) (pars
 		if value == "" {
 			return parsedOptions{}, newUsageError(UsageEmptyOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 		}
-		if err := setValue(&result, name, value); err != nil {
+		if err := setValue(command, &result, name, value); err != nil {
 			return parsedOptions{}, newUsageError(UsageInvalidOptionValue, command, name, jsonRequested, "cli.option_value", fault.ReasonInvalidFormat, err)
 		}
 	}
@@ -322,7 +326,7 @@ func setBoolean(options *parsedOptions, name string) {
 	}
 }
 
-func setValue(options *parsedOptions, name, value string) error {
+func setValue(command Command, options *parsedOptions, name, value string) error {
 	switch name {
 	case "repo":
 		options.repository = value
@@ -336,6 +340,12 @@ func setValue(options *parsedOptions, name, value string) error {
 		}
 		options.sourcePath = value
 		options.hasSource = true
+	case "git-root":
+		if len(value) > 4096 || strings.ContainsRune(value, 0) || strings.TrimSpace(value) != value {
+			return fmt.Errorf("Git root is invalid")
+		}
+		options.gitRoot = value
+		options.hasGitRoot = true
 	case "expected-commit":
 		commit, err := domain.NewCommitOID(value)
 		if err != nil {
@@ -419,6 +429,19 @@ func setValue(options *parsedOptions, name, value string) error {
 		}
 		options.assets = append(options.assets, value)
 	case "bundle":
+		if command == CommandInstall {
+			coordinate, coordinateSyntax, err := parseBundleCoordinate(value)
+			if err != nil {
+				return err
+			}
+			if coordinateSyntax {
+				if slices.Contains(options.coordinates, coordinate) {
+					return fmt.Errorf("bundle coordinate is duplicated")
+				}
+				options.coordinates = append(options.coordinates, coordinate)
+				return nil
+			}
+		}
 		if !selectionIdentifier(value) || slices.Contains(options.bundles, value) {
 			return fmt.Errorf("bundle identifier is invalid or duplicated")
 		}
@@ -427,6 +450,18 @@ func setValue(options *parsedOptions, name, value string) error {
 		return fmt.Errorf("unhandled value option")
 	}
 	return nil
+}
+
+func parseBundleCoordinate(value string) (BundleCoordinate, bool, error) {
+	name, tag, coordinateSyntax := strings.Cut(value, "@")
+	if !coordinateSyntax {
+		return BundleCoordinate{}, false, nil
+	}
+	coordinate, err := NewBundleCoordinate(name, tag)
+	if err != nil {
+		return BundleCoordinate{}, true, err
+	}
+	return coordinate, true, nil
 }
 
 func firstTarget(values []BuildTarget) BuildTarget {
@@ -467,6 +502,10 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	missing := func(option string) error {
 		return newUsageError(UsageMissingOptionValue, command, option, jsonRequested, "cli.option_value", fault.ReasonEmpty, nil)
 	}
+	if command == CommandInstall && options.hasGitRoot &&
+		(options.hasRepository || options.hasReference || options.hasSource || options.allowDirty || options.hasExpected || options.hasExpectedDigest || options.hasInstallation) {
+		return invalid("git-root")
+	}
 	if options.hasSource && (options.hasRepository || options.hasReference) {
 		return invalid("source")
 	}
@@ -494,7 +533,7 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 	if options.hasProject && (!options.hasScope || options.scope == ScopeUser) {
 		return invalid("project")
 	}
-	hasSelection := options.all || len(options.assets) != 0 || len(options.bundles) != 0
+	hasSelection := options.all || len(options.assets) != 0 || len(options.bundles) != 0 || len(options.coordinates) != 0
 	if options.all && (len(options.assets) != 0 || len(options.bundles) != 0) {
 		return invalid("all")
 	}
@@ -526,8 +565,20 @@ func validateOptionRelationships(command Command, options parsedOptions, jsonReq
 		if !options.hasScope {
 			return missing("scope")
 		}
-		if len(options.bundles) != 1 {
+		if options.hasGitRoot {
+			if len(options.bundles) != 0 || len(options.coordinates) < 2 || len(options.coordinates) > 3 || !uniqueCoordinateNames(options.coordinates) {
+				return invalid("bundle")
+			}
+			break
+		}
+		if len(options.coordinates) != 0 {
+			return missing("git-root")
+		}
+		if len(options.bundles) == 0 {
 			return missing("bundle")
+		}
+		if len(options.bundles) != 1 {
+			return invalid("bundle")
 		}
 		if options.allowDirty && !options.hasSource {
 			return invalid("allow-dirty")
@@ -578,6 +629,38 @@ func selectionIdentifier(value string) bool {
 	}
 	for _, character := range value[1:] {
 		if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueCoordinateNames(coordinates []BundleCoordinate) bool {
+	seen := make(map[string]struct{}, len(coordinates))
+	for _, coordinate := range coordinates {
+		if _, exists := seen[coordinate.Name()]; exists {
+			return false
+		}
+		seen[coordinate.Name()] = struct{}{}
+	}
+	return true
+}
+
+func bundleTag(value string) bool {
+	if value == "" || len(value) > 1024 || !utf8.ValidString(value) || strings.TrimSpace(value) != value ||
+		strings.HasPrefix(value, "-") || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "refs/") ||
+		strings.HasSuffix(value, "/") || strings.HasSuffix(value, ".") || strings.Contains(value, "//") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") || strings.ContainsAny(value, " ~^:?*[\\") ||
+		value == "HEAD" || value == "@" {
+		return false
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "" || segment == "." || segment == ".." || strings.HasSuffix(segment, ".lock") {
+			return false
+		}
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
 			return false
 		}
 	}

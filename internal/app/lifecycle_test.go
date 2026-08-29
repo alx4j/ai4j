@@ -1698,7 +1698,7 @@ func stageInterrupted(t *testing.T, harness lifecycleHarness, execution lifecycl
 		resources = append(resources, "owned:"+desired.Rules.Path)
 	}
 	sourceRevision := recordSourceRevision(*desired)
-	if execution.source.HasSource() {
+	if execution.source.HasSource() && len(desired.Components) == 0 {
 		sourceRevision = cliSourceRevision(execution.source.Source)
 	}
 	marker, err := installstate.NewResourceMarker(execution.operation.String(), operationID, desired.InstallationID, sourceRevision, resources)
@@ -1775,6 +1775,9 @@ func parseRequest[T cli.Request](t *testing.T, arguments ...string) T {
 type lifecycleValidator struct {
 	native                *lifecycleNativeRunner
 	update                bool
+	failBundle            string
+	failUpdateBundle      string
+	failNativePlugin      string
 	selectionCalls        int
 	updateCalls           int
 	source                func(cli.SourceOptions, string) cli.Source
@@ -1784,6 +1787,13 @@ type lifecycleValidator struct {
 
 func (v *lifecycleValidator) SelectLifecycle(_ context.Context, options cli.SourceOptions, bundle string) validation.LifecycleSelection {
 	v.selectionCalls++
+	if bundle == v.failBundle {
+		problem, err := result.NewProblem("source_access_failed", "component source is unavailable", nil)
+		if err != nil {
+			panic(err)
+		}
+		return validation.LifecycleSelection{Problems: []result.Problem{problem}, Failure: validation.FailureSource}
+	}
 	commit := strings.Repeat("a", 40)
 	if options.HasReference() && (options.Reference() == strings.Repeat("a", 40) || options.Reference() == strings.Repeat("b", 40)) {
 		commit = options.Reference()
@@ -1810,9 +1820,31 @@ func (v *lifecycleValidator) SelectLifecycle(_ context.Context, options cli.Sour
 		rules = []byte("other rules\n")
 		resolvedAssets = []string{"other"}
 	}
+	if bundle == "common" || bundle == "everpure" || bundle == "team" {
+		toolkitID, packageID, packagePath = bundle, bundle+"-plugin", "plugins/"+bundle+"-plugin"
+		rules = nil
+		resolvedAssets = []string{bundle + "-asset"}
+		if bundle == "common" {
+			rules = []byte("common rules\n")
+		}
+	}
+	if bundle == "alpha" || bundle == "beta" {
+		toolkitID, packageID, packagePath = bundle, "shared-plugin", "plugins/shared-plugin"
+		rules = nil
+		resolvedAssets = []string{bundle + "-asset"}
+	}
+	if bundle == "policy" {
+		toolkitID, packageID, packagePath = bundle, "", ""
+		rules = []byte("company policy\n")
+		resolvedAssets = []string{"policy-rules"}
+	}
 	resolvedBundles := []string{bundle}
-	packages := []validation.LifecyclePackage{{ID: packageID, Path: packagePath, NativeArtifact: testLifecycleArtifact()}}
-	resolvedPackages := []string{packageID}
+	var packages []validation.LifecyclePackage
+	var resolvedPackages []string
+	if packageID != "" {
+		packages = []validation.LifecyclePackage{{ID: packageID, Path: packagePath, NativeArtifact: testLifecycleArtifact()}}
+		resolvedPackages = []string{packageID}
+	}
 	if bundle == "full" {
 		resolvedBundles = []string{"default", "full", "tools"}
 		resolvedAssets = []string{"ai4j-rules", "claude-tools", "repository-review"}
@@ -1856,6 +1888,10 @@ func testLifecycleArtifact() []byte {
 
 func (v *lifecycleValidator) ValidateUpdate(_ context.Context, options cli.SourceOptions, installed domain.CommitOID) validation.UpdateReport {
 	v.updateCalls++
+	if v.failUpdateBundle != "" && strings.Contains(options.Repository(), "/"+v.failUpdateBundle+".git") {
+		problem, _ := result.NewProblem("source_access_failed", "component source is unavailable", nil)
+		return validation.UpdateReport{Report: validation.Report{Problems: []result.Problem{problem}, Failure: validation.FailureSource}}
+	}
 	if !v.update || installed.String() == strings.Repeat("b", 40) {
 		return validation.UpdateReport{Report: validation.Report{Source: v.source(options, installed.String())}, Disposition: gitsource.UpdateNoChange}
 	}
@@ -1868,6 +1904,10 @@ func (v *lifecycleValidator) InspectNativeStatusFor(_ context.Context, marketpla
 
 func (v *lifecycleValidator) InspectNativeStatusAt(ctx context.Context, directory, marketplaceID, pluginID string) (validation.NativeStatus, *result.Problem) {
 	v.inspectionDirectories = append(v.inspectionDirectories, directory)
+	if v.failNativePlugin != "" && strings.HasPrefix(pluginID, v.failNativePlugin+"@") {
+		problem, _ := result.NewProblem("native_status_failed", "component plugin status could not be inspected", nil)
+		return validation.NativeStatus{}, &problem
+	}
 	return v.InspectNativeStatusFor(ctx, marketplaceID, pluginID)
 }
 

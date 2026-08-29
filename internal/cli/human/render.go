@@ -142,12 +142,17 @@ func renderList(output *boundedBuffer, data cli.ListData) {
 		output.indentedField(1, "Scope", humanize(string(installation.Scope())))
 		output.indentedField(1, "Location", installation.ScopeRoot())
 		output.indentedField(1, "Lifecycle", humanize(installation.Lifecycle()))
-		if installation.Source().Mode() == cli.SourceDevelopment {
-			output.indentedField(1, "Source", installation.Source().Checkout()+" (local checkout)")
+		components := installation.Components()
+		if len(components) == 0 {
+			if installation.Source().Mode() == cli.SourceDevelopment {
+				output.indentedField(1, "Source", installation.Source().Checkout()+" (local checkout)")
+			} else {
+				output.indentedField(1, "Source", installation.Source().Repository().String()+" at "+installation.Source().Commit().String())
+			}
+			renderInstallationSelection(output, installation, 1)
 		} else {
-			output.indentedField(1, "Source", installation.Source().Repository().String()+" at "+installation.Source().Commit().String())
+			renderRecordedComponents(output, components, 1)
 		}
-		renderInstallationSelection(output, installation, 1)
 		output.indentedField(1, "Native packages", strings.Join(installation.Packages(), ", "))
 		output.indentedField(1, "Resolved assets", strings.Join(installation.ResolvedAssets(), ", "))
 		output.indentedField(1, "Recorded operations", strconv.Itoa(installation.HistoryCount()))
@@ -232,7 +237,20 @@ func renderPlan(output *boundedBuffer, data cli.PlanData, commandResult result.R
 		output.line("Review the source, active content, and changes below before confirming.")
 	}
 	if data.HasSource() {
-		renderSource(output, data.Source(), 0)
+		components := data.Components()
+		if len(components) == 0 {
+			renderSource(output, data.Source(), 0)
+		} else {
+			output.line("")
+			output.line("Composition sources")
+			for _, component := range components {
+				output.indentedLine(1, component.Name()+"@"+component.Tag())
+				source := component.Source()
+				output.indentedField(2, "Repository", source.Repository().String())
+				output.indentedField(2, "Transport", source.Transport().String())
+				output.indentedField(2, "Exact commit", source.Commit().OID().String())
+			}
+		}
 	}
 	renderActions(output, data.Actions(), 0)
 	renderContent(output, data.ActiveContent(), 0)
@@ -319,7 +337,12 @@ func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult resu
 		if installation.HasExpectedNativeVersion() {
 			output.indentedField(1, "Expected native version", installation.ExpectedNativeVersion())
 		}
-		renderRecordedSource(output, installation.Source(), 0)
+		components := installation.Components()
+		if len(components) == 0 {
+			renderRecordedSource(output, installation.Source(), 0)
+		} else {
+			renderRecordedComponents(output, components, 0)
+		}
 		if summary, ok := data.Summary(); ok {
 			output.line("")
 			output.line("Placement")
@@ -327,7 +350,9 @@ func renderStatus(output *boundedBuffer, data cli.StatusData, commandResult resu
 			output.indentedField(1, "Scope", humanize(string(summary.Scope())))
 			output.indentedField(1, "Location", summary.ScopeRoot())
 			output.indentedField(1, "Lifecycle", humanize(summary.Lifecycle()))
-			renderInstallationSelection(output, summary, 1)
+			if len(components) == 0 {
+				renderInstallationSelection(output, summary, 1)
+			}
 			output.indentedField(1, "Native packages", strings.Join(summary.Packages(), ", "))
 			output.indentedField(1, "Resolved assets", strings.Join(summary.ResolvedAssets(), ", "))
 			output.indentedField(1, "Recorded operations", strconv.Itoa(summary.HistoryCount()))
@@ -383,6 +408,25 @@ func renderInstallationSelection(output *boundedBuffer, installation cli.Install
 	}
 	output.indentedField(indent, "Requested bundle", requested)
 	output.indentedField(indent, "Resolved bundles", resolved)
+}
+
+func renderRecordedComponents(output *boundedBuffer, components []cli.RecordedComponent, indent int) {
+	output.line("")
+	output.indentedLine(indent, "Composition ("+count(len(components), "component", "components")+")")
+	for _, component := range components {
+		output.indentedLine(indent+1, component.Name()+"@"+component.Tag())
+		output.indentedField(indent+2, "Repository", component.Source().Repository().String())
+		output.indentedField(indent+2, "Transport", component.Source().Transport().String())
+		output.indentedField(indent+2, "Exact commit", component.Source().Commit().String())
+		output.indentedField(indent+2, "Toolkit version", component.ToolkitVersion())
+		output.indentedField(indent+2, "Resolved bundles", strings.Join(component.ResolvedBundles(), ", "))
+		output.indentedField(indent+2, "Native packages", strings.Join(component.Packages(), ", "))
+		assets := strings.Join(component.ResolvedAssets(), ", ")
+		if assets == "" {
+			assets = "None"
+		}
+		output.indentedField(indent+2, "Resolved assets", assets)
+	}
 }
 
 func renderVersion(output *boundedBuffer, data cli.VersionData) {
@@ -592,7 +636,7 @@ func commandUsage(command cli.Command) string {
 	case cli.CommandBuild:
 		return "ai4j build [--repo <OWNER/REPO> | --source <PATH>] --target <TARGET> --host <HOST> --output <DIRECTORY> (--all | --asset <ID> | --bundle <ID>)"
 	case cli.CommandInstall:
-		return "ai4j install [source options] --target claude --scope <SCOPE> --bundle <ID>"
+		return "ai4j install --target claude --scope <SCOPE> ([source options] --bundle <ID> | --git-root <ROOT> --bundle <NAME@TAG> --bundle <NAME@TAG> [--bundle <NAME@TAG>])"
 	case cli.CommandUpdate:
 		return "ai4j update <INSTALLATION_ID> [options]"
 	case cli.CommandSync:

@@ -159,6 +159,173 @@ func TestStoreCanonicalizesFlattenedSelectionAndNativePackages(t *testing.T) {
 	}
 }
 
+func TestStoreRoundTripsCanonicalMultiSourceComposition(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := compositionRecord()
+	record.Selection.ResolvedAssets = []string{"everpure-tools", "everpure-rules", "common-tools", "common-rules"}
+	record.Components[0], record.Components[1] = record.Components[1], record.Components[0]
+	record.Components[0].Selection.ResolvedAssets[0], record.Components[0].Selection.ResolvedAssets[1] = record.Components[0].Selection.ResolvedAssets[1], record.Components[0].Selection.ResolvedAssets[0]
+	record.Packages[0], record.Packages[1] = record.Packages[1], record.Packages[0]
+
+	if err := store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Components[0].Name != "everpure" || record.Packages[0].ID != "everpure-tools" || record.Selection.ResolvedAssets[0] != "everpure-tools" {
+		t.Fatalf("Save() mutated caller-owned slices: %#v", record)
+	}
+	got, present, err := store.Load()
+	if err != nil || !present {
+		t.Fatalf("Load() = %#v, %t, %v", got, present, err)
+	}
+	if got.ToolkitID != "composition" || got.Source != (Source{}) || len(got.Components) != 2 ||
+		got.Components[0].Name != "common" || got.Components[1].Name != "everpure" ||
+		got.Components[1].Source.Repository != "git.everpure.example/platform/toolkits/everpure" ||
+		got.Components[1].Source.RequestedRef == nil || *got.Components[1].Source.RequestedRef != "refs/tags/v0.6.0" ||
+		!reflect.DeepEqual(got.Components[1].Packages, []string{"everpure-tools"}) ||
+		!reflect.DeepEqual(got.Selection.ResolvedAssets, []string{"common-rules", "common-tools", "everpure-rules", "everpure-tools"}) ||
+		got.Packages[0].ID != "common-tools" || got.Packages[0].Component != "common" {
+		t.Fatalf("canonical composition = %#v", got)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("round-tripped composition is invalid: %v", err)
+	}
+}
+
+func TestRecordAcceptsThreeComponentComposition(t *testing.T) {
+	t.Parallel()
+	record := compositionRecord()
+	record.Components = append(record.Components,
+		compositionComponent("team", "git.everpure.example/platform/toolkits/team", "ssh", "v0.2.0", "0.2.0", "1", "2", []string{"team"}, []string{"team-rules", "team-tools"}, []string{"team-tools"}),
+	)
+	record.Packages = append(record.Packages, NativePackage{ID: "team-tools", Path: "plugins/team-tools", Component: "team"})
+	record.Selection.ResolvedAssets = append(record.Selection.ResolvedAssets, "team-rules", "team-tools")
+	record.NativeResources = []string{
+		"claude:common-tools@composition",
+		"claude:everpure-tools@composition",
+		"claude:marketplace:composition",
+		"claude:team-tools@composition",
+	}
+
+	if err := record.Validate(); err != nil {
+		t.Fatalf("three-component composition = %v", err)
+	}
+}
+
+func TestRecordRejectsMalformedMultiSourceComposition(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+	}{
+		{name: "one component", mutate: func(record *Record) {
+			record.Components = record.Components[:1]
+			record.Packages = record.Packages[:1]
+			record.Selection.ResolvedAssets = []string{"common-rules", "common-tools"}
+			record.NativeResources = []string{"claude:common-tools@composition", "claude:marketplace:composition"}
+		}},
+		{name: "four components", mutate: func(record *Record) {
+			extra := record.Components[0]
+			extra.Name = "personal"
+			extra.Source.Repository = "github.com/oleksii/personal"
+			extra.Selection.RequestedBundle = "personal"
+			extra.Selection.ResolvedBundles = []string{"personal"}
+			extra.Selection.ResolvedAssets = nil
+			extra.Packages = nil
+			team := extra
+			team.Name = "team"
+			team.Source.Repository = "github.com/oleksii/team"
+			team.Selection.RequestedBundle = "team"
+			team.Selection.ResolvedBundles = []string{"team"}
+			record.Components = append(record.Components, extra, team)
+		}},
+		{name: "components are not sorted", mutate: func(record *Record) {
+			record.Components[0], record.Components[1] = record.Components[1], record.Components[0]
+		}},
+		{name: "duplicate component", mutate: func(record *Record) {
+			record.Components[1] = record.Components[0]
+		}},
+		{name: "record identity is not synthetic", mutate: func(record *Record) {
+			record.ToolkitID = "common"
+		}},
+		{name: "record source is populated", mutate: func(record *Record) {
+			record.Source = record.Components[0].Source
+		}},
+		{name: "record selection is not synthetic", mutate: func(record *Record) {
+			record.Selection.ResolvedBundles = []string{"common", "composition"}
+		}},
+		{name: "component source is not git", mutate: func(record *Record) {
+			record.Components[0].Source.Mode = "github"
+		}},
+		{name: "component source is not explicit", mutate: func(record *Record) {
+			record.Components[0].Source.Selection = "built_in_default"
+		}},
+		{name: "component source is not tag pinned", mutate: func(record *Record) {
+			record.Components[0].Source.RefKind = "branch"
+		}},
+		{name: "component requested ref differs from tag", mutate: func(record *Record) {
+			requested := "refs/tags/v2.0.0"
+			record.Components[0].Source.RequestedRef = &requested
+		}},
+		{name: "component tag is qualified", mutate: func(record *Record) {
+			record.Components[0].Tag = "refs/tags/v1.3.0"
+			requested := "refs/tags/refs/tags/v1.3.0"
+			record.Components[0].Source.RequestedRef = &requested
+		}},
+		{name: "component transport is absent", mutate: func(record *Record) {
+			record.Components[0].Source.Transport = ""
+		}},
+		{name: "components use different root namespaces", mutate: func(record *Record) {
+			record.Components[1].Source.Repository = "git.other.example/platform/toolkits/everpure"
+		}},
+		{name: "components use different transports", mutate: func(record *Record) {
+			record.Components[1].Source.Transport = "https"
+		}},
+		{name: "component commit is absent", mutate: func(record *Record) {
+			record.Components[0].Source.Commit = ""
+		}},
+		{name: "component digest is absent", mutate: func(record *Record) {
+			record.Components[0].Source.RenderedDigest = ""
+		}},
+		{name: "component version is absent", mutate: func(record *Record) {
+			record.Components[0].ToolkitVersion = ""
+		}},
+		{name: "component selects a different bundle", mutate: func(record *Record) {
+			record.Components[0].Selection.RequestedBundle = "shared"
+		}},
+		{name: "component repository differs from name", mutate: func(record *Record) {
+			record.Components[0].Source.Repository = "github.com/oleksii/other"
+		}},
+		{name: "asset union is incomplete", mutate: func(record *Record) {
+			record.Selection.ResolvedAssets = record.Selection.ResolvedAssets[:3]
+		}},
+		{name: "package owner is absent", mutate: func(record *Record) {
+			record.Packages[0].Component = ""
+		}},
+		{name: "package owner is wrong", mutate: func(record *Record) {
+			record.Packages[0].Component = "everpure"
+		}},
+		{name: "component package union is incomplete", mutate: func(record *Record) {
+			record.Components[0].Packages = nil
+		}},
+		{name: "package belongs to two components", mutate: func(record *Record) {
+			record.Components[1].Packages = []string{"common-tools", "everpure-tools"}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := compositionRecord()
+			test.mutate(&record)
+			if err := record.Validate(); !errors.Is(err, ErrMalformedState) {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestSaveNewNeverReplacesAnOccupiedInstallationRecord(t *testing.T) {
 	t.Parallel()
 	store, err := NewStore(t.TempDir())
@@ -340,6 +507,9 @@ func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
 		{name: "native package path escapes", mutate: func(record *Record) {
 			record.Packages[0].Path = "../plugin"
 		}},
+		{name: "legacy native package names a component", mutate: func(record *Record) {
+			record.Packages[0].Component = "common"
+		}},
 		{name: "active native resources omit a package", mutate: func(record *Record) {
 			record.NativeResources = []string{"claude:marketplace:ai4j"}
 		}},
@@ -399,5 +569,47 @@ func testRecord() Record {
 		Catalog:       OwnedFile{Path: "state/catalog/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
 		Rules:         OwnedFile{Path: ".claude/rules/ai4j.md", Checksum: strings.Repeat("c", 64)},
 		LastOperation: LastOperation{ID: "operation-001", Timestamp: "2026-08-24T12:00:00Z"},
+	}
+}
+
+func compositionRecord() Record {
+	record := testRecord()
+	record.ToolkitID = "composition"
+	record.ToolkitVersion = ""
+	record.Packages = []NativePackage{
+		{ID: "common-tools", Path: "plugins/common-tools", Component: "common"},
+		{ID: "everpure-tools", Path: "plugins/everpure-tools", Component: "everpure"},
+	}
+	record.MarketplaceID = "composition"
+	record.Source = Source{}
+	record.Selection = Selection{
+		RequestedBundle: "composition",
+		ResolvedBundles: []string{"composition"},
+		ResolvedAssets:  []string{"common-rules", "common-tools", "everpure-rules", "everpure-tools"},
+	}
+	record.Components = []Component{
+		compositionComponent("common", "git.everpure.example/platform/toolkits/common", "ssh", "v1.3.0", "1.3.0", "a", "d", []string{"common", "shared"}, []string{"common-rules", "common-tools"}, []string{"common-tools"}),
+		compositionComponent("everpure", "git.everpure.example/platform/toolkits/everpure", "ssh", "v0.6.0", "0.6.0", "e", "f", []string{"everpure"}, []string{"everpure-rules", "everpure-tools"}, []string{"everpure-tools"}),
+	}
+	record.NativeResources = []string{
+		"claude:common-tools@composition",
+		"claude:everpure-tools@composition",
+		"claude:marketplace:composition",
+	}
+	return record
+}
+
+func compositionComponent(name, repository, transport, tag, toolkitVersion, commitCharacter, digestCharacter string, bundles, assets, packages []string) Component {
+	requested := "refs/tags/" + tag
+	return Component{
+		Name: name,
+		Tag:  tag,
+		Source: Source{
+			Mode: "git", Selection: "explicit", Repository: repository, Transport: transport,
+			RequestedRef: &requested, RefKind: "tag", Commit: strings.Repeat(commitCharacter, 40), RenderedDigest: strings.Repeat(digestCharacter, 64),
+		},
+		ToolkitVersion: toolkitVersion,
+		Selection:      Selection{RequestedBundle: name, ResolvedBundles: bundles, ResolvedAssets: assets},
+		Packages:       packages,
 	}
 }

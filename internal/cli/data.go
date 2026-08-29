@@ -719,12 +719,21 @@ type PlanData struct {
 	operation    Operation
 	source       Source
 	hasSource    bool
+	components   []PlanComponent
 	installation domain.InstallationID
 	actions      []Action
 	content      []ContentItem
 	conflicts    []Conflict
 	final        FinalState
 	disposition  result.UpdateDisposition
+}
+
+func NewCompositionPlanData(operation Operation, components []PlanComponent, installation domain.InstallationID, actions []Action, content []ContentItem, conflicts []Conflict, final FinalState, disposition result.UpdateDisposition) (PlanData, error) {
+	items := sortedPlanComponents(components)
+	if !operation.Valid() || !validPlanComponents(items) || !installation.Valid() || !final.valid() || !validUpdateDisposition(disposition) || !validActions(actions) || !validContent(content) || len(conflicts) > 64 || !validConflicts(conflicts) {
+		return PlanData{}, fmt.Errorf("composition plan data is incomplete")
+	}
+	return PlanData{operation: operation, source: items[0].source, hasSource: true, components: items, installation: installation, actions: sortedActions(actions), content: sortedContent(content), conflicts: sortedConflicts(conflicts), final: final, disposition: disposition}, nil
 }
 
 func NewPlanData(operation Operation, source Source, installation domain.InstallationID, actions []Action, content []ContentItem, conflicts []Conflict, final FinalState, disposition result.UpdateDisposition) (PlanData, error) {
@@ -744,6 +753,7 @@ func (PlanData) cliData()                                      {}
 func (d PlanData) Operation() Operation                        { return d.operation }
 func (d PlanData) Source() Source                              { return d.source }
 func (d PlanData) HasSource() bool                             { return d.hasSource }
+func (d PlanData) Components() []PlanComponent                 { return append([]PlanComponent(nil), d.components...) }
 func (d PlanData) InstallationID() domain.InstallationID       { return d.installation }
 func (d PlanData) Actions() []Action                           { return append([]Action(nil), d.actions...) }
 func (d PlanData) ActiveContent() []ContentItem                { return append([]ContentItem(nil), d.content...) }
@@ -751,7 +761,7 @@ func (d PlanData) Conflicts() []Conflict                       { return append([
 func (d PlanData) ExpectedFinalState() FinalState              { return d.final }
 func (d PlanData) UpdateDisposition() result.UpdateDisposition { return d.disposition }
 func (d PlanData) valid() bool {
-	if !d.operation.Valid() || d.hasSource != d.source.valid() || !d.hasSource && d.operation != OperationHistoryPurge && d.operation != OperationRollback && d.operation != OperationUninstall || !d.installation.Valid() || !d.final.valid() || !validUpdateDisposition(d.disposition) {
+	if !d.operation.Valid() || d.hasSource != d.source.valid() || !d.hasSource && d.operation != OperationHistoryPurge && d.operation != OperationRollback && d.operation != OperationUninstall || len(d.components) != 0 && !validPlanComponents(d.components) || !d.installation.Valid() || !d.final.valid() || !validUpdateDisposition(d.disposition) {
 		return false
 	}
 	for _, item := range d.actions {
@@ -947,6 +957,20 @@ type Installation struct {
 	source                     RecordedSource
 	toolkitVersion, cliVersion string
 	expectedNativeVersion      string
+	components                 []RecordedComponent
+}
+
+func NewComposedInstallation(id domain.InstallationID, nativePluginIDs []string, components []RecordedComponent, cliVersion string) (Installation, error) {
+	items := cloneRecordedComponents(components)
+	if !validRecordedComponents(items) {
+		return Installation{}, fmt.Errorf("composed installation is incomplete")
+	}
+	value, err := NewInstallation(id, "composition", nativePluginIDs, items[0].source, "composed", cliVersion, "")
+	if err != nil {
+		return Installation{}, err
+	}
+	value.components = items
+	return value, nil
 }
 
 func NewInstallation(id domain.InstallationID, toolkitID string, nativePluginIDs []string, source RecordedSource, toolkitVersion, cliVersion, expectedNativeVersion string) (Installation, error) {
@@ -959,12 +983,13 @@ func NewInstallation(id domain.InstallationID, toolkitID string, nativePluginIDs
 func (i Installation) ID() domain.InstallationID { return i.id }
 func (i Installation) ToolkitID() string         { return i.toolkitID }
 
-func (i Installation) NativePluginIDs() []string      { return cloneStrings(i.nativePluginIDs) }
-func (i Installation) Source() RecordedSource         { return i.source }
-func (i Installation) ToolkitVersion() string         { return i.toolkitVersion }
-func (i Installation) CLIVersion() string             { return i.cliVersion }
-func (i Installation) ExpectedNativeVersion() string  { return i.expectedNativeVersion }
-func (i Installation) HasExpectedNativeVersion() bool { return i.expectedNativeVersion != "" }
+func (i Installation) NativePluginIDs() []string       { return cloneStrings(i.nativePluginIDs) }
+func (i Installation) Source() RecordedSource          { return i.source }
+func (i Installation) ToolkitVersion() string          { return i.toolkitVersion }
+func (i Installation) CLIVersion() string              { return i.cliVersion }
+func (i Installation) ExpectedNativeVersion() string   { return i.expectedNativeVersion }
+func (i Installation) HasExpectedNativeVersion() bool  { return i.expectedNativeVersion != "" }
+func (i Installation) Components() []RecordedComponent { return cloneRecordedComponents(i.components) }
 
 type NativeRegistration string
 
@@ -1167,6 +1192,20 @@ type InstallationSummary struct {
 	health          string
 	historyCount    int
 	lastOperation   domain.OperationID
+	components      []RecordedComponent
+}
+
+func NewDetailedCompositionSummary(id domain.InstallationID, target BuildTarget, scope Scope, scopeRoot, lifecycle string, components []RecordedComponent, packages, resolvedAssets []string, health string, historyCount int, lastOperation domain.OperationID) (InstallationSummary, error) {
+	items := cloneRecordedComponents(components)
+	if !validRecordedComponents(items) {
+		return InstallationSummary{}, fmt.Errorf("composed installation summary is incomplete")
+	}
+	value, err := NewDetailedInstallationSummary(id, "composition", target, scope, scopeRoot, lifecycle, items[0].source, "composition", []string{"composition"}, packages, resolvedAssets, health, historyCount, lastOperation)
+	if err != nil {
+		return InstallationSummary{}, err
+	}
+	value.components = items
+	return value, nil
 }
 
 func NewInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, requestedBundle string, resolvedBundles, packages, resolvedAssets []string, health string) (InstallationSummary, error) {
@@ -1200,7 +1239,13 @@ func (i InstallationSummary) Health() string                      { return i.hea
 func (i InstallationSummary) HistoryCount() int                   { return i.historyCount }
 func (i InstallationSummary) LastOperationID() domain.OperationID { return i.lastOperation }
 func (i InstallationSummary) HasLastOperationID() bool            { return i.lastOperation.Valid() }
+func (i InstallationSummary) Components() []RecordedComponent {
+	return cloneRecordedComponents(i.components)
+}
 func (i InstallationSummary) valid() bool {
+	if len(i.components) != 0 && (!validRecordedComponents(i.components) || i.toolkitID != "composition" || i.source != i.components[0].source) {
+		return false
+	}
 	selectionValid := hyphenatedIdentifierPattern.MatchString(i.requestedBundle) && len(i.resolvedBundles) != 0 && containsString(i.resolvedBundles, i.requestedBundle)
 	if !i.id.Valid() || !hyphenatedIdentifierPattern.MatchString(i.toolkitID) || !i.target.Valid() || !i.scope.Valid() ||
 		!boundedText(i.scopeRoot, 4096, false) || (i.lifecycle != "active" && i.lifecycle != "archived") || !i.source.valid() ||
@@ -1569,6 +1614,9 @@ func (s FinalState) valid() bool {
 	return s.installation.valid() && s.native.valid() && s.owned.valid()
 }
 func (i Installation) valid() bool {
+	if len(i.components) != 0 && (!validRecordedComponents(i.components) || i.toolkitID != "composition" || i.source != i.components[0].source) {
+		return false
+	}
 	_, err := NewInstallation(i.id, i.toolkitID, i.nativePluginIDs, i.source, i.toolkitVersion, i.cliVersion, i.expectedNativeVersion)
 	return err == nil
 }
