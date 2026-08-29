@@ -1,8 +1,6 @@
 package gitremote
 
 import (
-	"context"
-	"errors"
 	"strings"
 
 	"github.com/alx4j/ai4j/internal/domain"
@@ -146,37 +144,6 @@ func Resolve(input SelectionInput) (EffectiveSource, error) {
 	}
 	if !effective.valid() {
 		return EffectiveSource{}, newError(ErrorInvalidSelection)
-	}
-	return effective, nil
-}
-
-// AccessProbe is implemented by the later Git adapter. Authentication remains
-// wholly inside system Git/SSH configuration; no credential callback exists.
-type AccessProbe interface {
-	Probe(context.Context, EffectiveSource) error
-}
-
-// Qualify resolves once, then hands the sanitized request to system-Git access.
-// An explicit failure is never retried against the built-in repository.
-func Qualify(ctx context.Context, input SelectionInput, probe AccessProbe) (EffectiveSource, error) {
-	if ctx == nil || probe == nil {
-		return EffectiveSource{}, newError(ErrorInvalidSelection)
-	}
-	effective, err := Resolve(input)
-	if err != nil {
-		return EffectiveSource{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return EffectiveSource{}, err
-	}
-	if err := probe.Probe(ctx, effective); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return EffectiveSource{}, context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return EffectiveSource{}, context.DeadlineExceeded
-		}
-		return EffectiveSource{}, newError(ErrorAccessFailed)
 	}
 	return effective, nil
 }

@@ -29,7 +29,6 @@ const (
 	ErrorInvalidRoot       ErrorCode = "invalid_git_root"
 	ErrorInvalidReference  ErrorCode = "invalid_reference"
 	ErrorInvalidSelection  ErrorCode = "invalid_source_selection"
-	ErrorAccessFailed      ErrorCode = "source_access_failed"
 )
 
 // SelectionError reports a source-selection failure without echoing raw input,
@@ -46,8 +45,6 @@ func (e SelectionError) Error() string {
 		return "Git reference is not a safe explicit value"
 	case ErrorInvalidSelection:
 		return "source selection is internally inconsistent"
-	case ErrorAccessFailed:
-		return "Git source access failed"
 	default:
 		return "source selection failed"
 	}

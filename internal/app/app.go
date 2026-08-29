@@ -29,9 +29,16 @@ type CommandIO struct {
 	Output      io.Writer
 	Progress    io.Writer
 	Interactive bool
+	logSession  *commandLogSession
 }
 
 type CommandHandler func(context.Context, cli.Request, CommandIO) (cli.Response, error)
+
+func (c CommandIO) bindLogInstallation(installation domain.InstallationID) {
+	if c.logSession != nil {
+		c.logSession.bindInstallation(installation)
+	}
+}
 
 // OtherCommandsFactory lazily constructs the non-version command handler.
 // Parsing, usage failures, and version handling never call this factory.
@@ -62,7 +69,7 @@ func NewApplication(dependencies Dependencies) (Application, error) {
 		return Application{}, fmt.Errorf("application requires both renderers")
 	}
 	return Application{
-		parser:        cli.NewParser(dependencies.Build.TargetOS()),
+		parser:        cli.NewParser(),
 		version:       versionHandler{build: dependencies.Build, defaultSource: dependencies.DefaultSource},
 		otherCommands: dependencies.OtherCommands,
 		human:         dependencies.Human,
@@ -108,7 +115,7 @@ func (a Application) RunContext(ctx context.Context, argv []string, stdin io.Rea
 		commandIO := CommandIO{Input: stdin, Output: stdout, Interactive: interactive}
 		if request.OutputMode() == cli.OutputHuman && interactive {
 			commandIO.Progress = stderr
-			reportProgress(commandIO, commandProgressMessage(request.Command()))
+			reportProgress(commandIO, commandLogInitialStage(request.Command()), commandProgressMessage(request.Command()))
 		}
 		response, err = a.handleOther(ctx, request, commandIO)
 	}
@@ -169,7 +176,10 @@ func writeOutputFailure(stderr io.Writer) {
 	}
 }
 
-func reportProgress(commandIO CommandIO, message string) {
+func reportProgress(commandIO CommandIO, stage, message string) {
+	if commandIO.logSession != nil {
+		commandIO.logSession.progress(stage)
+	}
 	if commandIO.Progress == nil || message == "" {
 		return
 	}
@@ -338,10 +348,11 @@ func RunContext(ctx context.Context, argv []string, stdin io.Reader, stdout, std
 		return result.ExitUnexpectedInternal.Int()
 	}
 	build := buildinfo.Read()
+	tool := commandLogToolName(argv)
 	application, err := NewApplication(Dependencies{
 		Build:         build,
 		DefaultSource: defaultSource,
-		OtherCommands: productionOtherCommands(build),
+		OtherCommands: productionOtherCommands(build, tool),
 		Human:         human.Render,
 		JSON:          jsonout.Render,
 	})

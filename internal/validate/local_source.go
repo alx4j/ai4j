@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,7 +42,7 @@ func (s Service) acquireLocal(ctx context.Context, workspace string, options cli
 	if err != nil {
 		return acquisition{}, errLocalSourceInvalid
 	}
-	top, err := s.config.Runner.Run(ctx, root, gitExecutable, []string{"rev-parse", "--show-toplevel"}, gitAuthenticatedEnvironment())
+	top, err := s.config.Runner.RunIsolated(ctx, root, gitExecutable, []string{"rev-parse", "--show-toplevel"}, gitAuthenticatedEnvironment())
 	if err != nil || top.ExitCode != 0 || len(top.Stderr) != 0 {
 		return acquisition{}, errLocalSourceInvalid
 	}
@@ -49,7 +50,7 @@ func (s Service) acquireLocal(ctx context.Context, workspace string, options cli
 	if err != nil || topRoot != root {
 		return acquisition{}, errLocalSourceInvalid
 	}
-	status, err := s.config.Runner.Run(ctx, root, gitExecutable, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--"}, gitAuthenticatedEnvironment())
+	status, err := s.config.Runner.RunIsolated(ctx, root, gitExecutable, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--"}, gitAuthenticatedEnvironment())
 	if err != nil || status.ExitCode != 0 || len(status.Stderr) != 0 {
 		return acquisition{}, errLocalSourceInvalid
 	}
@@ -122,8 +123,14 @@ func inside(root, candidate string) bool {
 }
 
 func snapshotLocalFiles(root string) ([]localFile, error) {
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, errLocalSourceInvalid
+	}
+	defer rootHandle.Close()
+
 	var files []localFile
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -140,15 +147,8 @@ func snapshotLocalFiles(root string) ([]localFile, error) {
 		if relative == "." || entry.IsDir() {
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
-			return errLocalSourceInvalid
-		}
-		info, err := entry.Info()
-		if err != nil || info.Size() < 0 || uint64(info.Size()) > gitsource.MaximumBlobBytes {
-			return errLocalSourceInvalid
-		}
-		content, err := os.ReadFile(path)
-		if err != nil || int64(len(content)) != info.Size() {
+		content, info, err := readLocalFile(rootHandle, relative)
+		if err != nil {
 			return errLocalSourceInvalid
 		}
 		mode := gitsource.SourceRegularFile
@@ -163,6 +163,27 @@ func snapshotLocalFiles(root string) ([]localFile, error) {
 	}
 	slices.SortFunc(files, func(left, right localFile) int { return strings.Compare(left.path, right.path) })
 	return files, nil
+}
+
+func readLocalFile(root *os.Root, relative string) ([]byte, os.FileInfo, error) {
+	entry, err := root.Lstat(relative)
+	if err != nil || !entry.Mode().IsRegular() || entry.Size() < 0 || uint64(entry.Size()) > gitsource.MaximumBlobBytes {
+		return nil, nil, errLocalSourceInvalid
+	}
+	file, err := root.Open(relative)
+	if err != nil {
+		return nil, nil, errLocalSourceInvalid
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) || opened.Size() != entry.Size() {
+		return nil, nil, errLocalSourceInvalid
+	}
+	content, err := io.ReadAll(io.LimitReader(file, int64(gitsource.MaximumBlobBytes)+1))
+	if err != nil || int64(len(content)) != opened.Size() {
+		return nil, nil, errLocalSourceInvalid
+	}
+	return content, opened, nil
 }
 
 func writeLocalSnapshotFile(root string, file localFile) error {

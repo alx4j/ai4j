@@ -1,7 +1,6 @@
 package gitremote_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -119,12 +118,8 @@ func TestBadExplicitRepositoryNeverFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := &recordingProbe{}
-	if _, err := gitremote.Qualify(context.Background(), input, probe); err == nil {
+	if _, err := gitremote.Resolve(input); err == nil {
 		t.Fatal("invalid explicit repository succeeded")
-	}
-	if probe.calls != 0 {
-		t.Fatalf("probe calls = %d", probe.calls)
 	}
 }
 
@@ -157,86 +152,12 @@ func TestCredentialFreeHandoffAndTransportReconstruction(t *testing.T) {
 		}
 	}
 
-	typeOf := reflect.TypeOf(gitremote.EffectiveSource{})
-	for index := 0; index < typeOf.NumField(); index++ {
-		name := strings.ToLower(typeOf.Field(index).Name)
+	typeOf := reflect.TypeFor[gitremote.EffectiveSource]()
+	for field := range typeOf.Fields() {
+		name := strings.ToLower(field.Name)
 		if strings.Contains(name, "credential") || strings.Contains(name, "password") || strings.Contains(name, "token") || strings.Contains(name, "helper") {
 			t.Fatalf("effective source contains credential field %q", name)
 		}
-	}
-}
-
-func TestQualificationPassesAuthenticationThroughWithoutPersistenceOrFallback(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		repository string
-		transport  domain.GitTransport
-		credential string
-	}{
-		{name: "public https", repository: "public/repository", transport: domain.HTTPSGitTransport()},
-		{name: "private https", repository: "private/repository", transport: domain.HTTPSGitTransport(), credential: "EXTERNAL_HTTPS_CREDENTIAL"},
-		{name: "private ssh", repository: "git@github.com:private/repository.git", transport: domain.SSHGitTransport(), credential: "EXTERNAL_SSH_AGENT"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			input, err := gitremote.NewSelectionInput(test.repository, true, "main", true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			probe := &recordingProbe{externalCredential: test.credential}
-			got, err := gitremote.Qualify(context.Background(), input, probe)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if probe.calls != 1 || probe.request.Transport() != test.transport || got.Repository() != probe.request.Repository() {
-				t.Fatalf("probe = %d %s", probe.calls, probe.request.Transport().String())
-			}
-			if test.credential != "" && (strings.Contains(got.Repository().String(), test.credential) || strings.Contains(got.Remote().Endpoint(), test.credential)) {
-				t.Fatal("external credential entered effective source")
-			}
-		})
-	}
-}
-
-func TestQualificationMapsAccessErrorsWithoutRawOutputAndPreservesCancellation(t *testing.T) {
-	t.Parallel()
-
-	input, err := gitremote.NewSelectionInput("private/repository", true, "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := "AUTH_SECRET_CANARY"
-	probe := &recordingProbe{err: errors.New(secret)}
-	if _, err := gitremote.Qualify(context.Background(), input, probe); err == nil || strings.Contains(err.Error(), secret) {
-		t.Fatalf("unsafe access error: %v", err)
-	} else {
-		var selectionErr gitremote.SelectionError
-		if !errors.As(err, &selectionErr) || selectionErr.Code() != gitremote.ErrorAccessFailed {
-			t.Fatalf("access error = %T %v", err, err)
-		}
-	}
-
-	probe.err = context.Canceled
-	if _, err := gitremote.Qualify(context.Background(), input, probe); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancellation = %v", err)
-	}
-	probe.err = context.DeadlineExceeded
-	if _, err := gitremote.Qualify(context.Background(), input, probe); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("deadline = %v", err)
-	}
-
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	probe.calls = 0
-	probe.err = nil
-	if _, err := gitremote.Qualify(cancelled, input, probe); !errors.Is(err, context.Canceled) {
-		t.Fatalf("pre-cancelled context = %v", err)
-	}
-	if probe.calls != 0 {
-		t.Fatalf("pre-cancelled probe calls = %d", probe.calls)
 	}
 }
 
@@ -251,18 +172,4 @@ func mustEffective(t *testing.T, repository string, hasRepository bool, referenc
 		t.Fatal(err)
 	}
 	return effective
-}
-
-type recordingProbe struct {
-	calls              int
-	request            gitremote.EffectiveSource
-	externalCredential string
-	err                error
-}
-
-func (p *recordingProbe) Probe(_ context.Context, request gitremote.EffectiveSource) error {
-	p.calls++
-	p.request = request
-	_ = p.externalCredential // Fixture-owned Git/SSH state; deliberately not copied into request.
-	return p.err
 }

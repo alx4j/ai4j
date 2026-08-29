@@ -77,22 +77,8 @@ func (s *lifecycleService) recordForSelection(report validation.LifecycleSelecti
 		Catalog:       installstate.OwnedFile{Path: catalogPath, Checksum: document.Digest()},
 		LastOperation: installstate.LastOperation{ID: "operation-pending", Timestamp: time.Unix(0, 0).UTC().Format(time.RFC3339)},
 	}
-	if len(report.Rules) != 0 {
-		rulesID := "ai4j-" + installationID.String()
-		rulesRoot := "rules/"
-		if scope != cli.ScopeUser {
-			rulesRoot = ".claude/rules/"
-		}
-		if scope == cli.ScopeProjectShared {
-			rulesID = marketplaceID
-		}
-		record.Rules = installstate.OwnedFile{Path: rulesRoot + rulesID + ".md", Checksum: report.RulesChecksum}
-	}
-	if scope == cli.ScopeProjectShared {
-		record.NativeCatalog = record.Catalog
-	}
-	slices.Sort(record.NativeResources)
-	return record, document, record.Validate()
+	err = finalizeLifecycleRecord(&record, report, installationID, scope)
+	return record, document, err
 }
 
 func (s *lifecycleService) recordForComposition(report validation.LifecycleSelection, installationID domain.InstallationID, scope cli.Scope, scopeRoot string) (installstate.Record, catalog.Document, error) {
@@ -138,6 +124,11 @@ func (s *lifecycleService) recordForComposition(report validation.LifecycleSelec
 		Catalog:       installstate.OwnedFile{Path: "state/catalogs/" + installationID.String() + "/.claude-plugin/marketplace.json", Checksum: document.Digest()},
 		LastOperation: installstate.LastOperation{ID: "operation-pending", Timestamp: time.Unix(0, 0).UTC().Format(time.RFC3339)},
 	}
+	err = finalizeLifecycleRecord(&record, report, installationID, scope)
+	return record, document, err
+}
+
+func finalizeLifecycleRecord(record *installstate.Record, report validation.LifecycleSelection, installationID domain.InstallationID, scope cli.Scope) error {
 	if len(report.Rules) != 0 {
 		rulesID := "ai4j-" + installationID.String()
 		rulesRoot := "rules/"
@@ -145,7 +136,7 @@ func (s *lifecycleService) recordForComposition(report validation.LifecycleSelec
 			rulesRoot = ".claude/rules/"
 		}
 		if scope == cli.ScopeProjectShared {
-			rulesID = marketplaceID
+			rulesID = record.MarketplaceID
 		}
 		record.Rules = installstate.OwnedFile{Path: rulesRoot + rulesID + ".md", Checksum: report.RulesChecksum}
 	}
@@ -153,7 +144,7 @@ func (s *lifecycleService) recordForComposition(report validation.LifecycleSelec
 		record.NativeCatalog = record.Catalog
 	}
 	slices.Sort(record.NativeResources)
-	return record, document, record.Validate()
+	return record.Validate()
 }
 
 func stateSourceFromCLI(source cli.Source) (installstate.Source, error) {
@@ -188,7 +179,7 @@ func nativeResources(packages []installstate.NativePackage, marketplaceID string
 }
 
 func (s *lifecycleService) planResponse(command cli.Command, execution lifecycleExecution) (cli.Response, error) {
-	installation := recordInstallation(execution.before, execution.desired)
+	installation := recordInstallation(execution.transition.before, execution.transition.desired)
 	if installation == nil {
 		return cli.Response{}, errors.New("planned installation identity is unavailable")
 	}

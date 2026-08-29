@@ -598,8 +598,6 @@ func usageMessage(data cli.UsageData) string {
 	switch data.Issue() {
 	case cli.UsageMissingExecutable:
 		return "AI4J could not determine how it was started."
-	case cli.UsageAlternateExecutable:
-		return "Run this program as ai4j (ai4j.exe on Windows)."
 	case cli.UsageMissingCommand:
 		return "No AI4J command was provided."
 	case cli.UsageUnknownCommand:

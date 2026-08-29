@@ -141,23 +141,9 @@ func TestParseAttributesUsesPerBatchBound(t *testing.T) {
 	}
 }
 
-func TestParseConfigAndCleanStatus(t *testing.T) {
+func TestParseCleanStatus(t *testing.T) {
 	t.Parallel()
 
-	records, err := ParseConfig([]byte("core.bare\nfalse\x00core.filemode\ntrue\x00"))
-	if err != nil || len(records) != 2 || records[1].Key != "core.filemode" {
-		t.Fatalf("ParseConfig = %#v, %v", records, err)
-	}
-	for _, data := range [][]byte{
-		[]byte("core.bare=false\x00"),
-		[]byte("Core.bare\nfalse\x00"),
-		[]byte("core.bare\nfalse\nextra\x00"),
-		bytes.Repeat([]byte{'x'}, MaximumConfigOutputBytes+1),
-	} {
-		if _, err := ParseConfig(data); !errors.Is(err, ErrMalformed) {
-			t.Errorf("ParseConfig accepted malformed input of length %d", len(data))
-		}
-	}
 	if err := ParseCleanStatus(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +206,6 @@ func FuzzBoundedProtocolParsers(f *testing.F) {
 		[]byte(fmt.Sprintf("100644 blob %s %7d\tfile\x00", testOID, 1)),
 		[]byte("100644 " + testOID + " 0\tfile\x00"),
 		[]byte("file\x00filter\x00unspecified\x00"),
-		[]byte("core.bare\nfalse\x00"),
 	} {
 		f.Add(seed)
 	}
@@ -232,7 +217,6 @@ func FuzzBoundedProtocolParsers(f *testing.F) {
 		_, _ = ParseTree(data)
 		_, _ = ParseIndex(data)
 		_, _ = ParseAttributes(data)
-		_, _ = ParseConfig(data)
 		_, _ = ParseSingleLine(data)
 		_ = ParseCleanStatus(data)
 	})

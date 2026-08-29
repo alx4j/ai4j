@@ -103,6 +103,33 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	}
 }
 
+func TestStoreReplaceRequiresTheCompleteExpectedRecord(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := testRecord()
+	before.History = []string{"operation-001", "operation-002"}
+	if err := store.SaveNew(before); err != nil {
+		t.Fatal(err)
+	}
+	desired := cloneRecord(before)
+	desired.History = []string{"operation-002"}
+	if err := store.Replace(before, desired); err != nil {
+		t.Fatal(err)
+	}
+	loaded, present, err := store.LoadByID(before.InstallationID)
+	if err != nil || !present || !reflect.DeepEqual(loaded, desired) {
+		t.Fatalf("replaced record = %#v, %t, %v", loaded, present, err)
+	}
+	staleDesired := cloneRecord(desired)
+	staleDesired.History = nil
+	if err := store.Replace(before, staleDesired); !errors.Is(err, ErrStateChanged) {
+		t.Fatalf("stale Replace() error = %v", err)
+	}
+}
+
 func TestStoreRoundTripsOneAtomicInstallationRecord(t *testing.T) {
 	t.Parallel()
 	store, err := NewStore(t.TempDir())

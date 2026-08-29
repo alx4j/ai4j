@@ -312,7 +312,7 @@ try {
         throw 'user native state is incomplete'
     }
     Assert-DefaultBundleStatus -Status $status
-    $marketplaceId = "ai4j-$($script:ActiveInstallation -replace '^install-', '')"
+    $marketplaceId = "ai4j-$($script:ActiveInstallation)"
     $nativePluginIds = @($status.data.installation.nativePluginIds | ForEach-Object { "$_@$marketplaceId" })
     $marketplaceList = Invoke-ClaudeJSON -EvidenceName 'user-marketplace-list.json' -Arguments @('plugin', 'marketplace', 'list', '--json') -WorkingDirectory $script:RepoRoot
     Assert-JSONContainsString -Document $marketplaceList -Expected $marketplaceId

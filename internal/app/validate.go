@@ -12,6 +12,7 @@ import (
 	"github.com/alx4j/ai4j/internal/buildinfo"
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/host/darwin/installlock"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	"github.com/alx4j/ai4j/internal/result"
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
@@ -23,7 +24,7 @@ type commandRouter struct {
 	doctor     *doctorService
 }
 
-func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
+func productionOtherCommands(build buildinfo.Info, tool string) OtherCommandsFactory {
 	return func() (CommandHandler, error) {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -37,7 +38,7 @@ func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
 		if err != nil {
 			return nil, err
 		}
-		runner := validation.OSProcessRunner{}
+		runner := hostprocess.OSRunner{}
 		validator, err := validation.NewService(validation.Config{
 			GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Home: home, ClaudeRoot: claudeRoot,
 			BuildCommit: build.Revision(), Runner: runner,
@@ -57,11 +58,10 @@ func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
 			return handle.Release, nil
 		}
 		router := commandRouter{validation: validator}
-		router.lifecycle = newLifecycleService(validator, state, runner, home, build, acquire)
-		router.lifecycle.claudeRoot = claudeRoot
+		router.lifecycle = newLifecycleService(validator, state, runner, home, claudeRoot, build, acquire)
 		router.status = statusService{validation: validator, state: state, home: home}
 		router.doctor = newDoctorService(state, router.status, validator, runner)
-		return newCommandHandler(router), nil
+		return newCommandHandler(router, state.DataRoot(), tool), nil
 	}
 }
 
@@ -92,8 +92,13 @@ func productionClaudeRoot(home string) (string, error) {
 	return root, nil
 }
 
-func newCommandHandler(router commandRouter) CommandHandler {
-	return func(ctx context.Context, request cli.Request, commandIO CommandIO) (cli.Response, error) {
+func newCommandHandler(router commandRouter, dataRoot, tool string) CommandHandler {
+	return func(ctx context.Context, request cli.Request, commandIO CommandIO) (response cli.Response, responseErr error) {
+		logSession := startCommandLog(dataRoot, tool, request)
+		if logSession != nil {
+			commandIO.logSession = logSession
+			defer func() { logSession.complete(response, responseErr) }()
+		}
 		switch command := request.(type) {
 		case cli.InitRequest:
 			return initResponse(router.validation.Init(ctx, command))

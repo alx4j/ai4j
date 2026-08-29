@@ -33,7 +33,7 @@ func TestBuildRendersDeterministicClaudeAndCodexOutputs(t *testing.T) {
 			outputs := []string{filepath.Join(parent, "first"), filepath.Join(parent, "second")}
 			var snapshots []map[string][]byte
 			for _, output := range outputs {
-				request, parseErr := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", test.target, "--host", "darwin-arm64", "--output", output, "--all"})
+				request, parseErr := cli.NewParser().Parse([]string{"ai4j", "build", "--target", test.target, "--host", "darwin-arm64", "--output", output, "--all"})
 				if parseErr != nil {
 					t.Fatal(parseErr)
 				}
@@ -102,7 +102,7 @@ func TestBuildUsesCodexAgentFilenameForOutputAndMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--bundle", "default"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--bundle", "default"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestBuildRejectsCrossPackageCodexAgentOutputCollisionBeforeStaging(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestWindowsBuildRendersWindowsHostProfile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := cli.NewParser("windows").Parse([]string{"ai4j.exe", "build", "--target", target, "--host", "windows-amd64", "--output", output, "--bundle", "default"})
+			request, err := cli.NewParser().Parse([]string{"ai4j.exe", "build", "--target", target, "--host", "windows-amd64", "--output", output, "--bundle", "default"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -216,7 +216,7 @@ func TestBuildRejectsNativeInvalidOutputBeforePublishing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", output, "--all"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", output, "--all"})
 	report := service.Build(context.Background(), request.(cli.BuildRequest))
 	_, statErr := os.Lstat(output)
 	if report.Failure != FailureValidation || len(report.Problems) != 1 || report.Problems[0].Code() != "native_validation_failed" || !os.IsNotExist(statErr) {
@@ -238,7 +238,7 @@ func TestBuildRefusesToOverwriteExistingOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
 	report := service.Build(context.Background(), request.(cli.BuildRequest))
 	content, readErr := os.ReadFile(marker)
 	if report.Failure != FailureConflict || len(report.Problems) != 1 || report.Problems[0].Code() != "output_occupied" || readErr != nil || string(content) != "unchanged" {
@@ -269,7 +269,7 @@ func TestBuildResolvesAssetsBundlesDependenciesAndNativeUnits(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "build")
 			arguments := []string{"ai4j", "build", "--target", test.target, "--host", "darwin-arm64", "--output", output}
 			arguments = append(arguments, test.selection...)
-			request, parseErr := cli.NewParser("darwin").Parse(arguments)
+			request, parseErr := cli.NewParser().Parse(arguments)
 			if parseErr != nil {
 				t.Fatal(parseErr)
 			}
@@ -292,7 +292,7 @@ func TestBuildResolvesAssetsBundlesDependenciesAndNativeUnits(t *testing.T) {
 func TestBuildRejectsUnknownAssetBeforePublishing(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "build")
 	service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: &fixtureRunner{files: firstPartyFiles(t)}, TempRoot: t.TempDir()})
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--asset", "missing-asset"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--asset", "missing-asset"})
 	report := service.Build(context.Background(), request.(cli.BuildRequest))
 	_, statErr := os.Lstat(output)
 	if report.Failure != FailureValidation || len(report.Problems) != 1 || report.Problems[0].Code() != "unknown_asset" || !os.IsNotExist(statErr) {
@@ -324,7 +324,7 @@ func TestBuildUsesReadOnlyDirtyLocalSnapshotAndMarksOutputNonReproducible(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--source", checkout, "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all", "--allow-dirty"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "build", "--source", checkout, "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all", "--allow-dirty"})
 	if err != nil {
 		t.Fatal(err)
 	}

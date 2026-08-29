@@ -10,18 +10,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/alx4j/ai4j/internal/domain"
-	"github.com/alx4j/ai4j/internal/lifecycle"
 	"github.com/alx4j/ai4j/internal/pathsafe"
+	"github.com/alx4j/ai4j/internal/source/git/protocol"
 	"github.com/alx4j/ai4j/internal/source/gitremote"
-)
-
-const (
-	configurationOutputLimit = 64 << 10
-	mutationOutputLimit      = 1 << 20
-	protocolOutputLimit      = 16 << 20
-	attributeOutputLimit     = 2 << 20
-	remoteOutputLimit        = 8 << 20
-	scalarOutputLimit        = 4 << 10
 )
 
 var closedCheckoutAttributes = []string{
@@ -31,14 +22,13 @@ var closedCheckoutAttributes = []string{
 // Command is a closed direct-Git invocation plan. It deliberately contains no
 // executable locator, shell command, working-directory path, or credential.
 type Command struct {
-	operation   Operation
-	arguments   []string
-	directory   WorkingDirectoryClass
-	grammar     OutputGrammar
-	timeout     time.Duration
-	outputLimit int64
-	auth        AuthenticationProjection
-	hasAuth     bool
+	operation Operation
+	arguments []string
+	directory WorkingDirectoryClass
+	grammar   OutputGrammar
+	timeout   time.Duration
+	auth      AuthenticationProjection
+	hasAuth   bool
 }
 
 func (c Command) Operation() Operation                    { return c.operation }
@@ -46,20 +36,13 @@ func (c Command) Arguments() []string                     { return append([]stri
 func (c Command) WorkingDirectory() WorkingDirectoryClass { return c.directory }
 func (c Command) OutputGrammar() OutputGrammar            { return c.grammar }
 func (c Command) TimeoutMaximum() time.Duration           { return c.timeout }
-func (c Command) OutputLimitBytes() int64                 { return c.outputLimit }
-func (c Command) TerminationGrace() time.Duration         { return TerminationGrace }
-func (c Command) EnvironmentProfile() lifecycle.ProcessEnvironmentProfileID {
-	return GitHardenedEnvironmentProfile()
-}
-func (c Command) Environment() []lifecycle.EnvironmentBinding { return GitHardenedEnvironment() }
 func (c Command) Authentication() (AuthenticationProjection, bool) {
 	return c.auth, c.hasAuth && c.auth.Valid()
 }
 
 func (c Command) Valid() bool {
 	if !c.operation.Valid() || len(c.arguments) == 0 || !c.directory.Valid() || !c.grammar.Valid() ||
-		c.timeout <= 0 || c.timeout > NetworkCommandTimeout || c.outputLimit <= 0 ||
-		c.outputLimit > protocolOutputLimit || c.hasAuth != c.auth.Valid() ||
+		c.timeout <= 0 || c.timeout > NetworkCommandTimeout || c.hasAuth != c.auth.Valid() ||
 		!c.hasAuth && c.auth != (AuthenticationProjection{}) || len(c.arguments) > MaximumCommandArguments ||
 		!commandShapeValid(c) {
 		return false
@@ -83,40 +66,35 @@ func commandShapeValid(c Command) bool {
 		directory WorkingDirectoryClass
 		grammar   OutputGrammar
 		timeout   time.Duration
-		limit     int64
 		auth      bool
 	}
 	var expected shape
 	switch c.operation {
 	case OperationInitialize:
-		expected = shape{WorkspaceRootDirectory, NoOutputGrammar, LocalCommandTimeout, mutationOutputLimit, false}
-	case OperationProbeExecPath:
-		expected = shape{WorkspaceRootDirectory, ScalarOutputGrammar, LocalCommandTimeout, scalarOutputLimit, false}
-	case OperationAuditConfig:
-		expected = shape{GitDirectory, ConfigOutputGrammar, LocalCommandTimeout, configurationOutputLimit, false}
+		expected = shape{WorkspaceRootDirectory, NoOutputGrammar, LocalCommandTimeout, false}
 	case OperationEnumerateRefs:
-		expected = shape{GitDirectory, RemoteOutputGrammar, NetworkCommandTimeout, remoteOutputLimit, true}
+		expected = shape{GitDirectory, RemoteOutputGrammar, NetworkCommandTimeout, true}
 	case OperationFetch:
-		expected = shape{GitDirectory, NoOutputGrammar, NetworkCommandTimeout, mutationOutputLimit, true}
+		expected = shape{GitDirectory, NoOutputGrammar, NetworkCommandTimeout, true}
 	case OperationObjectType, OperationPeelCommit, OperationCommitTree:
-		expected = shape{GitDirectory, ScalarOutputGrammar, LocalCommandTimeout, scalarOutputLimit, false}
+		expected = shape{GitDirectory, ScalarOutputGrammar, LocalCommandTimeout, false}
 	case OperationListTree:
-		expected = shape{GitDirectory, TreeOutputGrammar, NetworkCommandTimeout, protocolOutputLimit, false}
+		expected = shape{GitDirectory, TreeOutputGrammar, NetworkCommandTimeout, false}
 	case OperationReadTree, OperationCheckoutIndex, OperationCheckoutDetached:
-		expected = shape{GitDirectory, NoOutputGrammar, NetworkCommandTimeout, mutationOutputLimit, false}
+		expected = shape{GitDirectory, NoOutputGrammar, NetworkCommandTimeout, false}
 	case OperationCheckAttributes:
-		expected = shape{GitDirectory, AttributeOutputGrammar, NetworkCommandTimeout, attributeOutputLimit, false}
+		expected = shape{GitDirectory, AttributeOutputGrammar, NetworkCommandTimeout, false}
 	case OperationListIndex:
-		expected = shape{GitDirectory, IndexOutputGrammar, NetworkCommandTimeout, protocolOutputLimit, false}
+		expected = shape{GitDirectory, IndexOutputGrammar, NetworkCommandTimeout, false}
 	case OperationStatus:
-		expected = shape{GitDirectory, StatusOutputGrammar, NetworkCommandTimeout, protocolOutputLimit, false}
+		expected = shape{GitDirectory, StatusOutputGrammar, NetworkCommandTimeout, false}
 	case OperationIsAncestor:
-		expected = shape{GitDirectory, NoOutputGrammar, LocalCommandTimeout, scalarOutputLimit, false}
+		expected = shape{GitDirectory, NoOutputGrammar, LocalCommandTimeout, false}
 	default:
 		return false
 	}
 	return c.directory == expected.directory && c.grammar == expected.grammar && c.timeout == expected.timeout &&
-		c.outputLimit == expected.limit && c.hasAuth == expected.auth
+		c.hasAuth == expected.auth
 }
 
 func (Command) String() string   { return "<git-command:redacted>" }
@@ -131,20 +109,8 @@ func (Command) MarshalJSON() ([]byte, error) {
 
 func NewInitializeCommand() Command {
 	return buildCommand(OperationInitialize, WorkspaceRootDirectory, NoOutputGrammar,
-		LocalCommandTimeout, mutationOutputLimit, AuthenticationProjection{}, false,
+		LocalCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"init", "--quiet", "--template=", "--object-format=sha1", "--initial-branch=ai4j-unborn"})
-}
-
-func NewProbeExecPathCommand() Command {
-	return buildCommand(OperationProbeExecPath, WorkspaceRootDirectory, ScalarOutputGrammar,
-		LocalCommandTimeout, scalarOutputLimit, AuthenticationProjection{}, false,
-		[]string{"--exec-path"})
-}
-
-func NewConfigAuditCommand() Command {
-	return buildCommand(OperationAuditConfig, GitDirectory, ConfigOutputGrammar,
-		LocalCommandTimeout, configurationOutputLimit, AuthenticationProjection{}, false,
-		[]string{"config", "--local", "--null", "--list", "--no-includes", "--"})
 }
 
 func NewEnumerateReferencesCommand(
@@ -155,7 +121,7 @@ func NewEnumerateReferencesCommand(
 	if err != nil {
 		return Command{}, err
 	}
-	return buildNetworkCommand(OperationEnumerateRefs, RemoteOutputGrammar, remoteOutputLimit, auth,
+	return buildNetworkCommand(OperationEnumerateRefs, RemoteOutputGrammar, auth,
 		[]string{"ls-remote", "--quiet", "--symref", "--", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"}), nil
 }
 
@@ -175,7 +141,7 @@ func NewFetchCommand(
 	if !ok {
 		return Command{}, ErrExecutorContract
 	}
-	return buildNetworkCommand(OperationFetch, NoOutputGrammar, mutationOutputLimit, auth,
+	return buildNetworkCommand(OperationFetch, NoOutputGrammar, auth,
 		[]string{
 			"fetch", "--quiet", "--atomic", "--no-tags", "--no-recurse-submodules",
 			"--no-auto-maintenance", "--no-auto-gc", "--no-write-commit-graph", "--no-write-fetch-head",
@@ -188,7 +154,7 @@ func NewObjectTypeCommand(resolution ReferenceResolution) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationObjectType, GitDirectory, ScalarOutputGrammar,
-		LocalCommandTimeout, scalarOutputLimit, AuthenticationProjection{}, false,
+		LocalCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"cat-file", "-t", "--", resolution.SelectedObject().String()}), nil
 }
 
@@ -197,7 +163,7 @@ func NewPeelCommitCommand(selected SelectedObjectProof) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationPeelCommit, GitDirectory, ScalarOutputGrammar,
-		LocalCommandTimeout, scalarOutputLimit, AuthenticationProjection{}, false,
+		LocalCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"rev-parse", "--verify", "--end-of-options", selected.Object().String() + "^{commit}"}), nil
 }
 
@@ -206,7 +172,7 @@ func NewCommitTreeCommand(commit ProvenCommit) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationCommitTree, GitDirectory, ScalarOutputGrammar,
-		LocalCommandTimeout, scalarOutputLimit, AuthenticationProjection{}, false,
+		LocalCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"rev-parse", "--verify", "--end-of-options", commit.Commit().String() + "^{tree}"}), nil
 }
 
@@ -215,7 +181,7 @@ func NewListTreeCommand(proof CommitTreeProof) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationListTree, GitDirectory, TreeOutputGrammar,
-		NetworkCommandTimeout, protocolOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"ls-tree", "-r", "-z", "--full-tree", "--long", proof.Tree().String(), "--"}), nil
 }
 
@@ -224,7 +190,7 @@ func NewReadTreeCommand(plan MaterializationPlan) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationReadTree, GitDirectory, NoOutputGrammar,
-		NetworkCommandTimeout, mutationOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"read-tree", "--reset", "--no-sparse-checkout", plan.Commit().String()}), nil
 }
 
@@ -240,7 +206,7 @@ func NewCheckAttributesCommand(batch CheckoutAttributeBatch) (Command, error) {
 		arguments = append(arguments, path.String())
 	}
 	return buildCommand(OperationCheckAttributes, GitDirectory, AttributeOutputGrammar,
-		NetworkCommandTimeout, attributeOutputLimit, AuthenticationProjection{}, false, arguments), nil
+		NetworkCommandTimeout, AuthenticationProjection{}, false, arguments), nil
 }
 
 func NewCheckoutDetachedCommand(approval CheckoutApproval) (Command, error) {
@@ -249,7 +215,7 @@ func NewCheckoutDetachedCommand(approval CheckoutApproval) (Command, error) {
 	}
 	plan := approval.Plan()
 	return buildCommand(OperationCheckoutDetached, GitDirectory, NoOutputGrammar,
-		NetworkCommandTimeout, mutationOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"checkout", "--quiet", "--detach", "--no-recurse-submodules", "--no-overwrite-ignore", plan.Commit().String()}), nil
 }
 
@@ -258,19 +224,19 @@ func NewCheckoutIndexCommand(approval CheckoutApproval) (Command, error) {
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationCheckoutIndex, GitDirectory, NoOutputGrammar,
-		NetworkCommandTimeout, mutationOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"checkout-index", "--all"}), nil
 }
 
 func NewListIndexCommand() Command {
 	return buildCommand(OperationListIndex, GitDirectory, IndexOutputGrammar,
-		NetworkCommandTimeout, protocolOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"ls-files", "--cached", "--stage", "--full-name", "-z", "--"})
 }
 
 func NewStatusCommand() Command {
 	return buildCommand(OperationStatus, GitDirectory, StatusOutputGrammar,
-		NetworkCommandTimeout, protocolOutputLimit, AuthenticationProjection{}, false,
+		NetworkCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none", "--"})
 }
 
@@ -279,18 +245,17 @@ func NewIsAncestorCommand(ancestor, descendant domain.CommitOID) (Command, error
 		return Command{}, ErrExecutorContract
 	}
 	return buildCommand(OperationIsAncestor, GitDirectory, NoOutputGrammar,
-		LocalCommandTimeout, scalarOutputLimit, AuthenticationProjection{}, false,
+		LocalCommandTimeout, AuthenticationProjection{}, false,
 		[]string{"merge-base", "--is-ancestor", "--", ancestor.String(), descendant.String()}), nil
 }
 
 func buildNetworkCommand(
 	operation Operation,
 	grammar OutputGrammar,
-	outputLimit int64,
 	auth AuthenticationProjection,
 	tail []string,
 ) Command {
-	return buildCommand(operation, GitDirectory, grammar, NetworkCommandTimeout, outputLimit, auth, true, tail)
+	return buildCommand(operation, GitDirectory, grammar, NetworkCommandTimeout, auth, true, tail)
 }
 
 func buildCommand(
@@ -298,7 +263,6 @@ func buildCommand(
 	directory WorkingDirectoryClass,
 	grammar OutputGrammar,
 	timeout time.Duration,
-	outputLimit int64,
 	auth AuthenticationProjection,
 	hasAuth bool,
 	tail []string,
@@ -310,7 +274,7 @@ func buildCommand(
 	arguments = append(arguments, tail...)
 	return Command{
 		operation: operation, arguments: arguments, directory: directory, grammar: grammar,
-		timeout: timeout, outputLimit: outputLimit, auth: auth, hasAuth: hasAuth,
+		timeout: timeout, auth: auth, hasAuth: hasAuth,
 	}
 }
 
@@ -431,7 +395,7 @@ func attributeBatchBoundsFit(pathBytes, pathCount int) bool {
 	// accepted value vocabulary is bounded by "unspecified" (11 bytes).
 	worst := uint64(pathBytes)*uint64(len(closedCheckoutAttributes)) +
 		uint64(pathCount*len(closedCheckoutAttributes))*(1+32+1+11+1)
-	return worst < attributeOutputLimit
+	return worst < protocol.MaximumAttributeOutputBytes
 }
 
 func serializedArgumentBytes(arguments []string) (int, bool) {

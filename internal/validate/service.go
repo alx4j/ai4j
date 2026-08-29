@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 
-	"github.com/alx4j/ai4j/internal/buildinfo"
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/diskcapacity"
 	"github.com/alx4j/ai4j/internal/domain"
@@ -54,7 +52,7 @@ type Config struct {
 	Home        string
 	ClaudeRoot  string
 	BuildCommit string
-	Runner      ProcessRunner
+	Runner      processRunner
 	TempRoot    string
 	Capacity    func(string, uint64) error
 }
@@ -70,14 +68,6 @@ type acquisition struct {
 }
 
 func (a acquisition) local() bool { return a.checkout != "" }
-
-func NewProductionService(build buildinfo.Info) Service {
-	home, _ := os.UserHomeDir()
-	return Service{config: Config{
-		GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, Home: home, ClaudeRoot: filepath.Join(home, ".claude"),
-		BuildCommit: build.Revision(), Runner: OSProcessRunner{}, Capacity: diskcapacity.Require,
-	}}
-}
 
 func NewService(config Config) (Service, error) {
 	if config.GOOS == "" || config.GOARCH == "" || config.Home == "" || config.BuildCommit == "" || config.Runner == nil {
@@ -116,37 +106,34 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	if problem := s.preflight(ctx); problem != nil {
 		return Report{Problems: []result.Problem{*problem}, Failure: FailureEnvironment}
 	}
-	operationContext, cancelOperation := context.WithTimeout(ctx, gitsource.AggregateOperationTimeout)
-	defer cancelOperation()
-	operationWorkspace, err := workspace.Create(s.config.TempRoot, workspace.ValidateSource)
-	if err != nil {
-		return failureReport(FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
-	}
-	workspacePath := operationWorkspace.Path()
+	session, err := s.openSource(ctx, gitsource.AggregateOperationTimeout, workspace.ValidateSource, options)
 	defer func() {
-		if err := operationWorkspace.Close(); err != nil {
+		if err := session.Close(); err != nil {
 			report = failureReport(FailureEnvironment, "workspace_cleanup_failed", "temporary source workspace could not be removed")
 		}
 	}()
-
-	acquired, err := s.acquireOptions(operationContext, workspacePath, options)
 	if err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionWorkspace {
+			return failureReport(FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
+		}
 		if code, message, ok := diskCapacityProblem(err); ok {
 			return failureReport(FailureEnvironment, code, message)
 		}
 		return failureReport(FailureSource, localSourceErrorCode(err), localSourceErrorMessage(err))
 	}
 	if inspect != nil {
-		if acquired.local() {
+		if session.acquisition.local() {
 			return failureReport(FailureSource, "source_history_unavailable", "local development sources do not have a remote Git update history")
 		}
-		if err := inspect(operationContext, workspacePath, acquired); err != nil {
+		if err := inspect(session.operationContext, session.workspacePath, session.acquisition); err != nil {
 			return failureReport(FailureSource, "source_history_unavailable", "Git source history could not be evaluated")
 		}
 	}
-	validated, err := validatePackage(workspacePath, acquired.inventory)
-	if err != nil {
-		source, sourceErr := s.newCLISource(acquired, treeDigest(acquired.inventory.Tree()))
+	if err := s.completeSource(session); err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionConstruction {
+			return failureReport(FailureInternal, "internal_error", "validation result could not be constructed")
+		}
+		source, sourceErr := s.newCLISource(session.acquisition, treeDigest(session.acquisition.inventory.Tree()))
 		if sourceErr != nil {
 			return failureReport(FailureInternal, "internal_error", "validation result could not be constructed")
 		}
@@ -154,10 +141,10 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 		problem, _ := result.NewProblem(code, message, nil)
 		return Report{Source: source, Problems: []result.Problem{problem}, Failure: FailureValidation}
 	}
-	source, err := s.newCLISource(acquired, validated.digest)
-	if err != nil {
-		return failureReport(FailureInternal, "internal_error", "validation result could not be constructed")
-	}
+	operationContext := session.operationContext
+	workspacePath := session.workspacePath
+	validated := session.validated
+	source := session.source
 	resolved, selectionErr := resolveSelection(validated.model, selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), all: true})
 	if selectionErr != nil {
 		code, message := packageProblem(selectionErr)
@@ -222,7 +209,7 @@ func (s Service) updateDisposition(ctx context.Context, workspace string, instal
 	}
 	commandContext, cancel := context.WithTimeout(ctx, command.TimeoutMaximum())
 	defer cancel()
-	observation, runErr := s.config.Runner.Run(commandContext, filepath.Join(workspace, ".git"), gitExecutable, command.Arguments(), gitEnvironment())
+	observation, runErr := s.config.Runner.RunIsolated(commandContext, filepath.Join(workspace, ".git"), gitExecutable, command.Arguments(), gitEnvironment())
 	if runErr != nil {
 		return gitsource.UpdateSourceError, runErr
 	}
@@ -277,7 +264,7 @@ func (s Service) preflight(ctx context.Context) *result.Problem {
 		problem, _ := result.NewProblem("claude_not_found", "Claude Code executable is required", nil)
 		return &problem
 	}
-	if !s.probeExecutable(ctx, gitExecutable, gitEnvironment()) {
+	if !s.probeGitExecutable(ctx, gitExecutable) {
 		problem, _ := result.NewProblem("git_unusable", "Git version probe failed", nil)
 		return &problem
 	}
@@ -312,6 +299,13 @@ func (s Service) probeExecutable(ctx context.Context, executable string, environ
 	probeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	observation, err := s.config.Runner.Run(probeContext, "", executable, []string{"--version"}, environment)
+	return err == nil && observation.ExitCode == 0 && len(observation.Stdout) != 0 && len(observation.Stderr) == 0
+}
+
+func (s Service) probeGitExecutable(ctx context.Context, executable string) bool {
+	probeContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	observation, err := s.config.Runner.RunIsolated(probeContext, "", executable, []string{"--version"}, gitEnvironment())
 	return err == nil && observation.ExitCode == 0 && len(observation.Stdout) != 0 && len(observation.Stderr) == 0
 }
 
@@ -546,7 +540,7 @@ func (s Service) runGit(ctx context.Context, executable, directory string, comma
 	if _, authenticated := command.Authentication(); authenticated {
 		environment = gitAuthenticatedEnvironment()
 	}
-	result, err := s.config.Runner.Run(commandContext, directory, executable, command.Arguments(), environment)
+	result, err := s.config.Runner.RunIsolated(commandContext, directory, executable, command.Arguments(), environment)
 	if err != nil || result.ExitCode != 0 || len(result.Stderr) != 0 && command.OutputGrammar() != gitsource.NoOutputGrammar {
 		return nil, fmt.Errorf("Git operation %s failed", command.Operation())
 	}
@@ -554,19 +548,11 @@ func (s Service) runGit(ctx context.Context, executable, directory string, comma
 }
 
 func gitEnvironment() []string {
-	return []string{
-		"GIT_ATTR_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_LFS_SKIP_SMUDGE=1", "GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0",
-		"GIT_TERMINAL_PROMPT=0", "LANG=C", "LC_ALL=C",
-	}
+	return gitsource.RestrictedProcessEnvironment(os.Environ())
 }
 
 func gitAuthenticatedEnvironment() []string {
-	return []string{
-		"GIT_ATTR_NOSYSTEM=1", "GIT_LFS_SKIP_SMUDGE=1",
-		"GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0", "GIT_TERMINAL_PROMPT=0",
-		"LANG=C", "LC_ALL=C",
-	}
+	return gitsource.AuthenticatedProcessEnvironment(os.Environ())
 }
 
 func claudeEnvironment() []string {

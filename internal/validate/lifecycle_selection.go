@@ -72,34 +72,32 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 	if problem := s.preflight(ctx); problem != nil {
 		return lifecycleSelectionFailure(FailureEnvironment, problem.Code(), problem.Message())
 	}
-	operationContext, cancelOperation := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancelOperation()
-	operationWorkspace, err := workspace.Create(s.config.TempRoot, workspace.Lifecycle)
-	if err != nil {
-		return lifecycleSelectionFailure(FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
-	}
-	workspacePath := operationWorkspace.Path()
+	session, err := s.openSource(ctx, 5*time.Minute, workspace.Lifecycle, options)
 	defer func() {
-		if err := operationWorkspace.Close(); err != nil && len(report.Problems) == 0 {
+		if err := session.Close(); err != nil && len(report.Problems) == 0 {
 			report = lifecycleSelectionFailure(FailureEnvironment, "workspace_cleanup_failed", "temporary source workspace could not be removed")
 		}
 	}()
-	acquired, err := s.acquireOptions(operationContext, workspacePath, options)
 	if err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionWorkspace {
+			return lifecycleSelectionFailure(FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
+		}
 		if code, message, ok := diskCapacityProblem(err); ok {
 			return lifecycleSelectionFailure(FailureEnvironment, code, message)
 		}
 		return lifecycleSelectionFailure(FailureSource, localSourceErrorCode(err), localSourceErrorMessage(err))
 	}
-	validated, err := validatePackage(workspacePath, acquired.inventory)
-	if err != nil {
+	if err := s.completeSource(session); err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionConstruction {
+			return lifecycleSelectionFailure(FailureInternal, "internal_error", "lifecycle selection could not be constructed")
+		}
 		code, message := packageProblem(err)
 		return lifecycleSelectionFailure(FailureValidation, code, message)
 	}
-	source, err := s.newCLISource(acquired, validated.digest)
-	if err != nil {
-		return lifecycleSelectionFailure(FailureInternal, "internal_error", "lifecycle selection could not be constructed")
-	}
+	operationContext := session.operationContext
+	workspacePath := session.workspacePath
+	validated := session.validated
+	source := session.source
 	request := selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), bundles: []string{bundleID}}
 	resolved, err := resolveCanonicalSelection(validated.model, request)
 	if err != nil {

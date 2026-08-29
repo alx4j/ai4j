@@ -103,9 +103,18 @@ func (s *lifecycleService) prepareCompositionInstall(ctx context.Context, rootVa
 		}
 	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
+	transition, err := newPreparedTransition(before, &desired, preparedTransitionMaterial{
+		projectSettingsBefore: catalogBefore,
+		desiredTarget:         catalogBytes,
+		desiredRules:          report.Rules,
+		retainedBefore:        beforeArtifacts,
+		desiredArtifacts:      retainedArtifacts(report),
+	})
+	if err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "composition plan could not be created")
+	}
 	return lifecycleExecution{
-		operation: cli.OperationInstall, source: report, before: before, desired: &desired, beforeArtifacts: beforeArtifacts,
-		catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifacts: retainedArtifacts(report), actions: actions,
+		operation: cli.OperationInstall, source: report, transition: transition, actions: actions,
 		content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked,
 	}, cli.Response{}, false, nil
 }
@@ -199,33 +208,6 @@ func (s *lifecycleService) prepareCompositionUpdate(ctx context.Context, record 
 	if requested.HasRepository() || requested.HasReference() || requested.HasCheckout() || requested.AllowDirty() {
 		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "composition_source_change_unsupported", "composition sources are changed by reinstalling the complete coordinate set")
 	}
-	for _, component := range record.Components {
-		remote, err := storedSourceRemote(component.Source)
-		if err != nil {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_state_invalid", "a stored composition source is invalid")
-		}
-		options, err := cli.NewSourceOptions(remote.Endpoint(), true, "refs/tags/"+component.Tag, true)
-		if err != nil {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_state_invalid", "a stored composition coordinate is invalid")
-		}
-		installed, err := domain.NewCommitOID(component.Source.Commit)
-		if err != nil {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "installation_state_invalid", "a stored composition commit is invalid")
-		}
-		update := s.validation.ValidateUpdate(ctx, options, installed)
-		if len(update.Report.Problems) != 0 {
-			for index, problem := range update.Report.Problems {
-				update.Report.Problems[index] = annotateCompositionProblem(problem, component.Name)
-			}
-			return stopValidation(cli.CommandUpdate, update.Report)
-		}
-		if !update.Report.HasSource() {
-			return stopLifecycle(cli.CommandUpdate, result.FailureSource, "update_source_failed", "component "+component.Name+" could not be checked")
-		}
-		if update.Report.Source.Commit().OID() != installed {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "ref_rewritten", "the recorded tag for component "+component.Name+" now resolves to a different commit")
-		}
-	}
 	report := s.selectRecordedComposition(ctx, record)
 	if len(report.Problems) != 0 || len(report.Components) == 0 {
 		return stopSelection(cli.CommandUpdate, report)
@@ -236,6 +218,6 @@ func (s *lifecycleService) prepareCompositionUpdate(ctx context.Context, record 
 
 func installationIDForComposition(scope cli.Scope, scopeRoot string) domain.InstallationID {
 	digest := sha256.Sum256([]byte(strings.Join([]string{"composition", string(scope), filepath.Clean(scopeRoot)}, "\x00")))
-	id, _ := domain.NewInstallationID("install-" + hex.EncodeToString(digest[:8]))
+	id, _ := domain.NewInstallationID(hex.EncodeToString(digest[:4]))
 	return id
 }

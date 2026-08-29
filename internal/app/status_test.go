@@ -34,7 +34,7 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	}
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
 	service := statusService{validation: validator, state: store, home: home}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "list", "--target", "claude", "--scope", "user", "--json"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "list", "--target", "claude", "--scope", "user", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	if exit, err := jsonout.Render(&output, response); err != nil || exit != result.ExitSuccess || !strings.Contains(output.String(), `"installationId":"installation-002"`) {
 		t.Fatalf("list JSON exit=%d error=%v output=%s", exit, err, output.String())
 	}
-	selectedRequest, err := cli.NewParser("darwin").Parse([]string{"ai4j", "status", "installation-002"})
+	selectedRequest, err := cli.NewParser().Parse([]string{"ai4j", "status", "installation-002"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func (s *statusValidationStub) SelectLifecycle(context.Context, cli.SourceOption
 
 func statusRequest(t *testing.T) cli.StatusRequest {
 	t.Helper()
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "status", "installation-001"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "status", "installation-001"})
 	if err != nil {
 		t.Fatal(err)
 	}

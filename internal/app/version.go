@@ -41,16 +41,16 @@ func (h versionHandler) versionData() (cli.VersionData, error) {
 	if err != nil {
 		return cli.VersionData{}, err
 	}
-	return cli.NewVersionData(
-		h.build.Product(),
-		h.build.Executable(),
-		h.build.Version(),
-		repository,
-		commit,
-		h.build.GoVersion(),
-		h.build.BuildTime(),
-		h.build.TargetOS(),
-		h.build.TargetArch(),
-		h.defaultSource,
-	)
+	return cli.NewVersionData(cli.VersionDataInput{
+		Product:       h.build.Product(),
+		Executable:    h.build.Executable(),
+		Version:       h.build.Version(),
+		Repository:    repository,
+		Commit:        commit,
+		GoVersion:     h.build.GoVersion(),
+		BuildTime:     h.build.BuildTime(),
+		TargetOS:      h.build.TargetOS(),
+		TargetArch:    h.build.TargetArch(),
+		DefaultSource: h.defaultSource,
+	})
 }

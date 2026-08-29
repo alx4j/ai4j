@@ -29,11 +29,12 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err != nil {
 		return lifecycleFailure(command, result.FailureInternal, "operation_id_unavailable", "operation could not be prepared", execution.disposition, execution.source.Warnings)
 	}
-	installationID := recordInstallation(execution.before, execution.desired)
+	transition := execution.transition
+	installationID := recordInstallation(transition.before, transition.desired)
 	if installationID == nil {
 		return cli.Response{}, errors.New("operation installation identity is unavailable")
 	}
-	desired := cloneRecordPtr(execution.desired)
+	desired := cloneRecordPtr(transition.desired)
 	if desired == nil {
 		return cli.Response{}, errors.New("operation desired state is unavailable")
 	}
@@ -42,19 +43,23 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if len(execution.degradedConflicts) != 0 && policy == cli.ConflictKeep {
 		desired.Health = "drifted"
 	}
-	beforeCatalog, beforeRules, err := s.captureOwned(execution.before)
+	transition = transition.withDesired(desired)
+	if err := transition.validate(); err != nil {
+		return cli.Response{}, err
+	}
+	beforeCatalog, beforeRules, err := s.captureOwned(transition.before)
 	if err != nil {
 		return lifecycleFailure(command, result.FailureConflict, "rollback_capture_failed", "owned rollback material could not be captured", execution.disposition, execution.source.Warnings)
 	}
-	if execution.desired.Scope == "project-shared" {
-		beforeCatalog = projectSharedOwnedEntry(execution.before)
+	if desired.Scope == "project-shared" {
+		beforeCatalog = projectSharedOwnedEntry(transition.before)
 	}
-	afterCatalog, afterRules := execution.catalog, execution.rules
-	beforeArtifacts := s.currentArtifacts(execution.before)
+	afterCatalog, afterRules := transition.desiredTarget, transition.desiredRules
+	beforeArtifacts := s.currentArtifacts(transition.before)
 	if len(beforeArtifacts) == 0 {
-		beforeArtifacts = cloneNativeArtifacts(execution.beforeArtifacts)
+		beforeArtifacts = cloneNativeArtifacts(transition.retainedBeforeArtifacts)
 	}
-	afterArtifacts := cloneNativeArtifacts(execution.artifacts)
+	afterArtifacts := cloneNativeArtifacts(transition.desiredArtifacts)
 	if desired.Lifecycle == "archived" {
 		afterCatalog = nil
 		afterRules = nil
@@ -63,28 +68,28 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if desired.Scope == "project-shared" {
 		afterCatalog = projectSharedOwnedEntry(desired)
 	}
-	restorable := !execution.nonRestorable
+	restorable := !transition.nonRestorable
 	if !restorable {
 		beforeArtifacts = nil
 	}
-	if (restorable && execution.before != nil && execution.before.Lifecycle == "active" && len(beforeArtifacts) == 0) || (desired.Lifecycle == "active" && len(afterArtifacts) == 0) {
+	if (restorable && transition.before != nil && transition.before.Lifecycle == "active" && len(beforeArtifacts) == 0) || (desired.Lifecycle == "active" && len(afterArtifacts) == 0) {
 		return lifecycleFailure(command, result.FailureConflict, "rollback_artifact_unavailable", "exact native rollback material is unavailable", execution.disposition, execution.source.Warnings)
 	}
-	if err := s.preflightProjectSharedTransition(execution.before, desired, policy); err != nil {
+	if err := s.preflightProjectSharedTransition(transition.before, desired, policy); err != nil {
 		return lifecycleFailure(command, result.FailureConflict, "target_preflight_failed", "project-shared owned state changed before mutation", execution.disposition, execution.source.Warnings)
 	}
-	entry := installstate.HistoryEntry{SchemaVersion: installstate.HistorySchemaVersion, Operation: execution.operation.String(), OperationID: operationID.String(), InstallationID: installationID.String(), Timestamp: desired.LastOperation.Timestamp, Restorable: restorable, Before: cloneRecordPtr(execution.before), After: cloneRecordPtr(desired), CatalogBefore: beforeCatalog, RulesBefore: beforeRules, CatalogAfter: slices.Clone(afterCatalog), RulesAfter: slices.Clone(afterRules), NativeArtifactsBefore: beforeArtifacts, NativeArtifactsAfter: afterArtifacts}
+	entry := installstate.HistoryEntry{SchemaVersion: installstate.HistorySchemaVersion, Operation: execution.operation.String(), OperationID: operationID.String(), InstallationID: installationID.String(), Timestamp: desired.LastOperation.Timestamp, Restorable: restorable, Before: cloneRecordPtr(transition.before), After: cloneRecordPtr(desired), CatalogBefore: beforeCatalog, RulesBefore: beforeRules, CatalogAfter: slices.Clone(afterCatalog), RulesAfter: slices.Clone(afterRules), NativeArtifactsBefore: beforeArtifacts, NativeArtifactsAfter: afterArtifacts}
 	resources := []string{"history:" + installationID.String(), "owned:state/installation.json"}
-	if execution.before != nil {
-		resources = append(resources, execution.before.NativeResources...)
-		if execution.before.Catalog.Path != "" {
-			resources = append(resources, "owned:"+execution.before.Catalog.Path)
+	if transition.before != nil {
+		resources = append(resources, transition.before.NativeResources...)
+		if transition.before.Catalog.Path != "" {
+			resources = append(resources, "owned:"+transition.before.Catalog.Path)
 		}
-		if execution.before.NativeCatalog.Path != "" {
-			resources = append(resources, "owned:"+execution.before.NativeCatalog.Path)
+		if transition.before.NativeCatalog.Path != "" {
+			resources = append(resources, "owned:"+transition.before.NativeCatalog.Path)
 		}
-		if execution.before.Rules.Path != "" {
-			resources = append(resources, "owned:"+execution.before.Rules.Path)
+		if transition.before.Rules.Path != "" {
+			resources = append(resources, "owned:"+transition.before.Rules.Path)
 		}
 	}
 	resources = append(resources, desired.NativeResources...)
@@ -102,17 +107,17 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err != nil {
 		return lifecycleFailure(command, result.FailureInternal, "operation_marker_failed", "operation could not be prepared", execution.disposition, execution.source.Warnings)
 	}
-	reportProgress(commandIO, "checking available disk space...")
-	if err := s.preflightExecutionCapacity(marker, entry, desired, execution.catalog, execution.rules, execution.artifacts); err != nil {
+	reportProgress(commandIO, "disk_preflight", "checking available disk space...")
+	if err := s.preflightExecutionCapacity(marker, entry, desired, transition.desiredTarget, transition.desiredRules, transition.desiredArtifacts); err != nil {
 		if code, message, ok := appDiskCapacityProblem(err); ok {
 			return lifecycleFailure(command, result.FailureEnvironment, code, message, execution.disposition, execution.source.Warnings)
 		}
 		return lifecycleFailure(command, result.FailureInternal, "operation_preflight_failed", "operation storage requirements could not be verified", execution.disposition, execution.source.Warnings)
 	}
-	if err := s.preflightCatalogDestination(execution.before, *desired, execution.catalog, execution.artifacts); err != nil {
+	if err := s.preflightCatalogDestination(transition.before, *desired, transition.desiredTarget, transition.desiredArtifacts); err != nil {
 		return lifecycleFailure(command, result.FailureConflict, "catalog_destination_changed", "the catalog destination is occupied, unsafe, or no longer matches retained content", execution.disposition, execution.source.Warnings)
 	}
-	if err := s.preflightOwnedTransition(execution.before, desired, policy); err != nil {
+	if err := s.preflightOwnedTransition(transition.before, desired, policy); err != nil {
 		return lifecycleFailure(command, result.FailureConflict, "target_preflight_failed", "installation-owned state changed before mutation", execution.disposition, execution.source.Warnings)
 	}
 	if err := s.state.StageHistory(entry); err != nil {
@@ -122,14 +127,14 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 		_ = s.state.DeleteHistory(installationID.String(), []string{operationID.String()})
 		return lifecycleFailure(command, result.FailureInternal, "operation_marker_failed", "operation could not be prepared", execution.disposition, execution.source.Warnings)
 	}
-	if err := s.applyTransition(ctx, execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, policy, execution.rollback != nil); err != nil {
+	if err := s.applyTransition(ctx, transition, policy); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_mutation_failed")
 	}
-	reportProgress(commandIO, "verifying the final installation state...")
-	if err := s.verifyTransition(ctx, *desired, execution.before); err != nil {
+	reportProgress(commandIO, "verify", "verifying the final installation state...")
+	if err := s.verifyTransition(ctx, *desired, transition.before); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_verification_failed")
 	}
-	if execution.before == nil {
+	if transition.before == nil {
 		err = s.state.SaveNew(*desired)
 	} else {
 		err = s.state.Save(*desired)
@@ -210,113 +215,118 @@ func (s *lifecycleService) preflightExecutionCapacity(marker installstate.Marker
 	return nil
 }
 
-func (s *lifecycleService) applyTransition(ctx context.Context, before *installstate.Record, desired *installstate.Record, catalogBefore, catalogBytes, rulesBytes []byte, artifacts []installstate.NativeArtifact, policy cli.ConflictPolicy, rollback bool) error {
-	if desired.Scope == "project-shared" {
-		return s.applyProjectSharedTransition(ctx, before, desired, catalogBefore, rulesBytes, policy)
+func (s *lifecycleService) applyTransition(ctx context.Context, transition preparedTransition, policy cli.ConflictPolicy) error {
+	if err := transition.validate(); err != nil {
+		return err
 	}
-	if desired.Lifecycle == "archived" {
-		if before == nil || before.Lifecycle != "active" {
-			return nil
-		}
-		for _, pluginID := range nativePluginIDs(*before) {
-			if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", pluginID, "--scope", nativeScope(*before), "--keep-data"}); err != nil {
-				return err
-			}
-		}
-		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil {
-			return err
-		}
-		if err := mutateOwned(s.ownedRoot(s.catalogPath(*before)), s.catalogPath(*before), before.Catalog.Checksum, nil, policy); err != nil {
-			return err
-		}
-		if before.Rules != (installstate.OwnedFile{}) {
-			if err := mutateOwned(s.ownedRoot(s.rulesPath(*before)), s.rulesPath(*before), before.Rules.Checksum, nil, policy); err != nil {
-				return err
-			}
-		}
-		if err := s.removeProjectLocalExclusion(ctx, *before); err != nil {
-			return err
-		}
+	switch {
+	case transition.desired.Scope == "project-shared":
+		return s.applyProjectSharedTransition(ctx, transition.before, transition.desired, transition.projectSettingsBefore, transition.desiredRules, policy)
+	case transition.desired.Lifecycle == "archived":
+		return s.applyArchiveTransition(ctx, transition.before, policy)
+	case transition.rollback:
+		return s.applyRollbackTransition(ctx, transition, policy)
+	case transition.before == nil || transition.before.Lifecycle == "archived":
+		return s.applyActivationTransition(ctx, transition.desired, transition.desiredTarget, transition.desiredRules, transition.desiredArtifacts)
+	case transition.before.Catalog.Path != transition.desired.Catalog.Path:
+		return s.applyCatalogMoveTransition(ctx, transition.before, transition.desired, transition.desiredTarget, transition.desiredRules, transition.desiredArtifacts, policy)
+	default:
+		return s.applyInPlaceTransition(ctx, transition.before, transition.desired, transition.desiredTarget, transition.desiredRules, policy)
+	}
+}
+
+func (s *lifecycleService) applyArchiveTransition(ctx context.Context, before *installstate.Record, policy cli.ConflictPolicy) error {
+	if before == nil || before.Lifecycle != "active" {
 		return nil
 	}
-	if before == nil || before.Lifecycle == "archived" {
-		if rollback {
-			return s.restoreArtifacts(ctx, before, desired, catalogBytes, rulesBytes, artifacts, policy)
-		}
-		if err := s.addProjectLocalExclusion(ctx, *desired); err != nil {
+	for _, pluginID := range nativePluginIDs(*before) {
+		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", pluginID, "--scope", nativeScope(*before), "--keep-data"}); err != nil {
 			return err
-		}
-		if desired.Source.Mode == "development_source" {
-			if err := s.writeLocalBundle(*desired, catalogBytes, artifacts); err != nil {
-				return err
-			}
-		} else {
-			if err := writeOwnedNew(s.ownedRoot(s.catalogPath(*desired)), s.catalogPath(*desired), catalogBytes); err != nil {
-				return err
-			}
-		}
-		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", filepath.Dir(filepath.Dir(s.catalogPath(*desired))), "--scope", nativeScope(*desired)}); err != nil {
-			return err
-		}
-		for _, pluginID := range nativePluginIDs(*desired) {
-			if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", pluginID, "--scope", nativeScope(*desired)}); err != nil {
-				return err
-			}
-		}
-		if desired.Rules != (installstate.OwnedFile{}) {
-			return writeOwnedNew(s.ownedRoot(s.rulesPath(*desired)), s.rulesPath(*desired), rulesBytes)
-		}
-		return nil
-	}
-	if rollback {
-		return s.restoreArtifacts(ctx, before, desired, catalogBytes, rulesBytes, artifacts, policy)
-	}
-	var exclusionErr error
-	if before == nil || before.Lifecycle == "archived" || before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}) {
-		exclusionErr = s.addProjectLocalExclusion(ctx, *desired)
-	} else if desired.Rules != (installstate.OwnedFile{}) {
-		exclusionErr = s.ensureProjectLocalExclusion(ctx, *desired)
-	}
-	if exclusionErr != nil {
-		return exclusionErr
-	}
-	catalogPathChanged := before.Catalog.Path != desired.Catalog.Path
-	if catalogPathChanged {
-		if err := s.preflightCatalogDestination(before, *desired, catalogBytes, artifacts); err != nil {
-			return err
-		}
-		if desired.Source.Mode == "development_source" {
-			if err := s.writeLocalBundle(*desired, catalogBytes, artifacts); err != nil {
-				return err
-			}
-		}
-		for _, pkg := range before.Packages {
-			if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(pkg, before.MarketplaceID), "--scope", nativeScope(*before), "--keep-data"}); err != nil {
-				return err
-			}
-		}
-		if desired.Source.Mode != "development_source" {
-			if err := writeOwnedNew(s.ownedRoot(s.catalogPath(*desired)), s.catalogPath(*desired), catalogBytes); err != nil {
-				return err
-			}
-		}
-		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil {
-			return err
-		}
-		if err := mutateOwned(s.ownedRoot(s.catalogPath(*before)), s.catalogPath(*before), before.Catalog.Checksum, nil, policy); err != nil {
-			return err
-		}
-		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", filepath.Dir(filepath.Dir(s.catalogPath(*desired))), "--scope", nativeScope(*desired)}); err != nil {
-			return err
-		}
-		for _, pluginID := range nativePluginIDs(*desired) {
-			if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", pluginID, "--scope", nativeScope(*desired)}); err != nil {
-				return err
-			}
 		}
 	}
-	catalogChanged := catalogTransitionNeeded(s, *before, *desired)
-	if catalogChanged && !catalogPathChanged {
+	if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil {
+		return err
+	}
+	if err := mutateOwned(s.ownedRoot(s.catalogPath(*before)), s.catalogPath(*before), before.Catalog.Checksum, nil, policy); err != nil {
+		return err
+	}
+	if before.Rules != (installstate.OwnedFile{}) {
+		if err := mutateOwned(s.ownedRoot(s.rulesPath(*before)), s.rulesPath(*before), before.Rules.Checksum, nil, policy); err != nil {
+			return err
+		}
+	}
+	return s.removeProjectLocalExclusion(ctx, *before)
+}
+
+func (s *lifecycleService) applyActivationTransition(ctx context.Context, desired *installstate.Record, catalogBytes, rulesBytes []byte, artifacts []installstate.NativeArtifact) error {
+	if err := s.addProjectLocalExclusion(ctx, *desired); err != nil {
+		return err
+	}
+	if desired.Source.Mode == "development_source" {
+		if err := s.writeLocalBundle(*desired, catalogBytes, artifacts); err != nil {
+			return err
+		}
+	} else if err := writeOwnedNew(s.ownedRoot(s.catalogPath(*desired)), s.catalogPath(*desired), catalogBytes); err != nil {
+		return err
+	}
+	if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", filepath.Dir(filepath.Dir(s.catalogPath(*desired))), "--scope", nativeScope(*desired)}); err != nil {
+		return err
+	}
+	for _, pluginID := range nativePluginIDs(*desired) {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", pluginID, "--scope", nativeScope(*desired)}); err != nil {
+			return err
+		}
+	}
+	if desired.Rules != (installstate.OwnedFile{}) {
+		return writeOwnedNew(s.ownedRoot(s.rulesPath(*desired)), s.rulesPath(*desired), rulesBytes)
+	}
+	return nil
+}
+
+func (s *lifecycleService) applyCatalogMoveTransition(ctx context.Context, before, desired *installstate.Record, catalogBytes, rulesBytes []byte, artifacts []installstate.NativeArtifact, policy cli.ConflictPolicy) error {
+	if err := s.ensureActiveTransitionExclusion(ctx, *before, *desired); err != nil {
+		return err
+	}
+	if err := s.preflightCatalogDestination(before, *desired, catalogBytes, artifacts); err != nil {
+		return err
+	}
+	if desired.Source.Mode == "development_source" {
+		if err := s.writeLocalBundle(*desired, catalogBytes, artifacts); err != nil {
+			return err
+		}
+	}
+	for _, pkg := range before.Packages {
+		if err := s.runClaudeFor(ctx, *before, []string{"plugin", "uninstall", nativePluginID(pkg, before.MarketplaceID), "--scope", nativeScope(*before), "--keep-data"}); err != nil {
+			return err
+		}
+	}
+	if desired.Source.Mode != "development_source" {
+		if err := writeOwnedNew(s.ownedRoot(s.catalogPath(*desired)), s.catalogPath(*desired), catalogBytes); err != nil {
+			return err
+		}
+	}
+	if err := s.runClaudeFor(ctx, *before, []string{"plugin", "marketplace", "remove", before.MarketplaceID, "--scope", nativeScope(*before)}); err != nil {
+		return err
+	}
+	if err := mutateOwned(s.ownedRoot(s.catalogPath(*before)), s.catalogPath(*before), before.Catalog.Checksum, nil, policy); err != nil {
+		return err
+	}
+	if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "marketplace", "add", filepath.Dir(filepath.Dir(s.catalogPath(*desired))), "--scope", nativeScope(*desired)}); err != nil {
+		return err
+	}
+	for _, pluginID := range nativePluginIDs(*desired) {
+		if err := s.runClaudeFor(ctx, *desired, []string{"plugin", "install", pluginID, "--scope", nativeScope(*desired)}); err != nil {
+			return err
+		}
+	}
+	return s.applyRulesTransition(ctx, *before, *desired, rulesBytes, policy)
+}
+
+func (s *lifecycleService) applyInPlaceTransition(ctx context.Context, before, desired *installstate.Record, catalogBytes, rulesBytes []byte, policy cli.ConflictPolicy) error {
+	if err := s.ensureActiveTransitionExclusion(ctx, *before, *desired); err != nil {
+		return err
+	}
+	if catalogTransitionNeeded(s, *before, *desired) {
 		if policy == cli.ConflictKeep && inspectFileDrift(s.catalogPath(*before), before.Catalog.Checksum) != cli.DriftUnchanged {
 			return errors.New("catalog drift is preserved by conflict policy")
 		}
@@ -339,30 +349,38 @@ func (s *lifecycleService) applyTransition(ctx context.Context, before *installs
 			}
 		}
 	}
-	switch {
-	case before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}):
-		if err := writeOwnedNew(s.ownedRoot(s.rulesPath(*desired)), s.rulesPath(*desired), rulesBytes); err != nil {
-			return err
-		}
-	case before.Rules != (installstate.OwnedFile{}) && desired.Rules == (installstate.OwnedFile{}):
-		if err := mutateOwned(s.ownedRoot(s.rulesPath(*before)), s.rulesPath(*before), before.Rules.Checksum, nil, policy); err != nil {
-			return err
-		}
-		if err := s.removeProjectLocalExclusion(ctx, *before); err != nil {
-			return err
-		}
-	case before.Rules != (installstate.OwnedFile{}) && (before.Rules.Checksum != desired.Rules.Checksum || inspectFileDrift(s.rulesPath(*before), before.Rules.Checksum) != cli.DriftUnchanged):
-		if err := mutateOwned(s.ownedRoot(s.rulesPath(*before)), s.rulesPath(*before), before.Rules.Checksum, rulesBytes, policy); err != nil {
-			return err
-		}
+	return s.applyRulesTransition(ctx, *before, *desired, rulesBytes, policy)
+}
+
+func (s *lifecycleService) ensureActiveTransitionExclusion(ctx context.Context, before, desired installstate.Record) error {
+	if before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}) {
+		return s.addProjectLocalExclusion(ctx, desired)
+	}
+	if desired.Rules != (installstate.OwnedFile{}) {
+		return s.ensureProjectLocalExclusion(ctx, desired)
 	}
 	return nil
 }
 
-func (s *lifecycleService) restoreArtifacts(ctx context.Context, before *installstate.Record, desired *installstate.Record, catalogBytes, rulesBytes []byte, artifacts []installstate.NativeArtifact, policy cli.ConflictPolicy) error {
-	if len(artifacts) == 0 {
-		return errors.New("native rollback artifact is unavailable")
+func (s *lifecycleService) applyRulesTransition(ctx context.Context, before, desired installstate.Record, rulesBytes []byte, policy cli.ConflictPolicy) error {
+	switch {
+	case before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}):
+		return writeOwnedNew(s.ownedRoot(s.rulesPath(desired)), s.rulesPath(desired), rulesBytes)
+	case before.Rules != (installstate.OwnedFile{}) && desired.Rules == (installstate.OwnedFile{}):
+		if err := mutateOwned(s.ownedRoot(s.rulesPath(before)), s.rulesPath(before), before.Rules.Checksum, nil, policy); err != nil {
+			return err
+		}
+		return s.removeProjectLocalExclusion(ctx, before)
+	case before.Rules != (installstate.OwnedFile{}) && (before.Rules.Checksum != desired.Rules.Checksum || inspectFileDrift(s.rulesPath(before), before.Rules.Checksum) != cli.DriftUnchanged):
+		return mutateOwned(s.ownedRoot(s.rulesPath(before)), s.rulesPath(before), before.Rules.Checksum, rulesBytes, policy)
+	default:
+		return nil
 	}
+}
+
+func (s *lifecycleService) applyRollbackTransition(ctx context.Context, transition preparedTransition, policy cli.ConflictPolicy) error {
+	before, desired := transition.before, transition.desired
+	catalogBytes, rulesBytes, artifacts := transition.desiredTarget, transition.desiredRules, transition.desiredArtifacts
 	var exclusionErr error
 	if before == nil || before.Lifecycle == "archived" || before.Rules == (installstate.OwnedFile{}) && desired.Rules != (installstate.OwnedFile{}) {
 		exclusionErr = s.addProjectLocalExclusion(ctx, *desired)
@@ -583,7 +601,7 @@ func validateOwnedDestination(root, path string) error {
 		return errors.New("owned path is outside its root")
 	}
 	current := root
-	for _, component := range strings.Split(filepath.Dir(relative), string(filepath.Separator)) {
+	for component := range strings.SplitSeq(filepath.Dir(relative), string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		info, statErr := os.Lstat(current)
 		if errors.Is(statErr, os.ErrNotExist) {

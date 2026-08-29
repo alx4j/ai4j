@@ -22,7 +22,7 @@ func TestSelectLifecycleReturnsCanonicalMultiPackageBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	parsed, err := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}

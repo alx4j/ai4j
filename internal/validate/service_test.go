@@ -15,6 +15,7 @@ import (
 
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
 )
 
@@ -69,7 +70,7 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := cli.NewParser("darwin").Parse(test.arguments)
+			request, err := cli.NewParser().Parse(test.arguments)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +119,7 @@ func TestValidateRunsOnWindowsAMD64(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("windows").Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
+	request, err := cli.NewParser().Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +142,7 @@ func TestValidateCleansWorkspaceAfterNativeValidationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 || report.Problems[0].Code() != "native_validation_failed" {
 		t.Fatalf("failure=%s problems=%v", report.Failure, report.Problems)
@@ -219,7 +220,7 @@ func TestValidateUpdateClassifiesFastForwardNoChangeAndRewrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+			request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 			installed, _ := domain.NewCommitOID(test.installed)
 			update := service.ValidateUpdate(context.Background(), request.(cli.ValidateRequest).Source(), installed)
 			if update.Report.Failure != test.wantFailure || update.Disposition != test.want || runner.ancestorChecks != test.wantChecks {
@@ -230,6 +231,33 @@ func TestValidateUpdateClassifiesFastForwardNoChangeAndRewrite(t *testing.T) {
 				t.Fatalf("temporary root after update check = %v, %v", entries, err)
 			}
 		})
+	}
+}
+
+func TestValidateUpdateInspectsAncestryBeforePackageValidation(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	files := firstPartyFiles(t)
+	files[toolkitManifestPath] = []byte("{")
+	runner := &fixtureRunner{files: files, ancestorExit: 2}
+	service, err := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := domain.NewCommitOID(strings.Repeat("4", 40))
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := service.ValidateUpdate(context.Background(), request.(cli.ValidateRequest).Source(), installed)
+	if update.Report.Failure != FailureSource || len(update.Report.Problems) != 1 || update.Report.Problems[0].Code() != "source_history_unavailable" || runner.ancestorChecks != 1 || runner.claudeValidations != 0 {
+		t.Fatalf("update = failure:%s problems:%v checks:%d native:%d", update.Report.Failure, update.Report.Problems, runner.ancestorChecks, runner.claudeValidations)
 	}
 }
 
@@ -248,7 +276,7 @@ func TestValidateRejectsLiteralSecretWithoutStartingNativeContent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 ||
 		report.Problems[0].Code() != "literal_secret" || strings.Contains(report.Problems[0].Message(), "secret-canary") {
@@ -282,58 +310,72 @@ func (r *fixtureRunner) LookPath(name string) (string, error) {
 	return "", fmt.Errorf("not found")
 }
 
-func (r *fixtureRunner) Run(_ context.Context, directory, executable string, arguments, _ []string) (ProcessResult, error) {
+func (r *fixtureRunner) Run(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/claude") {
+		return hostprocess.Result{}, fmt.Errorf("non-Claude process was not isolated: %s", executable)
+	}
+	return r.run(directory, executable, arguments)
+}
+
+func (r *fixtureRunner) RunIsolated(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/git") {
+		return hostprocess.Result{}, fmt.Errorf("non-Git process was isolated: %s", executable)
+	}
+	return r.run(directory, executable, arguments)
+}
+
+func (r *fixtureRunner) run(directory, executable string, arguments []string) (hostprocess.Result, error) {
 	if strings.HasSuffix(executable, "/claude") {
 		if slices.Equal(arguments, []string{"--version"}) {
-			return ProcessResult{Stdout: []byte("2.1.211 (Claude Code)\n")}, nil
+			return hostprocess.Result{Stdout: []byte("2.1.211 (Claude Code)\n")}, nil
 		}
 		if slices.Equal(arguments, []string{"plugin", "validate", ".", "--strict"}) {
 			r.claudeValidations++
 			r.claudeValidationDirectories = append(r.claudeValidationDirectories, directory)
-			return ProcessResult{ExitCode: r.nativeExitCode}, nil
+			return hostprocess.Result{ExitCode: r.nativeExitCode}, nil
 		}
 		r.toolkitExecutions++
-		return ProcessResult{ExitCode: 1}, nil
+		return hostprocess.Result{ExitCode: 1}, nil
 	}
 	if strings.HasSuffix(executable, "/git") && slices.Equal(arguments, []string{"--version"}) {
-		return ProcessResult{Stdout: []byte("git version 2.39.5\n")}, nil
+		return hostprocess.Result{Stdout: []byte("git version 2.39.5\n")}, nil
 	}
 	switch {
 	case containsArgument(arguments, "init"):
-		return ProcessResult{}, os.MkdirAll(filepath.Join(directory, ".git"), 0o700)
+		return hostprocess.Result{}, os.MkdirAll(filepath.Join(directory, ".git"), 0o700)
 	case containsArgument(arguments, "ls-remote"):
-		return ProcessResult{Stdout: []byte("ref: refs/heads/main\tHEAD\n" + testCommit + "\tHEAD\n" + testCommit + "\trefs/heads/main\n" + testCommit + "\trefs/tags/v1\n")}, nil
+		return hostprocess.Result{Stdout: []byte("ref: refs/heads/main\tHEAD\n" + testCommit + "\tHEAD\n" + testCommit + "\trefs/heads/main\n" + testCommit + "\trefs/tags/v1\n")}, nil
 	case containsArgument(arguments, "fetch"):
-		return ProcessResult{}, nil
+		return hostprocess.Result{}, nil
 	case containsArgument(arguments, "cat-file"):
-		return ProcessResult{Stdout: []byte("commit\n")}, nil
+		return hostprocess.Result{Stdout: []byte("commit\n")}, nil
 	case containsArgument(arguments, "rev-parse"):
 		if slices.Equal(arguments, []string{"rev-parse", "--show-toplevel"}) {
-			return ProcessResult{Stdout: []byte(r.localRoot + "\n")}, nil
+			return hostprocess.Result{Stdout: []byte(r.localRoot + "\n")}, nil
 		}
-		return ProcessResult{Stdout: []byte(testTree + "\n")}, nil
+		return hostprocess.Result{Stdout: []byte(testTree + "\n")}, nil
 	case containsArgument(arguments, "ls-tree"):
-		return ProcessResult{Stdout: r.treeOutput()}, nil
+		return hostprocess.Result{Stdout: r.treeOutput()}, nil
 	case containsArgument(arguments, "read-tree"):
-		return ProcessResult{}, nil
+		return hostprocess.Result{}, nil
 	case containsArgument(arguments, "check-attr"):
-		return ProcessResult{Stdout: attributeOutput(arguments)}, nil
+		return hostprocess.Result{Stdout: attributeOutput(arguments)}, nil
 	case containsArgument(arguments, "checkout-index"):
-		return ProcessResult{}, r.materialize(filepath.Dir(directory))
+		return hostprocess.Result{}, r.materialize(filepath.Dir(directory))
 	case containsArgument(arguments, "checkout"):
-		return ProcessResult{}, nil
+		return hostprocess.Result{}, nil
 	case containsArgument(arguments, "ls-files"):
-		return ProcessResult{Stdout: r.indexOutput()}, nil
+		return hostprocess.Result{Stdout: r.indexOutput()}, nil
 	case containsArgument(arguments, "status"):
 		if r.localRoot != "" && directory == r.localRoot && r.localDirty {
-			return ProcessResult{Stdout: []byte("?? local\x00")}, nil
+			return hostprocess.Result{Stdout: []byte("?? local\x00")}, nil
 		}
-		return ProcessResult{}, nil
+		return hostprocess.Result{}, nil
 	case containsArgument(arguments, "merge-base"):
 		r.ancestorChecks++
-		return ProcessResult{ExitCode: r.ancestorExit}, nil
+		return hostprocess.Result{ExitCode: r.ancestorExit}, nil
 	default:
-		return ProcessResult{}, fmt.Errorf("unexpected process: %s %v", executable, arguments)
+		return hostprocess.Result{}, fmt.Errorf("unexpected process: %s %v", executable, arguments)
 	}
 }
 

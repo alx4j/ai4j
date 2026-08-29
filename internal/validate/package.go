@@ -119,27 +119,6 @@ func environmentNames(values map[string]string) ([]string, error) {
 	return result, nil
 }
 
-func argumentPlaceholders(arguments []string) ([]cli.Placeholder, error) {
-	seen := map[cli.Placeholder]bool{}
-	for _, argument := range arguments {
-		for _, marker := range []cli.Placeholder{cli.PlaceholderPluginRoot, cli.PlaceholderProjectDir} {
-			if strings.Contains(argument, string(marker)) {
-				seen[marker] = true
-			}
-		}
-		withoutKnown := strings.ReplaceAll(strings.ReplaceAll(argument, string(cli.PlaceholderPluginRoot), ""), string(cli.PlaceholderProjectDir), "")
-		if strings.Contains(withoutKnown, "${") {
-			return nil, validationError("invalid_placeholder", "MCP argument contains an unsupported placeholder")
-		}
-	}
-	var result []cli.Placeholder
-	for marker := range seen {
-		result = append(result, marker)
-	}
-	slices.Sort(result)
-	return result, nil
-}
-
 func validEnvironmentName(value string) bool {
 	if value == "" || !(value[0] == '_' || value[0] >= 'A' && value[0] <= 'Z' || value[0] >= 'a' && value[0] <= 'z') {
 		return false

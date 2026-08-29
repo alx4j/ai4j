@@ -66,7 +66,6 @@ func TestRenderSupportsEveryTypedDataVariant(t *testing.T) {
 	t.Parallel()
 
 	for _, fixture := range responseFixtures(t) {
-		fixture := fixture
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -129,10 +128,20 @@ func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, _ := domain.NewInstallationID("installation_001")
-	summary, err := cli.NewInstallationSummary(
-		id, "ai4j", cli.BuildTargetClaude, cli.ScopeUser, t.TempDir(), "active", recorded, "default",
-		[]string{"tools", "default", "review"}, []string{"ai4j-tools", "ai4j-review"}, []string{"repository-review", "claude-tools"}, "healthy",
-	)
+	summary, err := cli.NewInstallationSummary(cli.InstallationSummaryInput{
+		ID:              id,
+		ToolkitID:       "ai4j",
+		Target:          cli.BuildTargetClaude,
+		Scope:           cli.ScopeUser,
+		ScopeRoot:       t.TempDir(),
+		Lifecycle:       "active",
+		Source:          recorded,
+		RequestedBundle: "default",
+		ResolvedBundles: []string{"tools", "default", "review"},
+		Packages:        []string{"ai4j-tools", "ai4j-review"},
+		ResolvedAssets:  []string{"repository-review", "claude-tools"},
+		Health:          "healthy",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +149,16 @@ func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	native, _ := cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistered,
+		Installation:  cli.NativeInstalled,
+		Enablement:    cli.NativeEnabled,
+		Activation:    cli.NativeInactive,
+		Reload:        cli.NativeReloadNotRequired,
+		NextSession:   cli.NativeNextSessionRequired,
+		Policy:        cli.NativePolicyAllowed,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
 	status, err := cli.NewDetailedStatusData(&installation, &summary, native, nil, recovery, result.UpdateNotChecked)
 	if err != nil {
@@ -190,7 +208,16 @@ func TestRenderDisclosesCompositionProvenanceForListAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native, _ := cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	native, _ := cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistered,
+		Installation:  cli.NativeInstalled,
+		Enablement:    cli.NativeEnabled,
+		Activation:    cli.NativeInactive,
+		Reload:        cli.NativeReloadNotRequired,
+		NextSession:   cli.NativeNextSessionRequired,
+		Policy:        cli.NativePolicyAllowed,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
 	status, err := cli.NewDetailedStatusData(&installation, &summary, native, nil, recovery, result.UpdateNotChecked)
 	if err != nil {
@@ -378,7 +405,16 @@ func responseFixtures(t *testing.T) []namedResponse {
 		t.Fatalf("NewResponse(mutation) error = %v", err)
 	}
 
-	native, _ := cli.NewNativeState(cli.NativeNotRegistered, cli.NativeNotInstalled, cli.NativeDisabled, cli.NativeInactive, cli.NativeReloadNotRequired, cli.NativeNextSessionNotRequired, cli.NativePolicyAllowed, "", cli.NativeVersionNotApplicable)
+	native, _ := cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeNotRegistered,
+		Installation:  cli.NativeNotInstalled,
+		Enablement:    cli.NativeDisabled,
+		Activation:    cli.NativeInactive,
+		Reload:        cli.NativeReloadNotRequired,
+		NextSession:   cli.NativeNextSessionNotRequired,
+		Policy:        cli.NativePolicyAllowed,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 	recovery, _ := cli.NewRecoveryState(cli.RecoveryStateNone, "")
 	statusData, _ := cli.NewStatusData(nil, native, nil, recovery, result.UpdateNotInstalled)
 	statusResult := successResult(t, result.UpdateNotInstalled)
@@ -406,7 +442,16 @@ func responseFixtures(t *testing.T) []namedResponse {
 
 func recoveryResponse(t *testing.T) cli.Response {
 	t.Helper()
-	native, err := cli.NewNativeState(cli.NativeRegistrationUnknown, cli.NativeInstallationUnknown, cli.NativeEnablementUnknown, cli.NativeActivationUnknown, cli.NativeReloadUnknown, cli.NativeNextSessionUnknown, cli.NativePolicyUnknown, "", cli.NativeVersionNotApplicable)
+	native, err := cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistrationUnknown,
+		Installation:  cli.NativeInstallationUnknown,
+		Enablement:    cli.NativeEnablementUnknown,
+		Activation:    cli.NativeActivationUnknown,
+		Reload:        cli.NativeReloadUnknown,
+		NextSession:   cli.NativeNextSessionUnknown,
+		Policy:        cli.NativePolicyUnknown,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 	if err != nil {
 		t.Fatalf("NewNativeState() error = %v", err)
 	}
@@ -431,10 +476,18 @@ func versionResponse(t *testing.T) cli.Response {
 	repository, _ := domain.NewRepositoryIdentity("github.com/alx4j/ai4j")
 	commit, _ := domain.NewBuildCommit(strings.Repeat("b", 40))
 	defaultSource, _ := cli.NewDefaultSource(repository, "", cli.DefaultRepositoryBranch)
-	data, err := cli.NewVersionData(
-		"AI4J", "ai4j", "0.0.0-dev", repository, commit, "go1.26.6",
-		time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC), "darwin", "arm64", defaultSource,
-	)
+	data, err := cli.NewVersionData(cli.VersionDataInput{
+		Product:       "AI4J",
+		Executable:    "ai4j",
+		Version:       "0.0.0-dev",
+		Repository:    repository,
+		Commit:        commit,
+		GoVersion:     "go1.26.6",
+		BuildTime:     time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC),
+		TargetOS:      "darwin",
+		TargetArch:    "arm64",
+		DefaultSource: defaultSource,
+	})
 	if err != nil {
 		t.Fatalf("NewVersionData() error = %v", err)
 	}

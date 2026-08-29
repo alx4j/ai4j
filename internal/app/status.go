@@ -246,11 +246,22 @@ func summaryFromRecord(record installstate.Record) (cli.InstallationSummary, err
 			packageIDs(record.Packages), record.Selection.ResolvedAssets, record.Health, len(record.History), lastOperation,
 		)
 	}
-	return cli.NewDetailedInstallationSummary(
-		id, record.ToolkitID, cli.BuildTarget(record.Target), cli.Scope(record.Scope), record.ScopeRoot, record.Lifecycle, source,
-		record.Selection.RequestedBundle, record.Selection.ResolvedBundles, packageIDs(record.Packages), record.Selection.ResolvedAssets,
-		record.Health, len(record.History), lastOperation,
-	)
+	return cli.NewInstallationSummary(cli.InstallationSummaryInput{
+		ID:              id,
+		ToolkitID:       record.ToolkitID,
+		Target:          cli.BuildTarget(record.Target),
+		Scope:           cli.Scope(record.Scope),
+		ScopeRoot:       record.ScopeRoot,
+		Lifecycle:       record.Lifecycle,
+		Source:          source,
+		RequestedBundle: record.Selection.RequestedBundle,
+		ResolvedBundles: record.Selection.ResolvedBundles,
+		Packages:        packageIDs(record.Packages),
+		ResolvedAssets:  record.Selection.ResolvedAssets,
+		Health:          record.Health,
+		HistoryCount:    len(record.History),
+		LastOperation:   lastOperation,
+	})
 }
 
 func recoveryFromState(stateErr error, markerPresent bool, markerErr error) cli.RecoveryState {
@@ -675,19 +686,29 @@ func statusProblem(code, message string) *result.Problem {
 }
 
 func unobservableNative() (cli.NativeState, error) {
-	return cli.NewNativeState(
-		cli.NativeRegistrationNotObservable, cli.NativeInstallationNotObservable, cli.NativeEnablementNotObservable,
-		cli.NativeActivationNotObservable, cli.NativeReloadNotObservable, cli.NativeNextSessionNotObservable,
-		cli.NativePolicyNotObservable, "", cli.NativeVersionNotApplicable,
-	)
+	return cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistrationNotObservable,
+		Installation:  cli.NativeInstallationNotObservable,
+		Enablement:    cli.NativeEnablementNotObservable,
+		Activation:    cli.NativeActivationNotObservable,
+		Reload:        cli.NativeReloadNotObservable,
+		NextSession:   cli.NativeNextSessionNotObservable,
+		Policy:        cli.NativePolicyNotObservable,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 }
 
 func unknownNative() (cli.NativeState, error) {
-	return cli.NewNativeState(
-		cli.NativeRegistrationUnknown, cli.NativeInstallationUnknown, cli.NativeEnablementUnknown,
-		cli.NativeActivationNotObservable, cli.NativeReloadNotObservable, cli.NativeNextSessionNotObservable,
-		cli.NativePolicyNotObservable, "", cli.NativeVersionNotApplicable,
-	)
+	return cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistrationUnknown,
+		Installation:  cli.NativeInstallationUnknown,
+		Enablement:    cli.NativeEnablementUnknown,
+		Activation:    cli.NativeActivationNotObservable,
+		Reload:        cli.NativeReloadNotObservable,
+		NextSession:   cli.NativeNextSessionNotObservable,
+		Policy:        cli.NativePolicyNotObservable,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 }
 
 func observedNative(observation validation.NativeStatus) (cli.NativeState, error) {
@@ -704,9 +725,14 @@ func observedNative(observation validation.NativeStatus) (cli.NativeState, error
 			enablement = cli.NativeEnabled
 		}
 	}
-	return cli.NewNativeState(
-		registration, installation, enablement, cli.NativeActivationNotObservable,
-		cli.NativeReloadNotObservable, cli.NativeNextSessionNotObservable, cli.NativePolicyNotObservable,
-		"", cli.NativeVersionNotApplicable,
-	)
+	return cli.NewNativeState(cli.NativeStateInput{
+		Registration:  registration,
+		Installation:  installation,
+		Enablement:    enablement,
+		Activation:    cli.NativeActivationNotObservable,
+		Reload:        cli.NativeReloadNotObservable,
+		NextSession:   cli.NativeNextSessionNotObservable,
+		Policy:        cli.NativePolicyNotObservable,
+		VersionStatus: cli.NativeVersionNotApplicable,
+	})
 }

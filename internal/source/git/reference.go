@@ -101,11 +101,11 @@ func validRequestedReference(value string) bool {
 	if _, err := domain.NewCommitOID(value); err == nil {
 		return true
 	}
-	if strings.HasPrefix(value, "refs/heads/") {
-		return validShortReference(strings.TrimPrefix(value, "refs/heads/"))
+	if branch, ok := strings.CutPrefix(value, "refs/heads/"); ok {
+		return validShortReference(branch)
 	}
-	if strings.HasPrefix(value, "refs/tags/") {
-		return validShortReference(strings.TrimPrefix(value, "refs/tags/"))
+	if tag, ok := strings.CutPrefix(value, "refs/tags/"); ok {
+		return validShortReference(tag)
 	}
 	return !strings.HasPrefix(value, "refs/") && validShortReference(value)
 }
@@ -114,7 +114,7 @@ func validShortReference(value string) bool {
 	if !safeReferenceText(value) || strings.HasPrefix(value, "refs/") || strings.HasPrefix(value, "-") || strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") || strings.HasSuffix(value, ".") || strings.Contains(value, "//") || strings.Contains(value, "..") || strings.Contains(value, "@{") || strings.ContainsAny(value, " ~^:?*[\\") || value == "HEAD" || value == "@" {
 		return false
 	}
-	for _, component := range strings.Split(value, "/") {
+	for component := range strings.SplitSeq(value, "/") {
 		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".lock") {
 			return false
 		}

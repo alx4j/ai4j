@@ -308,11 +308,16 @@ func TestCompositionTagRewriteIsReportedAndUpdateIsRefused(t *testing.T) {
 		t.Fatalf("rewritten composition checks = %d warnings=%#v", harness.validator.updateCalls, warnings)
 	}
 
+	selectionsBefore := harness.validator.selectionCalls
+	updateChecksBefore := harness.validator.updateCalls
 	update := parseRequest[cli.UpdateRequest](t, "update", recordBefore.InstallationID, "--yes")
 	response, err = harness.service.Update(context.Background(), update, CommandIO{})
 	errors := response.Result().Errors()
 	if err != nil || response.Result().ExitCode() != result.ExitConflict || response.Result().Changed() || len(errors) != 1 || errors[0].Code() != "ref_rewritten" {
 		t.Fatalf("rewritten composition update = %#v, %v", response.Result(), err)
+	}
+	if harness.validator.selectionCalls != selectionsBefore+1 || harness.validator.updateCalls != updateChecksBefore {
+		t.Fatalf("rewritten update source checks = selections %d updates %d", harness.validator.selectionCalls-selectionsBefore, harness.validator.updateCalls-updateChecksBefore)
 	}
 	recordAfter, present, err := harness.store.LoadByID(recordBefore.InstallationID)
 	if err != nil || !present || !reflect.DeepEqual(recordAfter, recordBefore) {

@@ -10,8 +10,8 @@ import (
 
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/cli/jsonwire"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	"github.com/alx4j/ai4j/internal/result"
-	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
 func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
@@ -60,7 +60,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 		t.Fatalf("failed approval I/O started MCP process: calls=%d", runner.calls)
 	}
 
-	runner.result = validation.ProcessResult{Started: true, TimedOut: true}
+	runner.result = hostprocess.Result{Started: true, TimedOut: true}
 	runner.err = context.DeadlineExceeded
 	approvedRequest := parseRequest[cli.DoctorRequest](t, "doctor", record.InstallationID, "--test-mcp", "claude-tools", "--yes", "--json")
 	checked, err := service.Doctor(context.Background(), approvedRequest, CommandIO{})
@@ -89,7 +89,7 @@ func TestDoctorRejectsUnknownMCPBeforeExecution(t *testing.T) {
 
 type doctorRunnerStub struct {
 	paths       map[string]string
-	result      validation.ProcessResult
+	result      hostprocess.Result
 	err         error
 	calls       int
 	environment []string
@@ -110,7 +110,7 @@ func (r *doctorRunnerStub) LookPath(name string) (string, error) {
 	return "", errors.New("not found")
 }
 
-func (r *doctorRunnerStub) RunIsolated(_ context.Context, _ string, _ string, _ []string, environment []string) (validation.ProcessResult, error) {
+func (r *doctorRunnerStub) RunIsolated(_ context.Context, _ string, _ string, _ []string, environment []string) (hostprocess.Result, error) {
 	r.calls++
 	r.environment = slices.Clone(environment)
 	return r.result, r.err

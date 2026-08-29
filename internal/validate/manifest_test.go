@@ -50,14 +50,14 @@ func TestManifestRejectsDependencyAndVariantFailures(t *testing.T) {
 			var code string
 			if test.build {
 				output := filepath.Join(t.TempDir(), "build")
-				request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
+				request, _ := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
 				report := service.Build(context.Background(), request.(cli.BuildRequest))
 				failure = report.Failure
 				if len(report.Problems) != 0 {
 					code = report.Problems[0].Code()
 				}
 			} else {
-				request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+				request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 				report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 				failure = report.Failure
 				if len(report.Problems) != 0 {
@@ -84,7 +84,7 @@ func TestManifestRejectsUnknownFutureSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: &fixtureRunner{files: files}, TempRoot: t.TempDir()})
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || len(report.Problems) != 1 || report.Problems[0].Code() != "unsupported_schema" {
 		t.Fatalf("failure=%s problems=%v", report.Failure, report.Problems)
@@ -143,7 +143,7 @@ func TestManifestRejectsInvalidPackageAndBundleOwnership(t *testing.T) {
 			}
 			runner := &fixtureRunner{files: files}
 			service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
-			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+			request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 
 			report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 
@@ -164,7 +164,7 @@ func TestManifestAcceptsDeclaredPackageContentAndNativeMetadata(t *testing.T) {
 	}
 	runner := &fixtureRunner{files: files}
 	service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 
@@ -255,7 +255,7 @@ func TestManifestRejectsUndeclaredPackageContent(t *testing.T) {
 			}
 			runner := &fixtureRunner{files: files}
 			service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
-			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+			request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 
 			report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 
@@ -274,7 +274,7 @@ func assertManifestProblem(t *testing.T, files map[string][]byte, wantCode strin
 	}
 	runner := &fixtureRunner{files: files}
 	service, _ := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: home, BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 

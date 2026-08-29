@@ -19,30 +19,9 @@ const (
 	testObjectB = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
-func TestBudgetsAndLimitsAreClosed(t *testing.T) {
+func TestLimitsAreClosed(t *testing.T) {
 	t.Parallel()
 
-	execution := DefaultExecutionBudget()
-	if !execution.Valid() || execution.Aggregate() != 5*time.Minute || execution.LocalMaximum() != 15*time.Second ||
-		execution.NetworkMaximum() != time.Minute || execution.TerminationGrace() != 2*time.Second {
-		t.Fatalf("execution budget = %#v", execution)
-	}
-	if (ExecutionBudget{}).Valid() || (ExecutionBudget{aggregate: 5 * time.Minute}).Valid() {
-		t.Fatal("partial execution budget is valid")
-	}
-	workspace := DefaultWorkspaceBudget()
-	if !workspace.Valid() || workspace.DeclaredMaximumBytes() != 1<<30 || workspace.HeadroomBytes() != 256<<20 ||
-		workspace.Enforcement() != WorkspaceEnforcementAdvisory {
-		t.Fatalf("workspace budget = %#v", workspace)
-	}
-	if (WorkspaceBudget{}).Valid() || WorkspaceEnforcement("hard_quota").Valid() {
-		t.Fatal("unknown workspace budget state is valid")
-	}
-	preflight, ok := workspace.PreflightBytes()
-	if !ok || preflight != (1<<30)+(256<<20) || !workspace.AllowsObservedUsage(1<<30) ||
-		workspace.AllowsObservedUsage((1<<30)+1) {
-		t.Fatalf("workspace arithmetic = %d, %t", preflight, ok)
-	}
 	if MaximumInventoryPathCount != 1<<14 || MaximumInventoryPathBytes != 14<<20 ||
 		MaximumBlobBytes != 64<<20 || MaximumValidatedTreeBytes != 512<<20 ||
 		MaximumAttributeBatchPaths != 128 || MaximumAttributeBatchBytes != 128<<10 ||
@@ -55,7 +34,7 @@ func TestClosedEnumsRejectZeroAndUnknownValues(t *testing.T) {
 	t.Parallel()
 
 	operations := []Operation{
-		OperationInitialize, OperationProbeExecPath, OperationAuditConfig, OperationEnumerateRefs, OperationFetch,
+		OperationInitialize, OperationEnumerateRefs, OperationFetch,
 		OperationObjectType, OperationPeelCommit, OperationCommitTree, OperationListTree,
 		OperationReadTree, OperationCheckAttributes, OperationCheckoutIndex, OperationCheckoutDetached, OperationListIndex,
 		OperationStatus, OperationIsAncestor,
@@ -71,9 +50,7 @@ func TestClosedEnumsRejectZeroAndUnknownValues(t *testing.T) {
 		}
 	}
 	for _, code := range []FailureCode{
-		FailureInvalidOperation, FailureUnsupportedRuntime, FailureRepositoryAuthorityConflict,
-		FailureAuthenticationProjectionUnavailable, FailureTransportHelperUnavailable, FailurePolicyRejected,
-		FailureAccess, FailureCommand, FailureTimedOut, FailureCancelled, FailureOutputLimit,
+		FailureInvalidOperation, FailurePolicyRejected, FailureCommand,
 		FailureMalformedProtocol, FailureResourceLimit, FailureRepositoryConflict,
 		FailureReferenceNotFound, FailureReferenceAmbiguous, FailureDefaultBranchUnavailable,
 	} {
@@ -92,82 +69,6 @@ func TestClosedEnumsRejectZeroAndUnknownValues(t *testing.T) {
 		errors.Is(fault, NewExecutorError(OperationEnumerateRefs, FailureCommand)) ||
 		fault.Error() != "Git source operation fetch failed: command_failed" {
 		t.Fatalf("typed fault = %#v / %q", typed, fault)
-	}
-	for _, purpose := range []RuntimeChildPurpose{
-		ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildGitFetchPack, ChildGitIndexPack,
-		ChildGitRevList, ChildCredentialShell, ChildCredential, ChildSSHWrapper, ChildSSHClient,
-	} {
-		if !purpose.Valid() {
-			t.Errorf("child purpose %q is invalid", purpose)
-		}
-	}
-	if RuntimeChildPurpose("").Valid() || RuntimeChildPurpose("shell").Valid() {
-		t.Fatal("unknown child purpose accepted")
-	}
-}
-
-func TestRuntimeProfileBindsExactAppleGitFacts(t *testing.T) {
-	t.Parallel()
-
-	profile := AppleGit154DarwinARM64Profile()
-	if !profile.Valid() || profile.ID() != "apple_git_154_3_macos15_arm64" ||
-		profile.GitVersion() != "2.39.5 (Apple Git-154.3)" || profile.HostOS() != "darwin" ||
-		profile.HostArchitecture() != "arm64" || profile.HostMajorVersion() != 15 {
-		t.Fatalf("profile = %#v", profile)
-	}
-	changed := profile
-	changed.gitVersion = "2.39.5"
-	if changed.Valid() || (RuntimeProfile{}).Valid() {
-		t.Fatal("partial or changed runtime profile is valid")
-	}
-}
-
-func TestRuntimeProfileChildAllowlistDistinguishesHTTPSAndSSH(t *testing.T) {
-	t.Parallel()
-
-	profile := AppleGit154DarwinARM64Profile()
-	httpsRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "", false)
-	sshRequest := mustResolutionRequest(t, "git@github.com:alx4j/ai4j.git", "", false)
-	anonymous := mustAuthentication(t, httpsRequest, AuthenticationAnonymousHTTPS)
-	keychain := mustAuthentication(t, httpsRequest, AuthenticationCredentialHelperHTTPS)
-	ssh := mustAuthentication(t, sshRequest, AuthenticationDefaultKeySSH)
-
-	tests := []struct {
-		operation Operation
-		auth      AuthenticationProjection
-		want      []RuntimeChildPurpose
-	}{
-		{OperationEnumerateRefs, anonymous, []RuntimeChildPurpose{ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS}},
-		{OperationEnumerateRefs, keychain, []RuntimeChildPurpose{ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildCredentialShell, ChildCredential}},
-		{OperationEnumerateRefs, ssh, []RuntimeChildPurpose{ChildSSHWrapper, ChildSSHClient}},
-		{OperationFetch, anonymous, []RuntimeChildPurpose{ChildGitRevList, ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildGitFetchPack, ChildGitIndexPack}},
-		{OperationFetch, keychain, []RuntimeChildPurpose{ChildGitRevList, ChildGitRemoteHTTPSDriver, ChildRemoteHTTPS, ChildGitFetchPack, ChildGitIndexPack, ChildCredentialShell, ChildCredential}},
-		{OperationFetch, ssh, []RuntimeChildPurpose{ChildGitRevList, ChildSSHWrapper, ChildSSHClient, ChildGitIndexPack}},
-		{OperationListTree, AuthenticationProjection{}, []RuntimeChildPurpose{}},
-	}
-	for _, test := range tests {
-		got, err := profile.AllowedChildPurposes(test.operation, test.auth)
-		if err != nil || !reflect.DeepEqual(got, test.want) {
-			t.Errorf("AllowedChildPurposes(%s, %s) = %#v, %v", test.operation, test.auth.mode, got, err)
-			continue
-		}
-		if len(got) > 0 {
-			got[0] = "changed"
-			repeated, _ := profile.AllowedChildPurposes(test.operation, test.auth)
-			if reflect.DeepEqual(got, repeated) {
-				t.Fatal("child allowlist aliases profile data")
-			}
-		}
-	}
-	sshFetch, _ := profile.AllowedChildPurposes(OperationFetch, ssh)
-	if slices.Contains(sshFetch, ChildGitFetchPack) {
-		t.Fatal("SSH manifest incorrectly admits a fetch-pack child")
-	}
-	if _, err := profile.AllowedChildPurposes(OperationFetch, AuthenticationProjection{}); !errors.Is(err, ErrExecutorContract) {
-		t.Fatalf("missing auth error = %v", err)
-	}
-	if _, err := (RuntimeProfile{}).AllowedChildPurposes(OperationFetch, anonymous); !errors.Is(err, ErrExecutorContract) {
-		t.Fatalf("invalid profile error = %v", err)
 	}
 }
 
@@ -213,29 +114,6 @@ func TestAuthenticationProjectionIsTransportExactAndRedacted(t *testing.T) {
 	}
 }
 
-func TestGitHardenedEnvironmentIsExactAndDefensivelyCopied(t *testing.T) {
-	t.Parallel()
-
-	want := [][2]string{
-		{"GIT_ATTR_NOSYSTEM", "1"}, {"GIT_CONFIG_GLOBAL", "/dev/null"}, {"GIT_CONFIG_NOSYSTEM", "1"},
-		{"GIT_LFS_SKIP_SMUDGE", "1"}, {"GIT_OPTIONAL_LOCKS", "0"}, {"GIT_PROTOCOL_FROM_USER", "0"},
-		{"GIT_TERMINAL_PROMPT", "0"}, {"LANG", "C"}, {"LC_ALL", "C"}, {"PATH", "/dev/null"},
-	}
-	first := GitHardenedEnvironment()
-	if GitHardenedEnvironmentProfile().String() != "git_hardened" || len(first) != len(want) {
-		t.Fatalf("profile/env = %q/%d", GitHardenedEnvironmentProfile().String(), len(first))
-	}
-	for index, expected := range want {
-		if first[index].Name != expected[0] || first[index].Value != expected[1] {
-			t.Fatalf("environment[%d] = %#v", index, first[index])
-		}
-	}
-	first[0].Value = "changed"
-	if GitHardenedEnvironment()[0].Value != "1" {
-		t.Fatal("environment result aliases built-in policy")
-	}
-}
-
 func TestCommandArgvIsExactAndDefensivelyCopied(t *testing.T) {
 	t.Parallel()
 
@@ -252,19 +130,13 @@ func TestCommandArgvIsExactAndDefensivelyCopied(t *testing.T) {
 		t.Fatalf("argv = %#v", got)
 	}
 	if command.Operation() != OperationEnumerateRefs || command.WorkingDirectory() != GitDirectory ||
-		command.OutputGrammar() != RemoteOutputGrammar || command.TimeoutMaximum() != NetworkCommandTimeout ||
-		command.OutputLimitBytes() != remoteOutputLimit {
+		command.OutputGrammar() != RemoteOutputGrammar || command.TimeoutMaximum() != NetworkCommandTimeout {
 		t.Fatalf("command facts = %#v", command)
 	}
 	arguments := command.Arguments()
 	arguments[0] = "push"
 	if command.Arguments()[0] != "--no-pager" {
 		t.Fatal("arguments alias command")
-	}
-	environment := command.Environment()
-	environment[0].Value = "changed"
-	if command.Environment()[0].Value != "1" {
-		t.Fatal("environment aliases command policy")
 	}
 	for _, rendered := range []string{fmt.Sprintf("%v", command), fmt.Sprintf("%+v", command), fmt.Sprintf("%#v", command)} {
 		if strings.Contains(rendered, "github.com") || rendered != "<git-command:redacted>" {
@@ -359,10 +231,6 @@ func TestLocalCommandArgvPinsExactRepository(t *testing.T) {
 	if got, want := initialize.Arguments(), append(testCommonArguments(false), "init", "--quiet", "--template=", "--object-format=sha1", "--initial-branch=ai4j-unborn"); !reflect.DeepEqual(got, want) || initialize.WorkingDirectory() != WorkspaceRootDirectory {
 		t.Fatalf("init argv = %#v", got)
 	}
-	config := NewConfigAuditCommand()
-	if got, want := config.Arguments(), append(testCommonArguments(true), "config", "--local", "--null", "--list", "--no-includes", "--"); !reflect.DeepEqual(got, want) {
-		t.Fatalf("config argv = %#v", got)
-	}
 }
 
 func TestNetworkCommandUsesCanonicalEnterpriseSSHEndpoint(t *testing.T) {
@@ -422,7 +290,6 @@ func TestEveryRemainingCommandConstructorHasExactGoldenArgv(t *testing.T) {
 		timeout time.Duration
 		grammar OutputGrammar
 	}{
-		{"probe exec path", NewProbeExecPathCommand(), []string{"--exec-path"}, LocalCommandTimeout, ScalarOutputGrammar},
 		{"peel commit", peel, []string{"rev-parse", "--verify", "--end-of-options", testObjectA + "^{commit}"}, LocalCommandTimeout, ScalarOutputGrammar},
 		{"commit tree", commitTree, []string{"rev-parse", "--verify", "--end-of-options", testObjectA + "^{tree}"}, LocalCommandTimeout, ScalarOutputGrammar},
 		{"list tree", listTree, []string{"ls-tree", "-r", "-z", "--full-tree", "--long", testObjectB, "--"}, NetworkCommandTimeout, TreeOutputGrammar},
@@ -434,14 +301,12 @@ func TestEveryRemainingCommandConstructorHasExactGoldenArgv(t *testing.T) {
 		{"ancestor", ancestor, []string{"merge-base", "--is-ancestor", "--", testObjectA, testObjectB}, LocalCommandTimeout, NoOutputGrammar},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			if !test.command.Valid() || test.command.TimeoutMaximum() != test.timeout || test.command.OutputGrammar() != test.grammar {
 				t.Fatalf("command facts = %#v", test.command)
 			}
-			repositoryBound := test.command.Operation() != OperationProbeExecPath
-			if got, want := test.command.Arguments(), append(testCommonArguments(repositoryBound), test.tail...); !reflect.DeepEqual(got, want) {
+			if got, want := test.command.Arguments(), append(testCommonArguments(true), test.tail...); !reflect.DeepEqual(got, want) {
 				t.Fatalf("argv = %#v", got)
 			}
 		})
@@ -471,9 +336,6 @@ func TestAttributeCommandSortsAndProvesOutputBound(t *testing.T) {
 	wantTail := []string{"check-attr", "-z", "--cached", "filter", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", "a/file", "z/file"}
 	if got, want := command.Arguments(), append(testCommonArguments(true), wantTail...); !reflect.DeepEqual(got, want) {
 		t.Fatalf("attribute argv = %#v", got)
-	}
-	if command.OutputLimitBytes() != attributeOutputLimit || command.OutputLimitBytes() >= protocolOutputLimit {
-		t.Fatalf("attribute output limit = %d", command.OutputLimitBytes())
 	}
 	changed := batches[0]
 	changed.paths = append(changed.paths, changed.paths[0])

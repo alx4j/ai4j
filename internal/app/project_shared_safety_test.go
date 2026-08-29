@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/alx4j/ai4j/internal/cli"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
-	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
 func TestProjectSharedPreexistingNativeCatalogIsRejectedBeforeJournal(t *testing.T) {
@@ -21,7 +21,7 @@ func TestProjectSharedPreexistingNativeCatalogIsRejectedBeforeJournal(t *testing
 	if err != nil || stop {
 		t.Fatalf("prepare install: stop=%t err=%v", stop, err)
 	}
-	path := harness.service.projectSharedNativeCatalogPath(*execution.desired)
+	path := harness.service.projectSharedNativeCatalogPath(*execution.transition.desired)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -370,12 +370,23 @@ func (r *projectSharedHookRunner) LookPath(name string) (string, error) {
 	return r.base.LookPath(name)
 }
 
-func (r *projectSharedHookRunner) Run(ctx context.Context, directory, executable string, arguments, environment []string) (validation.ProcessResult, error) {
+func (r *projectSharedHookRunner) Run(ctx context.Context, directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
 	process, err := r.base.Run(ctx, directory, executable, arguments, environment)
 	if err == nil && process.ExitCode == 0 && !r.ran && len(arguments) >= len(r.prefix) && slices.Equal(arguments[:len(r.prefix)], r.prefix) {
 		r.ran = true
 		if hookErr := r.hook(directory, arguments); hookErr != nil {
-			return validation.ProcessResult{}, hookErr
+			return hostprocess.Result{}, hookErr
+		}
+	}
+	return process, err
+}
+
+func (r *projectSharedHookRunner) RunIsolated(ctx context.Context, directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
+	process, err := r.base.RunIsolated(ctx, directory, executable, arguments, environment)
+	if err == nil && process.ExitCode == 0 && !r.ran && len(arguments) >= len(r.prefix) && slices.Equal(arguments[:len(r.prefix)], r.prefix) {
+		r.ran = true
+		if hookErr := r.hook(directory, arguments); hookErr != nil {
+			return hostprocess.Result{}, hookErr
 		}
 	}
 	return process, err
@@ -383,14 +394,14 @@ func (r *projectSharedHookRunner) Run(ctx context.Context, directory, executable
 
 func stageProjectSharedInstall(t *testing.T, harness lifecycleHarness, execution lifecycleExecution, operationID string) (*installstate.Record, installstate.HistoryEntry) {
 	t.Helper()
-	desired := cloneRecordPtr(execution.desired)
+	desired := cloneRecordPtr(execution.transition.desired)
 	desired.LastOperation = installstate.LastOperation{ID: operationID, Timestamp: "2026-08-26T12:00:00Z"}
 	desired.History = appendUnique(desired.History, operationID)
 	entry := installstate.HistoryEntry{
 		SchemaVersion: installstate.HistorySchemaVersion, Operation: execution.operation.String(), OperationID: operationID,
 		InstallationID: desired.InstallationID, Timestamp: desired.LastOperation.Timestamp, Restorable: true,
-		After: desired, CatalogAfter: projectSharedOwnedEntry(desired), RulesAfter: slices.Clone(execution.rules),
-		NativeArtifactsAfter: cloneNativeArtifacts(execution.artifacts),
+		After: desired, CatalogAfter: projectSharedOwnedEntry(desired), RulesAfter: slices.Clone(execution.transition.desiredRules),
+		NativeArtifactsAfter: cloneNativeArtifacts(execution.transition.desiredArtifacts),
 	}
 	resources := append([]string{"history:" + desired.InstallationID, "owned:state/installation.json", "owned:" + desired.Catalog.Path, "owned:" + desired.NativeCatalog.Path}, desired.NativeResources...)
 	if desired.Rules.Path != "" {
