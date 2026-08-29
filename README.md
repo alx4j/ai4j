@@ -403,3 +403,15 @@ ai4j doctor <INSTALLATION_ID>
 
 The command lists each check with an `ok`, `warning`, or `error` status and a
 short summary.
+
+AI4J also keeps the ten most recent command logs for each installation. On
+macOS, find them under
+`~/Library/Application Support/ai4j/logs/installations/<INSTALLATION_ID>/`.
+On Windows, find them under
+`%LOCALAPPDATA%\AI4J\logs\installations\<INSTALLATION_ID>\`. Commands that do
+not address an installation, such as `validate`, `build`, and `list`, have
+separate logs under `logs/commands/`. The logs contain operation stages and
+result classifications, but not command-line arguments, source addresses,
+environment variables, or diagnostic details. If a run stops before it can
+finish, AI4J preserves its trace and later marks it as `.log.interrupted`
+before applying the same rotation limit.

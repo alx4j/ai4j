@@ -74,7 +74,7 @@ func (s *lifecycleService) HistoryPurge(ctx context.Context, request cli.History
 	if approval != approvalGranted {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureApproval, "approval_required", "history purge requires explicit approval", result.UpdateNotChecked, nil)
 	}
-	reportProgress(commandIO, "removing the approved history entries...")
+	reportProgress(commandIO, "history_cleanup", "removing the approved history entries...")
 	record, present, err := s.state.LoadByID(installationID.String())
 	if err != nil || !present {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureConflict, "installation_not_found", "the selected installation does not exist", result.UpdateNotChecked, nil)

@@ -107,7 +107,7 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err != nil {
 		return lifecycleFailure(command, result.FailureInternal, "operation_marker_failed", "operation could not be prepared", execution.disposition, execution.source.Warnings)
 	}
-	reportProgress(commandIO, "checking available disk space...")
+	reportProgress(commandIO, "disk_preflight", "checking available disk space...")
 	if err := s.preflightExecutionCapacity(marker, entry, desired, transition.desiredTarget, transition.desiredRules, transition.desiredArtifacts); err != nil {
 		if code, message, ok := appDiskCapacityProblem(err); ok {
 			return lifecycleFailure(command, result.FailureEnvironment, code, message, execution.disposition, execution.source.Warnings)
@@ -130,7 +130,7 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if err := s.applyTransition(ctx, transition, policy); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_mutation_failed")
 	}
-	reportProgress(commandIO, "verifying the final installation state...")
+	reportProgress(commandIO, "verify", "verifying the final installation state...")
 	if err := s.verifyTransition(ctx, *desired, transition.before); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "target_verification_failed")
 	}

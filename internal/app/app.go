@@ -29,9 +29,16 @@ type CommandIO struct {
 	Output      io.Writer
 	Progress    io.Writer
 	Interactive bool
+	logSession  *commandLogSession
 }
 
 type CommandHandler func(context.Context, cli.Request, CommandIO) (cli.Response, error)
+
+func (c CommandIO) bindLogInstallation(installation domain.InstallationID) {
+	if c.logSession != nil {
+		c.logSession.bindInstallation(installation)
+	}
+}
 
 // OtherCommandsFactory lazily constructs the non-version command handler.
 // Parsing, usage failures, and version handling never call this factory.
@@ -108,7 +115,7 @@ func (a Application) RunContext(ctx context.Context, argv []string, stdin io.Rea
 		commandIO := CommandIO{Input: stdin, Output: stdout, Interactive: interactive}
 		if request.OutputMode() == cli.OutputHuman && interactive {
 			commandIO.Progress = stderr
-			reportProgress(commandIO, commandProgressMessage(request.Command()))
+			reportProgress(commandIO, commandLogInitialStage(request.Command()), commandProgressMessage(request.Command()))
 		}
 		response, err = a.handleOther(ctx, request, commandIO)
 	}
@@ -169,7 +176,10 @@ func writeOutputFailure(stderr io.Writer) {
 	}
 }
 
-func reportProgress(commandIO CommandIO, message string) {
+func reportProgress(commandIO CommandIO, stage, message string) {
+	if commandIO.logSession != nil {
+		commandIO.logSession.progress(stage)
+	}
 	if commandIO.Progress == nil || message == "" {
 		return
 	}

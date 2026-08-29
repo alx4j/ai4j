@@ -312,6 +312,9 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 	if err != nil {
 		return cli.Response{}, err
 	}
+	if installation := recordInstallation(execution.transition.before, execution.transition.desired); installation != nil {
+		request.commandIO.bindLogInstallation(*installation)
+	}
 	if stop {
 		return planAsCommand(response, request.command)
 	}
@@ -347,7 +350,7 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 	if approval != approvalGranted {
 		return lifecycleFailure(request.command, result.FailureApproval, "approval_required", "operation requires explicit approval", execution.disposition, execution.source.Warnings)
 	}
-	reportProgress(request.commandIO, "applying the approved changes...")
+	reportProgress(request.commandIO, "apply", "applying the approved changes...")
 	return s.commitExecution(ctx, request.command, execution, policy, request.commandIO)
 }
 

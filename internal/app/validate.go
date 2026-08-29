@@ -61,7 +61,7 @@ func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
 		router.lifecycle = newLifecycleService(validator, state, runner, home, claudeRoot, build, acquire)
 		router.status = statusService{validation: validator, state: state, home: home}
 		router.doctor = newDoctorService(state, router.status, validator, runner)
-		return newCommandHandler(router), nil
+		return newCommandHandler(router, state.DataRoot()), nil
 	}
 }
 
@@ -92,8 +92,13 @@ func productionClaudeRoot(home string) (string, error) {
 	return root, nil
 }
 
-func newCommandHandler(router commandRouter) CommandHandler {
-	return func(ctx context.Context, request cli.Request, commandIO CommandIO) (cli.Response, error) {
+func newCommandHandler(router commandRouter, dataRoot string) CommandHandler {
+	return func(ctx context.Context, request cli.Request, commandIO CommandIO) (response cli.Response, responseErr error) {
+		logSession := startCommandLog(dataRoot, request)
+		if logSession != nil {
+			commandIO.logSession = logSession
+			defer func() { logSession.complete(response, responseErr) }()
+		}
 		switch command := request.(type) {
 		case cli.InitRequest:
 			return initResponse(router.validation.Init(ctx, command))
