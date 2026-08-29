@@ -5,7 +5,6 @@ type UsageIssue string
 
 const (
 	UsageMissingExecutable     UsageIssue = "missing_executable"
-	UsageAlternateExecutable   UsageIssue = "alternate_executable"
 	UsageMissingCommand        UsageIssue = "missing_command"
 	UsageUnknownCommand        UsageIssue = "unknown_command"
 	UsageUnexpectedArgument    UsageIssue = "unexpected_argument"

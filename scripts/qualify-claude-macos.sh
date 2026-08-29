@@ -193,7 +193,7 @@ jq -e '.data.nativeState.registration == "registered" and
   .data.nativeState.installation == "installed" and
   .data.nativeState.enablement == "enabled"' "$evidence_root/user-status.json" >/dev/null
 assert_default_bundle_status "$evidence_root/user-status.json"
-marketplace_id="ai4j-${active_installation#install-}"
+marketplace_id="ai4j-${active_installation}"
 
 claude plugin marketplace list --json | tee "$evidence_root/user-marketplace-list.json"
 jq -e --arg id "$marketplace_id" '[.. | strings] | index($id) != null' \

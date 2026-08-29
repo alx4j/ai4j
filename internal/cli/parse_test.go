@@ -15,7 +15,7 @@ const commitOID = "0123456789abcdef0123456789abcdef01234567"
 func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		name    string
 		argv    []string
@@ -51,7 +51,7 @@ func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 
 func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	tests := []struct {
 		command cli.Command
@@ -89,7 +89,7 @@ func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 
 func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	tests := [][]string{
 		{"ai4j", "validate", "--repo", "alx4j/ai4j", "--source", ".", "--target", "claude"},
@@ -114,7 +114,7 @@ func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 func TestParserPreservesTypedOptions(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	request, err := parser.Parse([]string{"ai4j", "install", "--ref", "main", "--repo=alx4j/ai4j", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes", "--expected-commit", commitOID, "--json"})
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +167,7 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	accepted := []struct {
 		argv   []string
 		bundle func(cli.Request) string
@@ -217,7 +217,7 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	twoRequest, err := parser.Parse([]string{
 		"ai4j", "install", "--git-root", "https://github.com/alx4j", "--target", "claude", "--scope", "user",
 		"--bundle", "common@v1", "--bundle", "company@v2",
@@ -257,7 +257,7 @@ func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
 func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	base := []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1", "--bundle", "company@v2"}
 	tests := []struct {
@@ -300,7 +300,7 @@ func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	request, err := parser.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist", "--asset", "review-skill", "--bundle", "review", "--bundle", "tools"})
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
 func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		dryRun func(cli.Request) bool
@@ -348,7 +348,7 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		argv []string
 		id   func(cli.Request) string
@@ -375,7 +375,7 @@ func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.
 func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		issue  cli.UsageIssue
@@ -400,7 +400,7 @@ func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := [][]string{
 		{"ai4j", "update"},
 		{"ai4j", "sync", "--bundle", "default"},
@@ -422,7 +422,7 @@ func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 
 func TestParserBuildReportsMissingRequiredOptionsInCanonicalOrder(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		option string
@@ -443,7 +443,7 @@ func TestParserBuildReportsMissingRequiredOptionsInCanonicalOrder(t *testing.T) 
 
 func TestParserValidateRequiresTarget(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 
 	_, err := parser.Parse([]string{"ai4j", "validate"})
 	var usage *cli.UsageError
@@ -454,7 +454,7 @@ func TestParserValidateRequiresTarget(t *testing.T) {
 
 func TestParserValidateRejectsMultipleTargets(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 
 	_, err := parser.Parse([]string{"ai4j", "validate", "--target", "claude", "--target", "codex"})
 	var usage *cli.UsageError
@@ -466,7 +466,7 @@ func TestParserValidateRejectsMultipleTargets(t *testing.T) {
 func TestParserPreservesSourceOptionPresence(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		name       string
 		argv       []string
@@ -515,7 +515,7 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 		{name: "uninstall", command: []string{"uninstall", "installation-001"}, options: []option{{[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "version", command: []string{"version"}, options: []option{{[]string{"--json"}, []string{"--json"}}}},
 	}
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -551,7 +551,7 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	tests := []struct {
 		name  string
 		argv  []string
@@ -559,8 +559,6 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 		json  bool
 	}{
 		{name: "missing executable", argv: nil, issue: cli.UsageMissingExecutable},
-		{name: "alternate executable", argv: []string{"toolkit", "version"}, issue: cli.UsageAlternateExecutable},
-		{name: "case variant executable", argv: []string{"AI4J", "version"}, issue: cli.UsageAlternateExecutable},
 		{name: "missing command", argv: []string{"ai4j"}, issue: cli.UsageMissingCommand},
 		{name: "unknown command", argv: []string{"ai4j", "repair"}, issue: cli.UsageUnknownCommand},
 		{name: "removed plan command", argv: []string{"ai4j", "plan", "--json"}, issue: cli.UsageUnknownCommand, json: true},
@@ -606,7 +604,7 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 func TestUsageErrorPreservesItsValidationCause(t *testing.T) {
 	t.Parallel()
 
-	_, err := cli.NewParser("darwin").Parse([]string{"ai4j", "status", "INVALID"})
+	_, err := cli.NewParser().Parse([]string{"ai4j", "status", "INVALID"})
 	var usage *cli.UsageError
 
 	if !errors.As(err, &usage) || errors.Unwrap(usage) == nil {
@@ -640,7 +638,7 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 		{name: "history purge", command: []string{"history", "purge", "installation-001"}, options: []option{{name: "operation", value: "operation-001"}, {name: "expired", boolean: true}, {name: "all", boolean: true}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "version", command: []string{"version"}, options: []option{{name: "json", boolean: true}}},
 	}
-	parser := cli.NewParser("darwin")
+	parser := cli.NewParser()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -691,17 +689,17 @@ func assertUsageIssue(t *testing.T, parser cli.Parser, argv []string, want cli.U
 	}
 }
 
-func TestWindowsExecutableExtensionIsPlatformBound(t *testing.T) {
+func TestParserAcceptsRuntimeExecutableName(t *testing.T) {
 	t.Parallel()
 
-	if _, err := cli.NewParser("windows").Parse([]string{`C:\bin\ai4j.exe`, "version"}); err != nil {
-		t.Fatalf("Windows ai4j.exe error = %v", err)
-	}
-	if _, err := cli.NewParser("darwin").Parse([]string{"ai4j.exe", "version"}); err == nil {
-		t.Fatal("Darwin parser accepted ai4j.exe")
-	}
-	if _, err := cli.NewParser("windows").Parse([]string{"ai4j", "version"}); err == nil {
-		t.Fatal("Windows parser accepted extensionless alternate executable")
+	for _, argv := range [][]string{
+		{`C:\bin\ai4j.exe`, "version"},
+		{`C:\bin\renamed-tool.exe`, "version"},
+		{"/usr/local/bin/renamed-tool", "version"},
+	} {
+		if _, err := cli.NewParser().Parse(argv); err != nil {
+			t.Fatalf("Parse(%q) error = %v", argv, err)
+		}
 	}
 }
 
@@ -710,7 +708,7 @@ func TestUsageErrorsDoNotRetainOrRenderUnknownArguments(t *testing.T) {
 
 	const canary = "secret-canary"
 	unknown := "--" + canary + strings.Repeat("x", 4096)
-	_, err := cli.NewParser("darwin").Parse([]string{"ai4j", "version", unknown})
+	_, err := cli.NewParser().Parse([]string{"ai4j", "version", unknown})
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("Parse() error = %v, want UsageError", err)

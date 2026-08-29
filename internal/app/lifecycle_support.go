@@ -198,13 +198,12 @@ func installationIDFor(report validation.LifecycleSelection, scope cli.Scope, sc
 		sourceIdentity = report.Source.Repository().String()
 	}
 	digest := sha256.Sum256([]byte(report.ToolkitID + "\x00" + sourceIdentity + "\x00" + string(scope) + "\x00" + filepath.Clean(scopeRoot)))
-	id, _ := domain.NewInstallationID("install-" + hex.EncodeToString(digest[:8]))
+	id, _ := domain.NewInstallationID(hex.EncodeToString(digest[:4]))
 	return id
 }
 
 func marketplaceIDFor(installationID domain.InstallationID) string {
-	value := strings.TrimPrefix(installationID.String(), "install-")
-	return "ai4j-" + value
+	return "ai4j-" + installationID.String()
 }
 
 func nativePluginID(pkg installstate.NativePackage, marketplaceID string) string {

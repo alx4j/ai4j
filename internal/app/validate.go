@@ -24,7 +24,7 @@ type commandRouter struct {
 	doctor     *doctorService
 }
 
-func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
+func productionOtherCommands(build buildinfo.Info, tool string) OtherCommandsFactory {
 	return func() (CommandHandler, error) {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -61,7 +61,7 @@ func productionOtherCommands(build buildinfo.Info) OtherCommandsFactory {
 		router.lifecycle = newLifecycleService(validator, state, runner, home, claudeRoot, build, acquire)
 		router.status = statusService{validation: validator, state: state, home: home}
 		router.doctor = newDoctorService(state, router.status, validator, runner)
-		return newCommandHandler(router, state.DataRoot()), nil
+		return newCommandHandler(router, state.DataRoot(), tool), nil
 	}
 }
 
@@ -92,9 +92,9 @@ func productionClaudeRoot(home string) (string, error) {
 	return root, nil
 }
 
-func newCommandHandler(router commandRouter, dataRoot string) CommandHandler {
+func newCommandHandler(router commandRouter, dataRoot, tool string) CommandHandler {
 	return func(ctx context.Context, request cli.Request, commandIO CommandIO) (response cli.Response, responseErr error) {
-		logSession := startCommandLog(dataRoot, request)
+		logSession := startCommandLog(dataRoot, tool, request)
 		if logSession != nil {
 			commandIO.logSession = logSession
 			defer func() { logSession.complete(response, responseErr) }()

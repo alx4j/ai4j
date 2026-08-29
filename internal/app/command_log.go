@@ -1,18 +1,22 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/alx4j/ai4j/internal/buildinfo"
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/host/privatepath"
@@ -21,31 +25,60 @@ import (
 
 const (
 	commandLogRetention  = 10
-	commandLogTimeLayout = "20060102T150405.000000000Z"
-	commandLogStaleAfter = 7 * 24 * time.Hour
+	commandLogRunIDBytes = 8
+	commandLogToolLimit  = 64
 )
 
-var commandLogNamePattern = regexp.MustCompile(`^ai4j-[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{16}\.log(\.interrupted)?$`)
-var commandLogActiveNamePattern = regexp.MustCompile(`^ai4j-[0-9]{8}T[0-9]{6}\.[0-9]{9}Z-[0-9a-f]{16}\.log\.active$`)
+var commandLogUnsafeToolCharacters = regexp.MustCompile(`[^a-z0-9_-]+`)
+var commandLogToolPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+type commandLogRecord struct {
+	time       time.Time
+	message    string
+	attributes []slog.Attr
+}
 
 type commandLogSession struct {
-	dataRoot     string
-	directory    string
-	path         string
-	command      cli.Command
-	installation domain.InstallationID
-	started      time.Time
-	now          func() time.Time
-	file         *os.File
-	handler      slog.Handler
-	closed       bool
+	dataRoot             string
+	tool                 string
+	command              cli.Command
+	installation         domain.InstallationID
+	started              time.Time
+	now                  func() time.Time
+	runID                string
+	pending              []commandLogRecord
+	awaitingInstallation bool
+	closed               bool
 }
 
-func startCommandLog(dataRoot string, request cli.Request) *commandLogSession {
-	return startCommandLogWith(dataRoot, request, time.Now, rand.Reader)
+func commandLogToolName(argv []string) string {
+	if len(argv) == 0 {
+		return buildinfo.Executable
+	}
+	name := path.Base(strings.ReplaceAll(argv[0], `\`, "/"))
+	if strings.HasSuffix(strings.ToLower(name), ".exe") {
+		name = name[:len(name)-len(".exe")]
+	}
+	return normalizeCommandLogTool(name)
 }
 
-func startCommandLogWith(dataRoot string, request cli.Request, now func() time.Time, entropy io.Reader) *commandLogSession {
+func normalizeCommandLogTool(name string) string {
+	name = commandLogUnsafeToolCharacters.ReplaceAllString(strings.ToLower(name), "-")
+	name = strings.Trim(name, "-_")
+	if len(name) > commandLogToolLimit {
+		name = strings.TrimRight(name[:commandLogToolLimit], "-_")
+	}
+	if !commandLogToolPattern.MatchString(name) {
+		return buildinfo.Executable
+	}
+	return name
+}
+
+func startCommandLog(dataRoot, tool string, request cli.Request) *commandLogSession {
+	return startCommandLogWith(dataRoot, tool, request, time.Now, rand.Reader)
+}
+
+func startCommandLogWith(dataRoot, tool string, request cli.Request, now func() time.Time, entropy io.Reader) *commandLogSession {
 	if request == nil || now == nil || entropy == nil || !filepath.IsAbs(dataRoot) || filepath.Clean(dataRoot) != dataRoot {
 		return nil
 	}
@@ -53,32 +86,15 @@ func startCommandLogWith(dataRoot string, request cli.Request, now func() time.T
 	if !command.Valid() {
 		return nil
 	}
+	var runID [commandLogRunIDBytes]byte
+	if _, err := io.ReadFull(entropy, runID[:]); err != nil {
+		return nil
+	}
 	installation := commandRequestInstallation(request)
-	directory := commandLogDirectory(dataRoot, command, installation)
-	if err := privatepath.EnsureDirectory(directory); err != nil {
-		return nil
-	}
-	started := now().UTC()
-	pruneCommandLogs(directory, started)
-	var nonce [8]byte
-	if _, err := io.ReadFull(entropy, nonce[:]); err != nil {
-		return nil
-	}
-	name := fmt.Sprintf("ai4j-%s-%x.log.active", started.Format(commandLogTimeLayout), nonce)
-	path := filepath.Join(directory, name)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return nil
-	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return nil
-	}
 	session := &commandLogSession{
-		dataRoot: dataRoot, directory: directory, path: path, command: command,
-		installation: installation, started: started, now: now, file: file,
-		handler: slog.NewTextHandler(file, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		dataRoot: dataRoot, tool: normalizeCommandLogTool(tool), command: command,
+		installation: installation, started: now().UTC(), now: now, runID: fmt.Sprintf("%x", runID),
+		awaitingInstallation: command == cli.CommandInstall && !installation.Valid(),
 	}
 	session.write("command started")
 	session.progress(commandLogInitialStage(command))
@@ -100,6 +116,14 @@ func commandLogDirectory(dataRoot string, command cli.Command, installation doma
 		return filepath.Join(dataRoot, "logs", "installations", installation.String())
 	}
 	return filepath.Join(dataRoot, "logs", "commands", command.String())
+}
+
+func commandLogFileName(tool string, command cli.Command, installation domain.InstallationID, at time.Time) string {
+	key := command.String()
+	if installation.Valid() {
+		key = installation.String()
+	}
+	return fmt.Sprintf("%s-%s-%s.log", tool, key, at.UTC().Format(time.DateOnly))
 }
 
 func commandLogInitialStage(command cli.Command) string {
@@ -132,6 +156,8 @@ func (s *commandLogSession) bindInstallation(installation domain.InstallationID)
 		return
 	}
 	s.installation = installation
+	s.awaitingInstallation = false
+	s.flushPending()
 }
 
 func (s *commandLogSession) complete(response cli.Response, handlerErr error) {
@@ -140,7 +166,11 @@ func (s *commandLogSession) complete(response cli.Response, handlerErr error) {
 	}
 	responseMatches := handlerErr == nil && response.Valid() && response.Command() == s.command
 	if !s.installation.Valid() && responseMatches {
-		s.installation = commandResponseInstallation(response)
+		s.bindInstallation(commandResponseInstallation(response))
+	}
+	if s.awaitingInstallation {
+		s.awaitingInstallation = false
+		s.pending = nil
 	}
 	attributes := []slog.Attr{slog.Int64("duration_ms", max(s.now().UTC().Sub(s.started).Milliseconds(), 0))}
 	if !responseMatches {
@@ -186,36 +216,89 @@ func (s *commandLogSession) complete(response cli.Response, handlerErr error) {
 	}
 	s.write("command completed", attributes...)
 	s.closed = true
-	_ = s.file.Close()
-
-	originalDirectory := s.directory
-	targetDirectory := commandLogDirectory(s.dataRoot, s.command, s.installation)
-	if privatepath.EnsureDirectory(targetDirectory) == nil {
-		name := filepath.Base(s.path)
-		name = name[:len(name)-len(".active")]
-		target := filepath.Join(targetDirectory, name)
-		if os.Rename(s.path, target) == nil {
-			s.directory = targetDirectory
-			s.path = target
-		}
-	}
-	pruneCommandLogs(originalDirectory, s.now().UTC())
-	if s.directory != originalDirectory {
-		pruneCommandLogs(s.directory, s.now().UTC())
-	}
 }
 
 func (s *commandLogSession) write(message string, attributes ...slog.Attr) {
-	if s == nil || s.closed || s.handler == nil {
+	if s == nil || s.closed {
 		return
 	}
-	record := slog.NewRecord(s.now().UTC(), slog.LevelInfo, message, 0)
-	record.AddAttrs(slog.String("command", s.command.String()))
+	record := commandLogRecord{
+		time: s.now().UTC(), message: message, attributes: slices.Clone(attributes),
+	}
+	if s.awaitingInstallation {
+		s.pending = append(s.pending, record)
+		s.appendRecord(record)
+		return
+	}
+	s.appendRecord(record)
+}
+
+func (s *commandLogSession) flushPending() {
+	for _, record := range s.pending {
+		s.appendRecord(record)
+	}
+	s.pending = nil
+}
+
+func (s *commandLogSession) appendRecord(entry commandLogRecord) {
+	directory := commandLogDirectory(s.dataRoot, s.command, s.installation)
+	if err := privatepath.EnsureDirectory(directory); err != nil {
+		return
+	}
+	name := commandLogFileName(s.tool, s.command, s.installation, entry.time)
+	logPath := filepath.Join(directory, name)
+	if info, err := os.Lstat(logPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	contents := s.encodeRecord(entry)
+	if len(contents) == 0 {
+		return
+	}
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	if err = file.Chmod(0o600); err == nil {
+		var written int
+		written, err = file.Write(contents)
+		if written != len(contents) && err == nil {
+			err = io.ErrShortWrite
+		}
+	}
+	closeErr := file.Close()
+	if err != nil || closeErr != nil {
+		return
+	}
+	pruneCommandLogs(directory, s.tool, commandLogKey(s.command, s.installation), logPath)
+}
+
+func (s *commandLogSession) encodeRecord(entry commandLogRecord) []byte {
+	var output bytes.Buffer
+	record := slog.NewRecord(entry.time, slog.LevelInfo, entry.message, 0)
+	record.AddAttrs(
+		slog.String("command", s.command.String()),
+		slog.String("run_id", s.runID),
+	)
 	if s.installation.Valid() {
 		record.AddAttrs(slog.String("installation_id", s.installation.String()))
 	}
-	record.AddAttrs(attributes...)
-	_ = s.handler.Handle(context.Background(), record)
+	record.AddAttrs(entry.attributes...)
+	handler := slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelInfo})
+	if err := handler.Handle(context.Background(), record); err != nil {
+		return nil
+	}
+	return output.Bytes()
+}
+
+func commandLogKey(command cli.Command, installation domain.InstallationID) string {
+	if installation.Valid() {
+		return installation.String()
+	}
+	return command.String()
 }
 
 func commandResponseInstallation(response cli.Response) domain.InstallationID {
@@ -249,38 +332,63 @@ func problemCodes(problems []result.Problem) []string {
 	return codes
 }
 
-func pruneCommandLogs(directory string, now time.Time) {
+type dailyCommandLog struct {
+	date string
+	name string
+	path string
+}
+
+func pruneCommandLogs(directory, tool, key, currentPath string) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return
 	}
-	paths := make([]string, 0, len(entries))
+	logs := make([]dailyCommandLog, 0, len(entries))
 	for _, entry := range entries {
-		name := entry.Name()
-		completedName := commandLogNamePattern.MatchString(name)
-		activeName := commandLogActiveNamePattern.MatchString(name)
-		if (!completedName && !activeName) || entry.Type()&os.ModeSymlink != 0 {
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		date, owned := commandLogDate(entry.Name(), tool, key)
+		if !owned {
 			continue
 		}
 		info, err := entry.Info()
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		path := filepath.Join(directory, name)
-		if activeName {
-			if info.ModTime().After(now.Add(-commandLogStaleAfter)) {
-				continue
-			}
-			interrupted := strings.TrimSuffix(path, ".active") + ".interrupted"
-			if os.Rename(path, interrupted) != nil {
-				continue
-			}
-			path = interrupted
+		logs = append(logs, dailyCommandLog{date: date, name: entry.Name(), path: filepath.Join(directory, entry.Name())})
+	}
+	slices.SortFunc(logs, func(left, right dailyCommandLog) int {
+		if order := strings.Compare(left.date, right.date); order != 0 {
+			return order
 		}
-		paths = append(paths, path)
+		return strings.Compare(left.name, right.name)
+	})
+	excess := max(len(logs)-commandLogRetention, 0)
+	for _, log := range logs {
+		if excess == 0 {
+			break
+		}
+		if filepath.Clean(log.path) == filepath.Clean(currentPath) {
+			continue
+		}
+		if err := os.Remove(log.path); err == nil || errors.Is(err, os.ErrNotExist) {
+			excess--
+		}
 	}
-	slices.Sort(paths)
-	for _, path := range paths[:max(len(paths)-commandLogRetention, 0)] {
-		_ = os.Remove(path)
+}
+
+func commandLogDate(name, tool, key string) (string, bool) {
+	prefix := tool + "-" + key + "-"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".log") {
+		return "", false
 	}
+	date := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".log")
+	if len(date) != len(time.DateOnly) {
+		return "", false
+	}
+	if _, err := time.Parse(time.DateOnly, date); err != nil {
+		return "", false
+	}
+	return date, true
 }

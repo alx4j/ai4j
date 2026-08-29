@@ -217,7 +217,6 @@ func TestApplicationEveryUsageIssueBypassesDependenciesAndStdin(t *testing.T) {
 		forbidden string
 	}{
 		{name: "missing executable", arguments: nil, issue: cli.UsageMissingExecutable},
-		{name: "alternate executable", arguments: []string{"toolkit", "version"}, issue: cli.UsageAlternateExecutable},
 		{name: "missing command", arguments: []string{"ai4j"}, issue: cli.UsageMissingCommand},
 		{name: "unknown command", arguments: []string{"ai4j", "secret-command"}, issue: cli.UsageUnknownCommand, forbidden: "secret-command"},
 		{name: "removed plan command", arguments: []string{"ai4j", "plan"}, issue: cli.UsageUnknownCommand},

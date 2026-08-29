@@ -20,7 +20,7 @@ func TestPublishedToolkitSchemaAcceptsFirstPartyAndGeneratedManifests(t *testing
 	validateToolkitDocument(t, schema, firstParty)
 
 	root := t.TempDir()
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "init", "--target", "claude", "--target", "codex", "--output", filepath.Join(t.TempDir(), "toolkit"), "--examples"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "init", "--target", "claude", "--target", "codex", "--output", filepath.Join(t.TempDir(), "toolkit"), "--examples"})
 	if err != nil {
 		t.Fatal(err)
 	}

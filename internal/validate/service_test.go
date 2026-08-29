@@ -70,7 +70,7 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := cli.NewParser("darwin").Parse(test.arguments)
+			request, err := cli.NewParser().Parse(test.arguments)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,7 +119,7 @@ func TestValidateRunsOnWindowsAMD64(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("windows").Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
+	request, err := cli.NewParser().Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestValidateCleansWorkspaceAfterNativeValidationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 || report.Problems[0].Code() != "native_validation_failed" {
 		t.Fatalf("failure=%s problems=%v", report.Failure, report.Problems)
@@ -220,7 +220,7 @@ func TestValidateUpdateClassifiesFastForwardNoChangeAndRewrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+			request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 			installed, _ := domain.NewCommitOID(test.installed)
 			update := service.ValidateUpdate(context.Background(), request.(cli.ValidateRequest).Source(), installed)
 			if update.Report.Failure != test.wantFailure || update.Disposition != test.want || runner.ancestorChecks != test.wantChecks {
@@ -247,7 +247,7 @@ func TestValidateUpdateInspectsAncestryBeforePackageValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, err := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestValidateRejectsLiteralSecretWithoutStartingNativeContent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser("darwin").Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 ||
 		report.Problems[0].Code() != "literal_secret" || strings.Contains(report.Problems[0].Message(), "secret-canary") {

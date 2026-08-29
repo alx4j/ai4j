@@ -69,7 +69,7 @@ func NewApplication(dependencies Dependencies) (Application, error) {
 		return Application{}, fmt.Errorf("application requires both renderers")
 	}
 	return Application{
-		parser:        cli.NewParser(dependencies.Build.TargetOS()),
+		parser:        cli.NewParser(),
 		version:       versionHandler{build: dependencies.Build, defaultSource: dependencies.DefaultSource},
 		otherCommands: dependencies.OtherCommands,
 		human:         dependencies.Human,
@@ -348,10 +348,11 @@ func RunContext(ctx context.Context, argv []string, stdin io.Reader, stdout, std
 		return result.ExitUnexpectedInternal.Int()
 	}
 	build := buildinfo.Read()
+	tool := commandLogToolName(argv)
 	application, err := NewApplication(Dependencies{
 		Build:         build,
 		DefaultSource: defaultSource,
-		OtherCommands: productionOtherCommands(build),
+		OtherCommands: productionOtherCommands(build, tool),
 		Human:         human.Render,
 		JSON:          jsonout.Render,
 	})

@@ -1785,6 +1785,48 @@ func stageInterrupted(t *testing.T, harness lifecycleHarness, execution lifecycl
 	return desired, entry, marker
 }
 
+func TestGeneratedInstallationIDsAreStableEightCharacterHex(t *testing.T) {
+	fixedOptions, err := cli.NewSourceOptions("alx4j/ai4j", true, "main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixedReport := validation.LifecycleSelection{
+		Source: testPlanSourceFrom(t, fixedOptions, strings.Repeat("a", 40)), ToolkitID: "ai4j",
+	}
+	fixedID := installationIDFor(fixedReport, cli.ScopeUser, "scope-root")
+	if got, want := fixedID.String(), "bdca3de2"; got != want {
+		t.Fatalf("fixed installation ID = %q, want %q", got, want)
+	}
+	if got, want := installationIDForComposition(cli.ScopeUser, "scope-root").String(), "69d57125"; got != want {
+		t.Fatalf("fixed composition ID = %q, want %q", got, want)
+	}
+
+	harness := newLifecycleHarness(t)
+	request := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--dry-run")
+	report := harness.validator.SelectLifecycle(context.Background(), request.Source(), request.Selection().Bundle())
+	scopeRoot := filepath.Join(harness.home, ".claude")
+	installation := installationIDFor(report, request.Scope(), scopeRoot)
+	repeated := installationIDFor(report, request.Scope(), scopeRoot)
+	otherRoot := installationIDFor(report, request.Scope(), filepath.Join(harness.home, "other"))
+	composition := installationIDForComposition(request.Scope(), scopeRoot)
+
+	if installation != repeated {
+		t.Fatalf("generated ID changed: %q then %q", installation.String(), repeated.String())
+	}
+	if installation == otherRoot {
+		t.Fatalf("different scope roots produced %q", installation.String())
+	}
+	for name, id := range map[string]domain.InstallationID{"installation": installation, "composition": composition} {
+		value := id.String()
+		if len(value) != 8 || strings.Trim(value, "0123456789abcdef") != "" {
+			t.Fatalf("%s ID = %q, want eight lowercase hex characters", name, value)
+		}
+	}
+	if got, want := marketplaceIDFor(installation), "ai4j-"+installation.String(); got != want {
+		t.Fatalf("marketplace ID = %q, want %q", got, want)
+	}
+}
+
 type lifecycleHarness struct {
 	service   *lifecycleService
 	validator *lifecycleValidator
@@ -1837,7 +1879,7 @@ func newLifecycleHarnessAt(t *testing.T, home, claudeRoot string) lifecycleHarne
 
 func parseRequest[T cli.Request](t *testing.T, arguments ...string) T {
 	t.Helper()
-	request, err := cli.NewParser("darwin").Parse(append([]string{"ai4j"}, arguments...))
+	request, err := cli.NewParser().Parse(append([]string{"ai4j"}, arguments...))
 	if err != nil {
 		t.Fatal(err)
 	}

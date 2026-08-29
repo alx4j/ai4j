@@ -218,6 +218,6 @@ func (s *lifecycleService) prepareCompositionUpdate(ctx context.Context, record 
 
 func installationIDForComposition(scope cli.Scope, scopeRoot string) domain.InstallationID {
 	digest := sha256.Sum256([]byte(strings.Join([]string{"composition", string(scope), filepath.Clean(scopeRoot)}, "\x00")))
-	id, _ := domain.NewInstallationID("install-" + hex.EncodeToString(digest[:8]))
+	id, _ := domain.NewInstallationID(hex.EncodeToString(digest[:4]))
 	return id
 }

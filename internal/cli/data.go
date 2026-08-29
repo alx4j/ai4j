@@ -500,7 +500,7 @@ func (d UsageData) valid() bool {
 		return false
 	}
 	switch d.issue {
-	case UsageMissingExecutable, UsageAlternateExecutable, UsageMissingCommand, UsageUnknownCommand, UsageUnexpectedArgument, UsageUnknownOption, UsageMisplacedOption, UsageInapplicableOption, UsageDuplicateOption, UsageMissingOptionValue, UsageEmptyOptionValue, UsageUnexpectedOptionValue, UsageInvalidOptionValue:
+	case UsageMissingExecutable, UsageMissingCommand, UsageUnknownCommand, UsageUnexpectedArgument, UsageUnknownOption, UsageMisplacedOption, UsageInapplicableOption, UsageDuplicateOption, UsageMissingOptionValue, UsageEmptyOptionValue, UsageUnexpectedOptionValue, UsageInvalidOptionValue:
 		return true
 	default:
 		return false

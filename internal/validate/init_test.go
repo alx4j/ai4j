@@ -19,7 +19,7 @@ func TestInitCreatesValidDeterministicTargetScaffold(t *testing.T) {
 	var manifests [][]byte
 	for _, name := range []string{"first", "second"} {
 		output := filepath.Join(parent, name)
-		request, parseErr := cli.NewParser("windows").Parse([]string{"ai4j.exe", "init", "--target", "claude", "--target", "codex", "--output", output, "--examples"})
+		request, parseErr := cli.NewParser().Parse([]string{"ai4j.exe", "init", "--target", "claude", "--target", "codex", "--output", output, "--examples"})
 		if parseErr != nil {
 			t.Fatal(parseErr)
 		}
@@ -47,7 +47,7 @@ func TestInitCreatesValidDeterministicTargetScaffold(t *testing.T) {
 		t.Fatal(err)
 	}
 	buildOutput := filepath.Join(parent, "built")
-	buildRequest, err := cli.NewParser("darwin").Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", buildOutput, "--bundle", "examples"})
+	buildRequest, err := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", buildOutput, "--bundle", "examples"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestInitRefusesOccupiedOutputWithoutChangingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, _ := NewService(Config{GOOS: "windows", GOARCH: "amd64", Home: t.TempDir(), BuildCommit: testBuild, Runner: &fixtureRunner{files: firstPartyFiles(t)}, TempRoot: t.TempDir()})
-	request, _ := cli.NewParser("windows").Parse([]string{"ai4j.exe", "init", "--target", "codex", "--output", output})
+	request, _ := cli.NewParser().Parse([]string{"ai4j.exe", "init", "--target", "codex", "--output", output})
 	report := service.Init(context.Background(), request.(cli.InitRequest))
 	content, readErr := os.ReadFile(marker)
 	if report.Failure != FailureConflict || len(report.Problems) != 1 || report.Problems[0].Code() != "output_occupied" || readErr != nil || string(content) != "user-owned" {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -10,9 +9,9 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 )
 
-type Parser struct{ windows bool }
+type Parser struct{}
 
-func NewParser(goos string) Parser { return Parser{windows: goos == "windows"} }
+func NewParser() Parser { return Parser{} }
 
 type parsedOptions struct {
 	repository        string
@@ -97,9 +96,6 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	jsonRequested := containsExactJSON(argv)
 	if len(argv) == 0 {
 		return nil, newUsageError(UsageMissingExecutable, "", "", jsonRequested, nil)
-	}
-	if !p.validExecutable(argv[0]) {
-		return nil, newUsageError(UsageAlternateExecutable, "", "", jsonRequested, nil)
 	}
 	if len(argv) == 1 {
 		return nil, newUsageError(UsageMissingCommand, "", "", jsonRequested, nil)
@@ -187,14 +183,6 @@ func (p Parser) Parse(argv []string) (Request, error) {
 	default:
 		panic("validated command is not handled")
 	}
-}
-
-func (p Parser) validExecutable(value string) bool {
-	if p.windows {
-		base := path.Base(strings.ReplaceAll(value, `\`, "/"))
-		return strings.EqualFold(base, "ai4j.exe")
-	}
-	return path.Base(value) == "ai4j"
 }
 
 func parseCommand(arguments []string) (Command, int, UsageIssue) {

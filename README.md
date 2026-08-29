@@ -194,6 +194,7 @@ user or project installations and safely direct status checks, updates,
 rollbacks, and removal to the right one.
 
 `<INSTALLATION_ID>` is the value returned by `install` or shown by `ai4j list`.
+Automatically generated IDs are short, stable values such as `7c2fd86a`.
 The `status` command always checks both the current installation health and its
 source for available updates.
 
@@ -404,14 +405,22 @@ ai4j doctor <INSTALLATION_ID>
 The command lists each check with an `ok`, `warning`, or `error` status and a
 short summary.
 
-AI4J also keeps the ten most recent command logs for each installation. On
-macOS, find them under
+AI4J appends command activity to one UTC-dated log per installation. A typical
+file is `ai4j-7c2fd86a-2026-08-29.log`. On macOS, find installation logs under
 `~/Library/Application Support/ai4j/logs/installations/<INSTALLATION_ID>/`.
 On Windows, find them under
-`%LOCALAPPDATA%\AI4J\logs\installations\<INSTALLATION_ID>\`. Commands that do
-not address an installation, such as `validate`, `build`, and `list`, have
-separate logs under `logs/commands/`. The logs contain operation stages and
-result classifications, but not command-line arguments, source addresses,
-environment variables, or diagnostic details. If a run stops before it can
-finish, AI4J preserves its trace and later marks it as `.log.interrupted`
-before applying the same rotation limit.
+`%LOCALAPPDATA%\AI4J\logs\installations\<INSTALLATION_ID>\`. The filename prefix
+comes from the executable name, so a renamed executable uses its new name.
+AI4J keeps the ten most recent daily logs for each executable name. Logs made
+under an earlier executable name are left untouched.
+
+Commands that do not address an installation, such as `validate`, `build`, and
+`list`, have separate daily logs under `logs/commands/`. Each run has a
+`run_id`, which keeps interleaved records understandable and makes an
+interrupted run visible as a start without a matching completion. Logs contain
+operation stages and result classifications, but not command-line arguments,
+source addresses, environment variables, or diagnostic details.
+
+An automatic install writes its initial, pre-ID records to the `install`
+command log. Once AI4J assigns the installation ID, it also places the complete
+trace in that installation's daily log using the same `run_id`.
