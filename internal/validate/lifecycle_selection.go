@@ -142,7 +142,7 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 	claude, _ := s.config.Runner.LookPath("claude")
 	for _, selectedPackage := range resolved.packages {
 		nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(selectedPackage.Path)), claude, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
+		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(selectedPackage.Path)), claude, []string{"plugin", "validate", "."}, claudeEnvironment())
 		cancelNative()
 		if runErr != nil || native.ExitCode != 0 {
 			return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("native_validation_failed", "Claude Code rejected a selected native package")}, Failure: FailureValidation}

@@ -25,5 +25,5 @@ esac
 "$ai4j_go" list -m -mod=readonly all
 "$ai4j_go" test -mod=readonly ./...
 "$ai4j_go" vet -mod=readonly ./...
-"$ai4j_go" run -mod=readonly ./internal/repocheck/cmd/repocheck authorship --range HEAD
+"$ai4j_go" run -mod=readonly ./internal/repocheck/cmd/repocheck authorship --range HEAD --allow-github-committer
 git diff --exit-code -- .

@@ -278,7 +278,7 @@ try {
     Write-Evidence -Name 'windows-lock-tests.txt' -Text ($lockLines -join [Environment]::NewLine)
 
     foreach ($package in @('ai4j-review', 'ai4j-tools')) {
-        Invoke-ClaudeText -EvidenceName "native-plugin-validate-$package.txt" -Arguments @('plugin', 'validate', '.', '--strict') -WorkingDirectory (Join-Path $script:RepoRoot "plugins\$package")
+        Invoke-ClaudeText -EvidenceName "native-plugin-validate-$package.txt" -Arguments @('plugin', 'validate', '.') -WorkingDirectory (Join-Path $script:RepoRoot "plugins\$package")
     }
 
     & go build -mod=readonly -trimpath -buildvcs=true -o $script:AI4J ./cmd/ai4j

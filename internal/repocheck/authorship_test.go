@@ -37,7 +37,50 @@ func TestValidateCommit(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commit := valid
 			test.change(&commit)
-			err := ValidateCommit(commit)
+			err := ValidateCommit(commit, false)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("ValidateCommit() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), test.wantError) {
+				t.Fatalf("ValidateCommit() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestValidateCommitAllowsOnlyExactGitHubCommitterWhenRequested(t *testing.T) {
+	t.Parallel()
+
+	valid := Commit{
+		Hash:           "0123456789abcdef",
+		AuthorName:     RequiredName,
+		AuthorEmail:    RequiredEmail,
+		CommitterName:  githubCommitterName,
+		CommitterEmail: githubCommitterEmail,
+		Message:        "Fix main checks (#11)",
+	}
+	tests := []struct {
+		name                 string
+		allowGitHubCommitter bool
+		change               func(*Commit)
+		wantError            string
+	}{
+		{name: "explicit exception", allowGitHubCommitter: true, change: func(*Commit) {}},
+		{name: "strict default", change: func(*Commit) {}, wantError: "committer is"},
+		{name: "different GitHub name", allowGitHubCommitter: true, change: func(c *Commit) { c.CommitterName = "github-actions[bot]" }, wantError: "committer is"},
+		{name: "different GitHub email", allowGitHubCommitter: true, change: func(c *Commit) { c.CommitterEmail = "actions@github.com" }, wantError: "committer is"},
+		{name: "wrong author", allowGitHubCommitter: true, change: func(c *Commit) { c.AuthorName = "Someone Else" }, wantError: "author is"},
+		{name: "forbidden attribution", allowGitHubCommitter: true, change: func(c *Commit) { c.Message += "\n\nCo-Authored-By: Other <other@example.com>" }, wantError: "co-authored-by"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commit := valid
+			test.change(&commit)
+			err := ValidateCommit(commit, test.allowGitHubCommitter)
 			if test.wantError == "" {
 				if err != nil {
 					t.Fatalf("ValidateCommit() error = %v", err)

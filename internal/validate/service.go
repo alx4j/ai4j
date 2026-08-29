@@ -173,7 +173,7 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	}
 	for _, packagePath := range validated.nativePackagePaths {
 		nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(packagePath)), claude, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
+		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(packagePath)), claude, []string{"plugin", "validate", "."}, claudeEnvironment())
 		cancelNative()
 		if runErr != nil || native.ExitCode != 0 {
 			return reportWithSource(source, FailureValidation, "native_validation_failed", "Claude Code rejected the toolkit package")

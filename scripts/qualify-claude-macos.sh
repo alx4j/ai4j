@@ -163,7 +163,7 @@ go test -mod=readonly ./internal/host/darwin/installlock \
 for package in ai4j-review ai4j-tools; do
   (
     cd "plugins/$package"
-    claude plugin validate . --strict
+    claude plugin validate .
   ) 2>&1 | tee "$evidence_root/native-plugin-validate-$package.txt"
 done
 

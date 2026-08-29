@@ -119,11 +119,12 @@ func checkAuthorship(ctx context.Context, root string, args []string) error {
 	flags := flag.NewFlagSet("authorship", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	revision := flags.String("range", "HEAD", "Git revision or range containing real commits")
+	allowGitHubCommitter := flags.Bool("allow-github-committer", false, "allow GitHub's exact server-side committer identity")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: repocheck authorship [--range <revision>]")
+		return errors.New("usage: repocheck authorship [--range <revision>] [--allow-github-committer]")
 	}
 
 	commits, err := repocheck.LoadCommits(ctx, root, *revision)
@@ -131,7 +132,7 @@ func checkAuthorship(ctx context.Context, root string, args []string) error {
 		return err
 	}
 	for _, commit := range commits {
-		if err := repocheck.ValidateCommit(commit); err != nil {
+		if err := repocheck.ValidateCommit(commit, *allowGitHubCommitter); err != nil {
 			return err
 		}
 	}

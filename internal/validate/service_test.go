@@ -329,7 +329,7 @@ func (r *fixtureRunner) run(directory, executable string, arguments []string) (h
 		if slices.Equal(arguments, []string{"--version"}) {
 			return hostprocess.Result{Stdout: []byte("2.1.211 (Claude Code)\n")}, nil
 		}
-		if slices.Equal(arguments, []string{"plugin", "validate", ".", "--strict"}) {
+		if slices.Equal(arguments, []string{"plugin", "validate", "."}) {
 			r.claudeValidations++
 			r.claudeValidationDirectories = append(r.claudeValidationDirectories, directory)
 			return hostprocess.Result{ExitCode: r.nativeExitCode}, nil

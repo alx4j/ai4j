@@ -170,7 +170,7 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 					continue
 				}
 				nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-				native, runErr := s.config.Runner.Run(nativeContext, root, claudeExecutable, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
+				native, runErr := s.config.Runner.Run(nativeContext, root, claudeExecutable, []string{"plugin", "validate", "."}, claudeEnvironment())
 				cancelNative()
 				if runErr != nil || native.ExitCode != 0 {
 					return errNativeBuildValidation

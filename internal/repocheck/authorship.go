@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	RequiredName  = "Oleksii Stupin"
-	RequiredEmail = "oleksii.stupin@gmail.com"
+	RequiredName         = "Oleksii Stupin"
+	RequiredEmail        = "oleksii.stupin@gmail.com"
+	githubCommitterName  = "GitHub"
+	githubCommitterEmail = "noreply@github.com"
 )
 
 // Commit contains the attribution fields protected by repository policy.
@@ -29,12 +31,14 @@ type Commit struct {
 }
 
 // ValidateCommit requires the exact author and committer identity and a clean message.
-func ValidateCommit(commit Commit) error {
+func ValidateCommit(commit Commit, allowGitHubCommitter bool) error {
 	var problems []error
 	if commit.AuthorName != RequiredName || commit.AuthorEmail != RequiredEmail {
 		problems = append(problems, fmt.Errorf("commit %s author is %s <%s>", commit.Hash, commit.AuthorName, commit.AuthorEmail))
 	}
-	if commit.CommitterName != RequiredName || commit.CommitterEmail != RequiredEmail {
+	validCommitter := commit.CommitterName == RequiredName && commit.CommitterEmail == RequiredEmail
+	githubCommitter := commit.CommitterName == githubCommitterName && commit.CommitterEmail == githubCommitterEmail
+	if !validCommitter && !(allowGitHubCommitter && githubCommitter) {
 		problems = append(problems, fmt.Errorf("commit %s committer is %s <%s>", commit.Hash, commit.CommitterName, commit.CommitterEmail))
 	}
 	if forbidden := ForbiddenAttribution(commit.Message); forbidden != "" {

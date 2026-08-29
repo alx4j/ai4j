@@ -13,12 +13,14 @@
 
 ## Git attribution and publishing
 
-Every commit created or pushed for this repository must use both of these exact Git identities:
+Every source commit created or pushed for this repository must use both of these exact Git identities:
 
 ```text
 Author:    Oleksii Stupin <oleksii.stupin@gmail.com>
 Committer: Oleksii Stupin <oleksii.stupin@gmail.com>
 ```
+
+The sole exception is the final squash commit created by GitHub when a pull request is merged: its author must still be Oleksii, while GitHub records the exact server committer `GitHub <noreply@github.com>`.
 
 - Set and verify `user.name` and `user.email` in the repository-local Git configuration before committing.
 - Do not add bot, assistant, generated-by, or `Co-authored-by` attribution.
