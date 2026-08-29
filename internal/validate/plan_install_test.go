@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/alx4j/ai4j/internal/hostprocess"
 )
 
 func TestInspectNativeStatusAtRunsQueriesFromProjectDirectory(t *testing.T) {
@@ -38,15 +40,19 @@ func (r *inspectionRunner) LookPath(name string) (string, error) {
 	return "/usr/bin/claude", nil
 }
 
-func (r *inspectionRunner) Run(_ context.Context, directory string, _ string, arguments, _ []string) (ProcessResult, error) {
+func (r *inspectionRunner) Run(_ context.Context, directory string, _ string, arguments, _ []string) (hostprocess.Result, error) {
 	r.calls++
 	r.directories = append(r.directories, directory)
 	switch {
 	case slices.Equal(arguments, []string{"plugin", "marketplace", "list", "--json"}):
-		return ProcessResult{Stdout: r.marketplaces}, nil
+		return hostprocess.Result{Stdout: r.marketplaces}, nil
 	case slices.Equal(arguments, []string{"plugin", "list", "--json"}):
-		return ProcessResult{Stdout: r.plugins}, nil
+		return hostprocess.Result{Stdout: r.plugins}, nil
 	default:
-		return ProcessResult{}, fmt.Errorf("unexpected arguments: %v", arguments)
+		return hostprocess.Result{}, fmt.Errorf("unexpected arguments: %v", arguments)
 	}
+}
+
+func (r *inspectionRunner) RunIsolated(ctx context.Context, directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
+	return r.Run(ctx, directory, executable, arguments, environment)
 }

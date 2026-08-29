@@ -32,10 +32,6 @@ func TestDistinctIdentityTypesAndCanonicalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executable, err := domain.NewExecutableDigest(sha256)
-	if err != nil {
-		t.Fatal(err)
-	}
 	build, err := domain.NewBuildCommit(sha1)
 	if err != nil {
 		t.Fatal(err)
@@ -49,17 +45,22 @@ func TestDistinctIdentityTypesAndCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("commit identity did not preserve its typed components: %#v", identity)
 	}
 	for name, got := range map[string]string{
-		"commit": commit.String(), "tree": tree.String(), "rendered": rendered.String(), "executable": executable.String(), "build": build.String(),
+		"commit": commit.String(), "tree": tree.String(), "rendered": rendered.String(), "build": build.String(),
 	} {
 		want := sha1
-		if name == "rendered" || name == "executable" {
+		if name == "rendered" {
 			want = sha256
 		}
 		if got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	types := []reflect.Type{reflect.TypeOf(commit), reflect.TypeOf(tree), reflect.TypeOf(rendered), reflect.TypeOf(executable), reflect.TypeOf(build)}
+	types := []reflect.Type{
+		reflect.TypeFor[domain.CommitOID](),
+		reflect.TypeFor[domain.TreeOID](),
+		reflect.TypeFor[domain.RenderedDigest](),
+		reflect.TypeFor[domain.BuildCommit](),
+	}
 	for i := range types {
 		for j := i + 1; j < len(types); j++ {
 			if types[i] == types[j] {
@@ -89,9 +90,6 @@ func TestIdentityConstructorsRejectNonCanonicalValues(t *testing.T) {
 	for _, value := range []string{"", strings.ToUpper(sha256), sha256[:63], strings.Repeat("0", 64)} {
 		if _, err := domain.NewRenderedDigest(value); err == nil {
 			t.Errorf("NewRenderedDigest(%q) succeeded", value)
-		}
-		if _, err := domain.NewExecutableDigest(value); err == nil {
-			t.Errorf("NewExecutableDigest(%q) succeeded", value)
 		}
 	}
 }
@@ -134,17 +132,8 @@ func TestTypedIdentifiersRemainDistinct(t *testing.T) {
 	if operation.String() != "op-123" || installation.String() != "install-123" {
 		t.Fatalf("unexpected identifiers: %q %q", operation.String(), installation.String())
 	}
-	if reflect.TypeOf(operation) == reflect.TypeOf(installation) {
+	if reflect.TypeFor[domain.OperationID]() == reflect.TypeFor[domain.InstallationID]() {
 		t.Fatal("operation and installation IDs must be distinct")
-	}
-	token, err := domain.NewArtifactToken("0123456789abcdef0123456789abcdef")
-	if err != nil || token.String() != "0123456789abcdef0123456789abcdef" || !token.Valid() {
-		t.Fatalf("artifact token = %q, %v", token.String(), err)
-	}
-	for _, value := range []string{"", "0123456789ABCDEF0123456789ABCDEF", strings.Repeat("0", 32)} {
-		if _, err := domain.NewArtifactToken(value); err == nil {
-			t.Errorf("NewArtifactToken(%q) succeeded", value)
-		}
 	}
 	for _, value := range []string{"", "UPPER", "../escape", strings.Repeat("a", 65)} {
 		if _, err := domain.NewOperationID(value); err == nil {

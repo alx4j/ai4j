@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,11 +18,81 @@ import (
 	"github.com/alx4j/ai4j/internal/buildinfo"
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
 	validation "github.com/alx4j/ai4j/internal/validate"
 )
+
+func TestPreparedTransitionRejectsUnboundMaterial(t *testing.T) {
+	harness := newLifecycleHarness(t)
+	request := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	execution, _, stop, err := harness.service.prepareInstall(context.Background(), request.Source(), request.Target(), request.Scope(), "", false, request.Selection(), request.InstallationID(), request.HasInstallationID(), cli.ConflictFail)
+	if err != nil || stop {
+		t.Fatalf("prepare install: stop=%t err=%v", stop, err)
+	}
+	valid := execution.transition
+	foreign := cloneRecordPtr(valid.desired)
+	foreign.InstallationID = "foreign-installation"
+
+	tests := []struct {
+		name     string
+		before   *installstate.Record
+		material preparedTransitionMaterial
+	}{
+		{
+			name: "missing desired artifacts",
+			material: preparedTransitionMaterial{
+				desiredTarget: valid.desiredTarget,
+				desiredRules:  valid.desiredRules,
+			},
+		},
+		{
+			name: "catalog bytes do not match desired endpoint",
+			material: preparedTransitionMaterial{
+				desiredTarget:    append([]byte("changed"), valid.desiredTarget...),
+				desiredRules:     valid.desiredRules,
+				desiredArtifacts: valid.desiredArtifacts,
+			},
+		},
+		{
+			name:   "endpoint installation identities differ",
+			before: foreign,
+			material: preparedTransitionMaterial{
+				desiredTarget:    valid.desiredTarget,
+				desiredRules:     valid.desiredRules,
+				retainedBefore:   valid.desiredArtifacts,
+				desiredArtifacts: valid.desiredArtifacts,
+			},
+		},
+		{
+			name: "ordinary scope carries project settings preimage",
+			material: preparedTransitionMaterial{
+				projectSettingsBefore: []byte("{}"),
+				desiredTarget:         valid.desiredTarget,
+				desiredRules:          valid.desiredRules,
+				desiredArtifacts:      valid.desiredArtifacts,
+			},
+		},
+		{
+			name: "active destination is marked non-restorable",
+			material: preparedTransitionMaterial{
+				desiredTarget:    valid.desiredTarget,
+				desiredRules:     valid.desiredRules,
+				desiredArtifacts: valid.desiredArtifacts,
+				nonRestorable:    true,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := newPreparedTransition(test.before, valid.desired, test.material); err == nil {
+				t.Fatal("transition preparation succeeded")
+			}
+		})
+	}
+}
 
 func TestLifecycleClaudeUserLifecycleRetainsRollbackHistoryAndTombstone(t *testing.T) {
 	harness := newLifecycleHarness(t)
@@ -840,11 +911,11 @@ func TestLifecycleProjectLocalRejectsExclusionAppearingAfterPlanning(t *testing.
 	if err != nil || stop {
 		t.Fatalf("prepare install: stop=%t err=%v", stop, err)
 	}
-	line := projectExcludeLine(*execution.desired) + "\n"
+	line := projectExcludeLine(*execution.transition.desired) + "\n"
 	if err := os.WriteFile(filepath.Join(project, ".git", "info", "exclude"), []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.service.applyTransition(context.Background(), nil, execution.desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, false); err == nil {
+	if err := harness.service.applyTransition(context.Background(), execution.transition, cli.ConflictFail); err == nil {
 		t.Fatal("apply accepted an exclusion that appeared after planning")
 	}
 	contents, readErr := os.ReadFile(filepath.Join(project, ".git", "info", "exclude"))
@@ -953,11 +1024,11 @@ func TestLifecycleProjectLocalRollbackRejectsExclusionAppearingAfterPlanning(t *
 		t.Fatalf("prepare rollback: stop=%t err=%v", stop, err)
 	}
 	exclude := filepath.Join(project, ".git", "info", "exclude")
-	line := []byte(projectExcludeLine(*execution.desired) + "\n")
+	line := []byte(projectExcludeLine(*execution.transition.desired) + "\n")
 	if err := os.WriteFile(exclude, line, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.service.applyTransition(context.Background(), execution.before, execution.desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, true); err == nil {
+	if err := harness.service.applyTransition(context.Background(), execution.transition, cli.ConflictFail); err == nil {
 		t.Fatal("rollback accepted an exclusion that appeared after planning")
 	}
 	contents, readErr := os.ReadFile(exclude)
@@ -1120,12 +1191,12 @@ func canonicalTestDirectory(t *testing.T, directory string) string {
 }
 
 func TestLifecycleUserLifecycleUsesEffectiveClaudeConfigurationRoot(t *testing.T) {
-	harness := newLifecycleHarness(t)
-	custom := filepath.Join(harness.service.home, "custom-claude")
+	home := t.TempDir()
+	custom := filepath.Join(home, "custom-claude")
 	if err := os.Mkdir(custom, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	harness.service.claudeRoot = custom
+	harness := newLifecycleHarnessAt(t, home, custom)
 	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
 	if response, err := harness.service.Install(context.Background(), install, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("effective-root install = %#v, %v", response.Result(), err)
@@ -1395,13 +1466,13 @@ func TestLifecycleAutomaticallyReconcilesUnambiguousInterruptedOperations(t *tes
 		}},
 		{name: "roll forward verified target", wantState: result.StatusNoChange, advance: func(t *testing.T, harness lifecycleHarness, execution lifecycleExecution, desired *installstate.Record, _ installstate.HistoryEntry) {
 			t.Helper()
-			if err := harness.service.applyTransition(context.Background(), execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, false); err != nil {
+			if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{name: "finish committed cleanup", wantState: result.StatusNoChange, advance: func(t *testing.T, harness lifecycleHarness, execution lifecycleExecution, desired *installstate.Record, entry installstate.HistoryEntry) {
 			t.Helper()
-			if err := harness.service.applyTransition(context.Background(), execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, false); err != nil {
+			if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 				t.Fatal(err)
 			}
 			if err := harness.store.Save(*desired); err != nil {
@@ -1482,7 +1553,7 @@ func TestLifecycleAutomaticRecoveryRejectsMissingJournalAfterTargetMutation(t *t
 		t.Fatalf("update preparation stopped: %v", err)
 	}
 	desired, entry, _ := stageInterrupted(t, harness, execution, "operation-recovery0003")
-	if err := harness.service.applyTransition(context.Background(), execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, false); err != nil {
+	if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.store.DeleteHistory(entry.InstallationID, []string{entry.OperationID}); err != nil {
@@ -1637,7 +1708,7 @@ func TestLifecycleAutomaticRecoveryRejectsStagedHistoryWithoutMarkerAfterMutatio
 		t.Fatalf("update preparation stopped: %v", err)
 	}
 	desired, entry, _ := stageInterrupted(t, harness, execution, "operation-recovery0006")
-	if err := harness.service.applyTransition(context.Background(), execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, false); err != nil {
+	if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.store.DeleteMarker(); err != nil {
@@ -1655,36 +1726,36 @@ func TestLifecycleAutomaticRecoveryRejectsStagedHistoryWithoutMarkerAfterMutatio
 
 func stageInterrupted(t *testing.T, harness lifecycleHarness, execution lifecycleExecution, operationID string) (*installstate.Record, installstate.HistoryEntry, installstate.Marker) {
 	t.Helper()
-	desired := cloneRecordPtr(execution.desired)
+	desired := cloneRecordPtr(execution.transition.desired)
 	desired.LastOperation = installstate.LastOperation{ID: operationID, Timestamp: "2026-08-25T12:00:00Z"}
 	desired.History = appendUnique(desired.History, operationID)
-	beforeCatalog, beforeRules, err := harness.service.captureOwned(execution.before)
+	beforeCatalog, beforeRules, err := harness.service.captureOwned(execution.transition.before)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterCatalog := slices.Clone(execution.catalog)
+	afterCatalog := slices.Clone(execution.transition.desiredTarget)
 	if desired.Scope == "project-shared" {
-		beforeCatalog = projectSharedOwnedEntry(execution.before)
+		beforeCatalog = projectSharedOwnedEntry(execution.transition.before)
 		afterCatalog = projectSharedOwnedEntry(desired)
 	}
 	entry := installstate.HistoryEntry{
 		SchemaVersion: installstate.HistorySchemaVersion, Operation: execution.operation.String(), OperationID: operationID,
 		InstallationID: desired.InstallationID, Timestamp: desired.LastOperation.Timestamp, Restorable: true,
-		Before: cloneRecordPtr(execution.before), After: cloneRecordPtr(desired), CatalogBefore: beforeCatalog, RulesBefore: beforeRules,
-		CatalogAfter: afterCatalog, RulesAfter: slices.Clone(execution.rules),
-		NativeArtifactsBefore: harness.service.currentArtifacts(execution.before), NativeArtifactsAfter: cloneNativeArtifacts(execution.artifacts),
+		Before: cloneRecordPtr(execution.transition.before), After: cloneRecordPtr(desired), CatalogBefore: beforeCatalog, RulesBefore: beforeRules,
+		CatalogAfter: afterCatalog, RulesAfter: slices.Clone(execution.transition.desiredRules),
+		NativeArtifactsBefore: harness.service.currentArtifacts(execution.transition.before), NativeArtifactsAfter: cloneNativeArtifacts(execution.transition.desiredArtifacts),
 	}
 	resources := []string{"history:" + desired.InstallationID, "owned:state/installation.json"}
-	if execution.before != nil {
-		resources = append(resources, execution.before.NativeResources...)
-		if execution.before.Catalog.Path != "" {
-			resources = append(resources, "owned:"+execution.before.Catalog.Path)
+	if execution.transition.before != nil {
+		resources = append(resources, execution.transition.before.NativeResources...)
+		if execution.transition.before.Catalog.Path != "" {
+			resources = append(resources, "owned:"+execution.transition.before.Catalog.Path)
 		}
-		if execution.before.NativeCatalog.Path != "" {
-			resources = append(resources, "owned:"+execution.before.NativeCatalog.Path)
+		if execution.transition.before.NativeCatalog.Path != "" {
+			resources = append(resources, "owned:"+execution.transition.before.NativeCatalog.Path)
 		}
-		if execution.before.Rules.Path != "" {
-			resources = append(resources, "owned:"+execution.before.Rules.Path)
+		if execution.transition.before.Rules.Path != "" {
+			resources = append(resources, "owned:"+execution.transition.before.Rules.Path)
 		}
 	}
 	resources = append(resources, desired.NativeResources...)
@@ -1725,6 +1796,11 @@ type lifecycleHarness struct {
 func newLifecycleHarness(t *testing.T) lifecycleHarness {
 	t.Helper()
 	home := t.TempDir()
+	return newLifecycleHarnessAt(t, home, filepath.Join(home, ".claude"))
+}
+
+func newLifecycleHarnessAt(t *testing.T, home, claudeRoot string) lifecycleHarness {
+	t.Helper()
 	store, err := installstate.NewStore(home)
 	if err != nil {
 		t.Fatal(err)
@@ -1747,7 +1823,7 @@ func newLifecycleHarness(t *testing.T) lifecycleHarness {
 	for index := range random {
 		random[index] = byte(index)
 	}
-	service := newLifecycleService(validator, store, native, home, buildinfo.New(buildinfo.Inputs{Version: "0.0.0-dev"}), func(context.Context) (func() error, error) {
+	service := newLifecycleService(validator, store, native, home, claudeRoot, buildinfo.New(buildinfo.Inputs{Version: "0.0.0-dev"}), func(context.Context) (func() error, error) {
 		return func() error { return nil }, nil
 	})
 	service.random = bytes.NewReader(random)
@@ -1936,24 +2012,38 @@ func (r *lifecycleNativeRunner) LookPath(name string) (string, error) {
 	return "", errors.New("not found")
 }
 
-func (r *lifecycleNativeRunner) Run(_ context.Context, directory string, _ string, arguments, _ []string) (validation.ProcessResult, error) {
+func (r *lifecycleNativeRunner) Run(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/claude") {
+		return hostprocess.Result{}, fmt.Errorf("non-Claude process was not isolated: %s", executable)
+	}
+	return r.run(directory, arguments)
+}
+
+func (r *lifecycleNativeRunner) RunIsolated(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/git") {
+		return hostprocess.Result{}, fmt.Errorf("non-Git process was isolated: %s", executable)
+	}
+	return r.run(directory, arguments)
+}
+
+func (r *lifecycleNativeRunner) run(directory string, arguments []string) (hostprocess.Result, error) {
 	r.commands = append(r.commands, slices.Clone(arguments))
 	r.directories = append(r.directories, directory)
 	if r.failCount > 0 && len(arguments) >= len(r.failPrefix) && slices.Equal(arguments[:len(r.failPrefix)], r.failPrefix) {
 		r.failCount--
-		return validation.ProcessResult{ExitCode: 1}, nil
+		return hostprocess.Result{ExitCode: 1}, nil
 	}
 	switch {
 	case slices.Equal(arguments, []string{"rev-parse", "--show-toplevel"}):
-		return validation.ProcessResult{Stdout: []byte(r.projectRoot + "\n")}, nil
+		return hostprocess.Result{Stdout: []byte(r.projectRoot + "\n")}, nil
 	case slices.Equal(arguments, []string{"rev-parse", "--git-path", "info/exclude"}):
-		return validation.ProcessResult{Stdout: []byte(filepath.Join(r.projectRoot, ".git", "info", "exclude") + "\n")}, nil
+		return hostprocess.Result{Stdout: []byte(filepath.Join(r.projectRoot, ".git", "info", "exclude") + "\n")}, nil
 	case len(arguments) == 4 && slices.Equal(arguments[:3], []string{"ls-files", "--error-unmatch", "--"}):
-		return validation.ProcessResult{ExitCode: 1}, nil
+		return hostprocess.Result{ExitCode: 1}, nil
 	case len(arguments) >= 4 && slices.Equal(arguments[:3], []string{"plugin", "marketplace", "add"}):
 		contents, err := os.ReadFile(filepath.Join(arguments[3], ".claude-plugin", "marketplace.json"))
 		if err != nil {
-			return validation.ProcessResult{}, err
+			return hostprocess.Result{}, err
 		}
 		var document struct {
 			Name    string `json:"name"`
@@ -1962,19 +2052,19 @@ func (r *lifecycleNativeRunner) Run(_ context.Context, directory string, _ strin
 			} `json:"plugins"`
 		}
 		if json.Unmarshal(contents, &document) != nil {
-			return validation.ProcessResult{}, errors.New("invalid catalog")
+			return hostprocess.Result{}, errors.New("invalid catalog")
 		}
 		if slices.Contains(arguments, "project") {
 			entry := []byte(`{"source":{"source":"directory","path":` + quotedJSON(arguments[3]) + `}}`)
 			if err := fakeNativeMarketplace(directory, document.Name, entry, true); err != nil {
-				return validation.ProcessResult{}, err
+				return hostprocess.Result{}, err
 			}
 		}
 		r.marketplaces[document.Name] = true
 	case len(arguments) >= 3 && arguments[0] == "plugin" && arguments[1] == "install":
 		if slices.Contains(arguments, "project") {
 			if err := fakeNativeEnabledPlugin(directory, arguments[2], true); err != nil {
-				return validation.ProcessResult{}, err
+				return hostprocess.Result{}, err
 			}
 		}
 		r.plugins[arguments[2]] = true
@@ -1986,7 +2076,7 @@ func (r *lifecycleNativeRunner) Run(_ context.Context, directory string, _ strin
 	case len(arguments) >= 3 && arguments[0] == "plugin" && arguments[1] == "uninstall":
 		if slices.Contains(arguments, "project") {
 			if err := fakeNativeEnabledPlugin(directory, arguments[2], false); err != nil {
-				return validation.ProcessResult{}, err
+				return hostprocess.Result{}, err
 			}
 		}
 		delete(r.plugins, arguments[2])
@@ -1995,19 +2085,19 @@ func (r *lifecycleNativeRunner) Run(_ context.Context, directory string, _ strin
 		marketplaceID := arguments[3]
 		for pluginID := range r.plugins {
 			if strings.HasSuffix(pluginID, "@"+marketplaceID) {
-				return validation.ProcessResult{}, errors.New("marketplace removal attempted before plugin uninstall")
+				return hostprocess.Result{}, errors.New("marketplace removal attempted before plugin uninstall")
 			}
 		}
 		if slices.Contains(arguments, "project") {
 			if err := fakeNativeMarketplace(directory, marketplaceID, nil, false); err != nil {
-				return validation.ProcessResult{}, err
+				return hostprocess.Result{}, err
 			}
 		}
 		delete(r.marketplaces, marketplaceID)
 	default:
-		return validation.ProcessResult{}, errors.New("unexpected Claude command")
+		return hostprocess.Result{}, errors.New("unexpected Claude command")
 	}
-	return validation.ProcessResult{}, nil
+	return hostprocess.Result{}, nil
 }
 
 func fakeNativeMarketplace(directory, marketplaceID string, entry []byte, present bool) error {

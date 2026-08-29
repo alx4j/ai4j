@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/alx4j/ai4j/internal/cli"
-	"github.com/alx4j/ai4j/internal/fault"
 )
 
 const commitOID = "0123456789abcdef0123456789abcdef01234567"
@@ -280,6 +279,8 @@ func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 		{name: "expected digest", argv: append(slices.Clone(base), "--expected-source-digest", digest), issue: cli.UsageInvalidOptionValue, option: "git-root"},
 		{name: "installation", argv: append(slices.Clone(base), "--installation", "installation-001"), issue: cli.UsageInvalidOptionValue, option: "git-root"},
 		{name: "invalid tag", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1..2", "--bundle", "company@v2"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "hidden tag", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@.hidden", "--bundle", "company@v2"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
+		{name: "hidden tag component", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@release/.hidden", "--bundle", "company@v2"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
 	}
 	for _, test := range tests {
 		_, err := parser.Parse(test.argv)
@@ -595,10 +596,21 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 			if !errors.As(err, &usage) {
 				t.Fatalf("Parse() error = %v, want UsageError", err)
 			}
-			if usage.Issue() != test.issue || usage.JSONRequested() != test.json || !errors.Is(usage, fault.ErrInvalidInput) {
+			if usage.Issue() != test.issue || usage.JSONRequested() != test.json {
 				t.Fatalf("usage = issue %q json %v error %v", usage.Issue(), usage.JSONRequested(), usage)
 			}
 		})
+	}
+}
+
+func TestUsageErrorPreservesItsValidationCause(t *testing.T) {
+	t.Parallel()
+
+	_, err := cli.NewParser("darwin").Parse([]string{"ai4j", "status", "INVALID"})
+	var usage *cli.UsageError
+
+	if !errors.As(err, &usage) || errors.Unwrap(usage) == nil {
+		t.Fatalf("Parse() error = %v, want UsageError with validation cause", err)
 	}
 }
 

@@ -49,13 +49,13 @@ func TestStoreRejectsUnsupportedMalformedAndReplacementMarkers(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(store.MarkerPath()), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.MarkerPath(), []byte(`{"schemaVersion":2}`), 0o600); err != nil {
+	if err := os.WriteFile(store.MarkerPath(), []byte(fmt.Sprintf(`{"schemaVersion":%d}`, MarkerSchemaVersion+1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.LoadMarker(); !errors.Is(err, ErrUnsupportedMarkerSchema) {
 		t.Fatalf("unsupported marker error = %v", err)
 	}
-	if err := os.WriteFile(store.MarkerPath(), []byte(`{"schemaVersion":1,"secret":"SECRET_CANARY"}`), 0o600); err != nil {
+	if err := os.WriteFile(store.MarkerPath(), []byte(fmt.Sprintf(`{"schemaVersion":%d,"secret":"SECRET_CANARY"}`, MarkerSchemaVersion)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.LoadMarker(); !errors.Is(err, ErrMalformedMarker) || strings.Contains(err.Error(), "SECRET_CANARY") {
@@ -67,6 +67,42 @@ func TestStoreRejectsUnsupportedMalformedAndReplacementMarkers(t *testing.T) {
 	}
 	if err := store.SaveMarker(marker); !errors.Is(err, ErrMalformedMarker) {
 		t.Fatalf("replacement marker error = %v", err)
+	}
+}
+
+func TestStoreRoundTripsRecoverableHistoryPurgeMarker(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := testRecord()
+	before.History = []string{"operation-001", "operation-002"}
+	desired := cloneRecord(before)
+	desired.History = []string{"operation-002"}
+	marker, err := NewHistoryPurgeMarker(
+		"operation-purge", before.Source.Commit,
+		[]string{"history:" + before.InstallationID, "owned:state/installation.json"},
+		[]string{"operation-001"}, before, &desired,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveMarker(marker); err != nil {
+		t.Fatal(err)
+	}
+	loaded, present, err := store.LoadMarker()
+	if err != nil || !present || !reflect.DeepEqual(loaded, marker) {
+		t.Fatalf("LoadMarker() = %#v, %t, %v", loaded, present, err)
+	}
+	changed := cloneRecord(desired)
+	changed.Health = "drifted"
+	if _, err := NewHistoryPurgeMarker(
+		"operation-invalid-purge", before.Source.Commit,
+		[]string{"history:" + before.InstallationID, "owned:state/installation.json"},
+		[]string{"operation-001"}, before, &changed,
+	); !errors.Is(err, ErrMalformedMarker) {
+		t.Fatalf("mismatched desired record error = %v", err)
 	}
 }
 

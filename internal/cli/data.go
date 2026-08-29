@@ -5,6 +5,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -570,7 +571,7 @@ func NewInitData(targets []BuildTarget, outputRoot string, artifacts []BuildArti
 		return InitData{}, fmt.Errorf("init data is incomplete")
 	}
 	ownedTargets := append([]BuildTarget(nil), targets...)
-	sort.Slice(ownedTargets, func(i, j int) bool { return ownedTargets[i] < ownedTargets[j] })
+	slices.Sort(ownedTargets)
 	for index, target := range ownedTargets {
 		if !target.Valid() || index > 0 && ownedTargets[index-1] == target {
 			return InitData{}, fmt.Errorf("init targets are invalid")
@@ -1076,11 +1077,33 @@ type NativeState struct {
 	versionStatus NativeVersionStatus
 }
 
-func NewNativeState(registration NativeRegistration, installation NativeInstallation, enablement NativeEnablement, activation NativeActivation, reload NativeReload, nextSession NativeNextSession, policy NativePolicy, version string, versionStatus NativeVersionStatus) (NativeState, error) {
-	if !validNativeRegistration(registration) || !validNativeInstallation(installation) || !validNativeEnablement(enablement) || !validNativeActivation(activation) || !validNativeReload(reload) || !validNativeNextSession(nextSession) || !validNativePolicy(policy) || (version != "" && !boundedText(version, 128, false)) || !validNativeVersionStatus(versionStatus) {
+type NativeStateInput struct {
+	Registration  NativeRegistration
+	Installation  NativeInstallation
+	Enablement    NativeEnablement
+	Activation    NativeActivation
+	Reload        NativeReload
+	NextSession   NativeNextSession
+	Policy        NativePolicy
+	Version       string
+	VersionStatus NativeVersionStatus
+}
+
+func NewNativeState(input NativeStateInput) (NativeState, error) {
+	if !validNativeRegistration(input.Registration) || !validNativeInstallation(input.Installation) || !validNativeEnablement(input.Enablement) || !validNativeActivation(input.Activation) || !validNativeReload(input.Reload) || !validNativeNextSession(input.NextSession) || !validNativePolicy(input.Policy) || (input.Version != "" && !boundedText(input.Version, 128, false)) || !validNativeVersionStatus(input.VersionStatus) {
 		return NativeState{}, fmt.Errorf("native state contains an unknown value")
 	}
-	return NativeState{registration: registration, installation: installation, enablement: enablement, activation: activation, reload: reload, nextSession: nextSession, policy: policy, version: version, versionStatus: versionStatus}, nil
+	return NativeState{
+		registration:  input.Registration,
+		installation:  input.Installation,
+		enablement:    input.Enablement,
+		activation:    input.Activation,
+		reload:        input.Reload,
+		nextSession:   input.NextSession,
+		policy:        input.Policy,
+		version:       input.Version,
+		versionStatus: input.VersionStatus,
+	}, nil
 }
 func (s NativeState) Registration() NativeRegistration   { return s.registration }
 func (s NativeState) Installation() NativeInstallation   { return s.installation }
@@ -1195,12 +1218,44 @@ type InstallationSummary struct {
 	components      []RecordedComponent
 }
 
+type InstallationSummaryInput struct {
+	ID              domain.InstallationID
+	ToolkitID       string
+	Target          BuildTarget
+	Scope           Scope
+	ScopeRoot       string
+	Lifecycle       string
+	Source          RecordedSource
+	RequestedBundle string
+	ResolvedBundles []string
+	Packages        []string
+	ResolvedAssets  []string
+	Health          string
+	HistoryCount    int
+	LastOperation   domain.OperationID
+}
+
 func NewDetailedCompositionSummary(id domain.InstallationID, target BuildTarget, scope Scope, scopeRoot, lifecycle string, components []RecordedComponent, packages, resolvedAssets []string, health string, historyCount int, lastOperation domain.OperationID) (InstallationSummary, error) {
 	items := cloneRecordedComponents(components)
 	if !validRecordedComponents(items) {
 		return InstallationSummary{}, fmt.Errorf("composed installation summary is incomplete")
 	}
-	value, err := NewDetailedInstallationSummary(id, "composition", target, scope, scopeRoot, lifecycle, items[0].source, "composition", []string{"composition"}, packages, resolvedAssets, health, historyCount, lastOperation)
+	value, err := NewInstallationSummary(InstallationSummaryInput{
+		ID:              id,
+		ToolkitID:       "composition",
+		Target:          target,
+		Scope:           scope,
+		ScopeRoot:       scopeRoot,
+		Lifecycle:       lifecycle,
+		Source:          items[0].source,
+		RequestedBundle: "composition",
+		ResolvedBundles: []string{"composition"},
+		Packages:        packages,
+		ResolvedAssets:  resolvedAssets,
+		Health:          health,
+		HistoryCount:    historyCount,
+		LastOperation:   lastOperation,
+	})
 	if err != nil {
 		return InstallationSummary{}, err
 	}
@@ -1208,15 +1263,22 @@ func NewDetailedCompositionSummary(id domain.InstallationID, target BuildTarget,
 	return value, nil
 }
 
-func NewInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, requestedBundle string, resolvedBundles, packages, resolvedAssets []string, health string) (InstallationSummary, error) {
-	return NewDetailedInstallationSummary(id, toolkitID, target, scope, scopeRoot, lifecycle, source, requestedBundle, resolvedBundles, packages, resolvedAssets, health, 0, domain.OperationID{})
-}
-
-func NewDetailedInstallationSummary(id domain.InstallationID, toolkitID string, target BuildTarget, scope Scope, scopeRoot, lifecycle string, source RecordedSource, requestedBundle string, resolvedBundles, packages, resolvedAssets []string, health string, historyCount int, lastOperation domain.OperationID) (InstallationSummary, error) {
+func NewInstallationSummary(input InstallationSummaryInput) (InstallationSummary, error) {
 	value := InstallationSummary{
-		id: id, toolkitID: toolkitID, target: target, scope: scope, scopeRoot: scopeRoot, lifecycle: lifecycle, source: source,
-		requestedBundle: requestedBundle, resolvedBundles: uniqueSortedStrings(resolvedBundles), packages: uniqueSortedStrings(packages), resolvedAssets: uniqueSortedStrings(resolvedAssets),
-		health: health, historyCount: historyCount, lastOperation: lastOperation,
+		id:              input.ID,
+		toolkitID:       input.ToolkitID,
+		target:          input.Target,
+		scope:           input.Scope,
+		scopeRoot:       input.ScopeRoot,
+		lifecycle:       input.Lifecycle,
+		source:          input.Source,
+		requestedBundle: input.RequestedBundle,
+		resolvedBundles: uniqueSortedStrings(input.ResolvedBundles),
+		packages:        uniqueSortedStrings(input.Packages),
+		resolvedAssets:  uniqueSortedStrings(input.ResolvedAssets),
+		health:          input.Health,
+		historyCount:    input.HistoryCount,
+		lastOperation:   input.LastOperation,
 	}
 	if !value.valid() {
 		return InstallationSummary{}, fmt.Errorf("installation summary is incomplete")
@@ -1341,10 +1403,29 @@ type MCPStartupCheck struct {
 	hasExitCode bool
 }
 
-func NewMCPStartupCheck(serverID, executable string, arguments, environment []string, workingDir, ownership, startupResult string, exitCode int, hasExitCode bool) (MCPStartupCheck, error) {
+type MCPStartupCheckInput struct {
+	ServerID         string
+	Executable       string
+	Arguments        []string
+	Environment      []string
+	WorkingDirectory string
+	Ownership        string
+	StartupResult    string
+	ExitCode         int
+	HasExitCode      bool
+}
+
+func NewMCPStartupCheck(input MCPStartupCheckInput) (MCPStartupCheck, error) {
 	value := MCPStartupCheck{
-		serverID: serverID, executable: executable, arguments: cloneStrings(arguments), environment: uniqueSortedStrings(environment),
-		workingDir: workingDir, ownership: ownership, result: startupResult, exitCode: exitCode, hasExitCode: hasExitCode,
+		serverID:    input.ServerID,
+		executable:  input.Executable,
+		arguments:   cloneStrings(input.Arguments),
+		environment: uniqueSortedStrings(input.Environment),
+		workingDir:  input.WorkingDirectory,
+		ownership:   input.Ownership,
+		result:      input.StartupResult,
+		exitCode:    input.ExitCode,
+		hasExitCode: input.HasExitCode,
 	}
 	if !value.valid() {
 		return MCPStartupCheck{}, fmt.Errorf("MCP startup check is incomplete")
@@ -1529,15 +1610,39 @@ type VersionData struct {
 	defaultSource                DefaultSource
 }
 
-func NewVersionData(product, executable, version string, repository domain.RepositoryIdentity, commit domain.BuildCommit, goVersion string, buildTime time.Time, targetOS, targetArch string, defaultSource DefaultSource) (VersionData, error) {
+type VersionDataInput struct {
+	Product       string
+	Executable    string
+	Version       string
+	Repository    domain.RepositoryIdentity
+	Commit        domain.BuildCommit
+	GoVersion     string
+	BuildTime     time.Time
+	TargetOS      string
+	TargetArch    string
+	DefaultSource DefaultSource
+}
+
+func NewVersionData(input VersionDataInput) (VersionData, error) {
 	expectedExecutable := "ai4j"
-	if targetOS == "windows" {
+	if input.TargetOS == "windows" {
 		expectedExecutable = "ai4j.exe"
 	}
-	if product != "AI4J" || executable != expectedExecutable || !boundedText(version, 128, false) || !repository.Valid() || !commit.Valid() || !boundedText(goVersion, 64, false) || !goVersionPattern.MatchString(goVersion) || buildTime.IsZero() || buildTime.Year() < 0 || buildTime.Year() > 9999 || !goTargetPattern.MatchString(targetOS) || !goTargetPattern.MatchString(targetArch) || !defaultSource.valid() {
+	if input.Product != "AI4J" || input.Executable != expectedExecutable || !boundedText(input.Version, 128, false) || !input.Repository.Valid() || !input.Commit.Valid() || !boundedText(input.GoVersion, 64, false) || !goVersionPattern.MatchString(input.GoVersion) || input.BuildTime.IsZero() || input.BuildTime.Year() < 0 || input.BuildTime.Year() > 9999 || !goTargetPattern.MatchString(input.TargetOS) || !goTargetPattern.MatchString(input.TargetArch) || !input.DefaultSource.valid() {
 		return VersionData{}, fmt.Errorf("version data is incomplete")
 	}
-	return VersionData{product: product, executable: executable, version: version, repository: repository, commit: commit, goVersion: goVersion, buildTime: buildTime.UTC(), targetOS: targetOS, targetArch: targetArch, defaultSource: defaultSource}, nil
+	return VersionData{
+		product:       input.Product,
+		executable:    input.Executable,
+		version:       input.Version,
+		repository:    input.Repository,
+		commit:        input.Commit,
+		goVersion:     input.GoVersion,
+		buildTime:     input.BuildTime.UTC(),
+		targetOS:      input.TargetOS,
+		targetArch:    input.TargetArch,
+		defaultSource: input.DefaultSource,
+	}, nil
 }
 func (VersionData) cliData()                                         {}
 func (d VersionData) Product() string                                { return d.product }
@@ -1621,7 +1726,17 @@ func (i Installation) valid() bool {
 	return err == nil
 }
 func (s NativeState) valid() bool {
-	_, err := NewNativeState(s.registration, s.installation, s.enablement, s.activation, s.reload, s.nextSession, s.policy, s.version, s.versionStatus)
+	_, err := NewNativeState(NativeStateInput{
+		Registration:  s.registration,
+		Installation:  s.installation,
+		Enablement:    s.enablement,
+		Activation:    s.activation,
+		Reload:        s.reload,
+		NextSession:   s.nextSession,
+		Policy:        s.policy,
+		Version:       s.version,
+		VersionStatus: s.versionStatus,
+	})
 	return err == nil
 }
 
@@ -1674,33 +1789,10 @@ func validPhase(value result.Phase) bool {
 	}
 }
 
-func oneOf(value string, allowed ...string) bool {
-	for _, candidate := range allowed {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
-}
 func uniqueSortedStrings(values []string) []string {
 	output := append([]string(nil), values...)
-	sort.Strings(output)
-	deduped := output[:0]
-	for _, value := range output {
-		if len(deduped) == 0 || deduped[len(deduped)-1] != value {
-			deduped = append(deduped, value)
-		}
-	}
-	return deduped
-}
-
-func hasUniqueSortedStrings(values []string) bool {
-	for index, value := range values {
-		if !contentIdentifierPattern.MatchString(value) || index > 0 && values[index-1] >= value {
-			return false
-		}
-	}
-	return true
+	slices.Sort(output)
+	return slices.Compact(output)
 }
 
 func hasUniqueSortedPluginIDs(values []string) bool {
@@ -1722,20 +1814,14 @@ func hasUniqueSortedHyphenatedIdentifiers(values []string) bool {
 }
 
 func containsString(values []string, target string) bool {
-	index := sort.SearchStrings(values, target)
-	return index < len(values) && values[index] == target
+	_, found := slices.BinarySearch(values, target)
+	return found
 }
 
 func uniqueSortedPlaceholders(values []Placeholder) []Placeholder {
 	output := append([]Placeholder(nil), values...)
-	sort.Slice(output, func(i, j int) bool { return output[i] < output[j] })
-	deduped := output[:0]
-	for _, value := range output {
-		if len(deduped) == 0 || deduped[len(deduped)-1] != value {
-			deduped = append(deduped, value)
-		}
-	}
-	return deduped
+	slices.Sort(output)
+	return slices.Compact(output)
 }
 
 func validSHA256(value string) bool {

@@ -19,9 +19,9 @@ import (
 	"unicode"
 
 	"github.com/alx4j/ai4j/internal/cli"
+	"github.com/alx4j/ai4j/internal/hostprocess"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
-	validation "github.com/alx4j/ai4j/internal/validate"
 )
 
 const (
@@ -31,9 +31,11 @@ const (
 
 var environmentReference = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 
+var errMCPDeclarationUnavailable = errors.New("MCP declaration is unavailable")
+
 type doctorProcessRunner interface {
 	LookPath(string) (string, error)
-	RunIsolated(context.Context, string, string, []string, []string) (validation.ProcessResult, error)
+	RunIsolated(context.Context, string, string, []string, []string) (hostprocess.Result, error)
 }
 
 type doctorService struct {
@@ -266,20 +268,12 @@ func currentDoctorArtifacts(record installstate.Record, history []installstate.H
 	return nil
 }
 
-func currentDoctorArtifact(record installstate.Record, history []installstate.HistoryEntry) []byte {
-	artifacts := currentDoctorArtifacts(record, history)
-	if len(artifacts) == 0 {
-		return nil
-	}
-	return slices.Clone(artifacts[0].Bytes)
-}
-
 func parseMCPDefinitionsFromArtifacts(artifacts []installstate.NativeArtifact) (map[string]mcpDefinition, error) {
 	definitions := make(map[string]mcpDefinition)
 	for _, artifact := range artifacts {
 		current, err := parseMCPDefinitions(artifact.Bytes)
 		if err != nil {
-			if err.Error() == "MCP declaration is unavailable" {
+			if errors.Is(err, errMCPDeclarationUnavailable) {
 				continue
 			}
 			return nil, err
@@ -292,7 +286,7 @@ func parseMCPDefinitionsFromArtifacts(artifacts []installstate.NativeArtifact) (
 		}
 	}
 	if len(definitions) == 0 {
-		return nil, errors.New("MCP declaration is unavailable")
+		return nil, errMCPDeclarationUnavailable
 	}
 	return definitions, nil
 }
@@ -357,7 +351,7 @@ func parseMCPDefinitions(artifact []byte) (map[string]mcpDefinition, error) {
 		}
 	}
 	if len(definitions) == 0 || len(definitions) > 16 {
-		return nil, errors.New("MCP declaration is unavailable")
+		return nil, errMCPDeclarationUnavailable
 	}
 	return definitions, nil
 }
@@ -402,7 +396,17 @@ func newStartupCheck(serverID string, definition mcpDefinition, executable, work
 	if executable == "" {
 		executable = definition.Command
 	}
-	value, err := cli.NewMCPStartupCheck(serverID, executable, definition.Arguments, definition.Environment, workingDirectory, "package", startupResult, exitCode, hasExitCode)
+	value, err := cli.NewMCPStartupCheck(cli.MCPStartupCheckInput{
+		ServerID:         serverID,
+		Executable:       executable,
+		Arguments:        definition.Arguments,
+		Environment:      definition.Environment,
+		WorkingDirectory: workingDirectory,
+		Ownership:        "package",
+		StartupResult:    startupResult,
+		ExitCode:         exitCode,
+		HasExitCode:      hasExitCode,
+	})
 	if err != nil {
 		panic(err)
 	}

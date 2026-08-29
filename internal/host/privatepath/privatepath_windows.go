@@ -68,7 +68,7 @@ func createDirectory(path string) error {
 		return err
 	}
 	current := root
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+	for component := range strings.SplitSeq(relative, string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		value, err := windows.UTF16PtrFromString(current)
 		if err != nil {
@@ -100,7 +100,7 @@ func visitComponents(path string, allowMissing bool) error {
 		return errors.New("private Windows path is invalid")
 	}
 	current := root
-	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+	for component := range strings.SplitSeq(relative, string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		value, err := windows.UTF16PtrFromString(current)
 		if err != nil {

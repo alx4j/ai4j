@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"io"
 	"path/filepath"
 	"slices"
@@ -26,7 +27,7 @@ type lifecycleValidation interface {
 type lifecycleService struct {
 	validation lifecycleValidation
 	state      installstate.Store
-	runner     validation.ProcessRunner
+	runner     processRunner
 	home       string
 	claudeRoot string
 	build      buildinfo.Info
@@ -38,21 +39,113 @@ type lifecycleService struct {
 type lifecycleExecution struct {
 	operation         cli.Operation
 	source            validation.LifecycleSelection
-	before            *installstate.Record
-	desired           *installstate.Record
-	beforeArtifacts   []installstate.NativeArtifact
-	catalog           []byte
-	catalogBefore     []byte
-	rules             []byte
-	artifacts         []installstate.NativeArtifact
+	transition        preparedTransition
 	actions           []cli.Action
 	content           []cli.ContentItem
 	conflicts         []cli.Conflict
 	degradedConflicts []cli.Conflict
 	final             cli.FinalState
 	disposition       result.UpdateDisposition
-	rollback          *installstate.HistoryEntry
-	nonRestorable     bool
+}
+
+type preparedTransitionMaterial struct {
+	projectSettingsBefore []byte
+	desiredTarget         []byte
+	desiredRules          []byte
+	retainedBefore        []installstate.NativeArtifact
+	desiredArtifacts      []installstate.NativeArtifact
+	rollback              bool
+	nonRestorable         bool
+}
+
+// preparedTransition binds lifecycle endpoints to the exact material required
+// to mutate the target and retain a structural rollback point. desiredTarget is
+// the catalog for ordinary scopes and the planned settings document for a
+// project-shared scope.
+type preparedTransition struct {
+	before                  *installstate.Record
+	desired                 *installstate.Record
+	projectSettingsBefore   []byte
+	desiredTarget           []byte
+	desiredRules            []byte
+	retainedBeforeArtifacts []installstate.NativeArtifact
+	desiredArtifacts        []installstate.NativeArtifact
+	rollback                bool
+	nonRestorable           bool
+}
+
+func newPreparedTransition(before, desired *installstate.Record, material preparedTransitionMaterial) (preparedTransition, error) {
+	transition := preparedTransition{
+		before:                  cloneRecordPtr(before),
+		desired:                 cloneRecordPtr(desired),
+		projectSettingsBefore:   slices.Clone(material.projectSettingsBefore),
+		desiredTarget:           slices.Clone(material.desiredTarget),
+		desiredRules:            slices.Clone(material.desiredRules),
+		retainedBeforeArtifacts: cloneNativeArtifacts(material.retainedBefore),
+		desiredArtifacts:        cloneNativeArtifacts(material.desiredArtifacts),
+		rollback:                material.rollback,
+		nonRestorable:           material.nonRestorable,
+	}
+	if err := transition.validate(); err != nil {
+		return preparedTransition{}, err
+	}
+	return transition, nil
+}
+
+func (t preparedTransition) validate() error {
+	if t.desired == nil || t.desired.Validate() != nil {
+		return errors.New("desired transition state is invalid")
+	}
+	if t.before != nil {
+		if t.before.Validate() != nil {
+			return errors.New("current transition state is invalid")
+		}
+		if t.before.InstallationID != t.desired.InstallationID {
+			return errors.New("transition installation identity does not match")
+		}
+	}
+	if t.rollback && t.nonRestorable {
+		return errors.New("rollback transition cannot be non-restorable")
+	}
+	if t.nonRestorable && (t.before == nil || t.before.Lifecycle != "active" || t.desired.Lifecycle != "archived") {
+		return errors.New("non-restorable transition must archive an active installation")
+	}
+	if len(t.retainedBeforeArtifacts) != 0 {
+		if t.before == nil || t.before.Lifecycle != "active" || !recoveryArtifactsComplete(*t.before, t.retainedBeforeArtifacts) {
+			return errors.New("retained current artifacts do not match transition state")
+		}
+	}
+	if t.desired.Lifecycle == "active" {
+		if !recoveryArtifactsComplete(*t.desired, t.desiredArtifacts) {
+			return errors.New("desired artifacts do not match transition state")
+		}
+		if t.desired.Scope != "project-shared" && sha256Digest(t.desiredTarget) != t.desired.Catalog.Checksum {
+			return errors.New("desired catalog does not match transition state")
+		}
+	} else if len(t.desiredArtifacts) != 0 {
+		return errors.New("archived transition retains desired artifacts")
+	}
+	if t.desired.Rules == (installstate.OwnedFile{}) {
+		if len(t.desiredRules) != 0 {
+			return errors.New("transition rules have no desired owner")
+		}
+	} else if sha256Digest(t.desiredRules) != t.desired.Rules.Checksum {
+		return errors.New("desired rules do not match transition state")
+	}
+	if t.desired.Scope != "project-shared" {
+		if len(t.projectSettingsBefore) != 0 {
+			return errors.New("project settings preimage has no shared-project owner")
+		}
+		if t.desired.Lifecycle == "archived" && len(t.desiredTarget) != 0 {
+			return errors.New("archived transition retains a desired catalog")
+		}
+	}
+	return nil
+}
+
+func (t preparedTransition) withDesired(desired *installstate.Record) preparedTransition {
+	t.desired = cloneRecordPtr(desired)
+	return t
 }
 
 type applyRequest struct {
@@ -68,12 +161,13 @@ type applyRequest struct {
 	prepare           func(cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error)
 }
 
-func newLifecycleService(validationService lifecycleValidation, state installstate.Store, runner validation.ProcessRunner, home string, build buildinfo.Info, acquire func(context.Context) (func() error, error)) *lifecycleService {
+func newLifecycleService(validationService lifecycleValidation, state installstate.Store, runner processRunner, home, claudeRoot string, build buildinfo.Info, acquire func(context.Context) (func() error, error)) *lifecycleService {
 	return &lifecycleService{
 		validation: validationService,
 		state:      state,
 		runner:     runner,
 		home:       home,
+		claudeRoot: claudeRoot,
 		build:      build,
 		now:        time.Now,
 		random:     rand.Reader,
@@ -241,7 +335,7 @@ func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli
 		return cli.Response{}, err
 	}
 	if len(execution.actions) == 0 {
-		return lifecycleNoChange(request.command, execution.operation, recordInstallation(execution.before, execution.desired), execution.final, execution.disposition, execution.source.Warnings)
+		return lifecycleNoChange(request.command, execution.operation, recordInstallation(execution.transition.before, execution.transition.desired), execution.final, execution.disposition, execution.source.Warnings)
 	}
 	approval, err := approveLifecycle(request.approved, request.output, request.commandIO, plan, execution.operation.String())
 	if err != nil {
@@ -346,7 +440,16 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 		actions = nil
 	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
-	return lifecycleExecution{operation: cli.OperationInstall, source: report, before: before, desired: &desired, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifacts: retainedArtifacts(report), actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
+	transition, err := newPreparedTransition(before, &desired, preparedTransitionMaterial{
+		projectSettingsBefore: catalogBefore,
+		desiredTarget:         catalogBytes,
+		desiredRules:          report.Rules,
+		desiredArtifacts:      retainedArtifacts(report),
+	})
+	if err != nil {
+		return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
+	}
+	return lifecycleExecution{operation: cli.OperationInstall, source: report, transition: transition, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID domain.InstallationID, requested cli.SourceOptions, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -529,7 +632,17 @@ func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Comm
 		}
 	}
 	final := mustFinalState(cli.StatePresent, cli.StatePresent, cli.StatePresent)
-	return lifecycleExecution{operation: operation, source: report, before: &record, desired: &desired, beforeArtifacts: beforeArtifacts, catalog: catalogBytes, catalogBefore: catalogBefore, rules: report.Rules, artifacts: retainedArtifacts(report), actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: disposition}, cli.Response{}, false, nil
+	transition, err := newPreparedTransition(&record, &desired, preparedTransitionMaterial{
+		projectSettingsBefore: catalogBefore,
+		desiredTarget:         catalogBytes,
+		desiredRules:          report.Rules,
+		retainedBefore:        beforeArtifacts,
+		desiredArtifacts:      retainedArtifacts(report),
+	})
+	if err != nil {
+		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
+	}
+	return lifecycleExecution{operation: operation, source: report, transition: transition, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: disposition}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID domain.InstallationID, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -594,7 +707,15 @@ func (s *lifecycleService) prepareUninstall(ctx context.Context, installationID 
 	if err != nil {
 		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall content plan could not be created")
 	}
-	return lifecycleExecution{operation: cli.OperationUninstall, source: report, before: &record, desired: &desired, beforeArtifacts: beforeArtifacts, catalog: catalogAfter, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, nonRestorable: nonRestorable}, cli.Response{}, false, nil
+	transition, err := newPreparedTransition(&record, &desired, preparedTransitionMaterial{
+		desiredTarget:  catalogAfter,
+		retainedBefore: beforeArtifacts,
+		nonRestorable:  nonRestorable,
+	})
+	if err != nil {
+		return stopLifecycle(cli.CommandUninstall, result.FailureInternal, "plan_failed", "uninstall plan could not be created")
+	}
+	return lifecycleExecution{operation: cli.OperationUninstall, source: report, transition: transition, actions: actions, content: content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
 }
 
 func (s *lifecycleService) prepareRollback(ctx context.Context, installationID domain.InstallationID, operationID domain.OperationID, selected bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -648,7 +769,7 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 		}
 	}
 	rollbackArtifacts := cloneNativeArtifacts(entry.NativeArtifactsBefore)
-	catalogBefore, catalogAfter := slices.Clone(entry.CatalogAfter), slices.Clone(entry.CatalogBefore)
+	catalogAfter := slices.Clone(entry.CatalogBefore)
 	if desired.Lifecycle == "active" && desired.Scope != "project-shared" {
 		catalogAfter, desired.Catalog, err = retainedRollbackCatalog(desired, rollbackArtifacts)
 		if err != nil {
@@ -669,13 +790,24 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	if desired.Lifecycle == "archived" {
 		final = mustFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent)
 	}
+	var projectSettingsBefore []byte
 	if record.Scope == "project-shared" {
-		catalogBefore, catalogAfter, err = s.planProjectSharedRollback(record, &desired, entry.CatalogBefore)
+		projectSettingsBefore, catalogAfter, err = s.planProjectSharedRollback(record, &desired, entry.CatalogBefore)
 		if err != nil {
 			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "project_settings_conflict", "the shared project declaration cannot be rolled back safely")
 		}
 	}
-	return lifecycleExecution{operation: cli.OperationRollback, source: report, before: &record, desired: &desired, catalog: catalogAfter, catalogBefore: catalogBefore, rules: slices.Clone(entry.RulesBefore), artifacts: rollbackArtifacts, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked, rollback: &entry}, cli.Response{}, false, nil
+	transition, err := newPreparedTransition(&record, &desired, preparedTransitionMaterial{
+		projectSettingsBefore: projectSettingsBefore,
+		desiredTarget:         catalogAfter,
+		desiredRules:          slices.Clone(entry.RulesBefore),
+		desiredArtifacts:      rollbackArtifacts,
+		rollback:              true,
+	})
+	if err != nil {
+		return stopLifecycle(cli.CommandRollback, result.FailureInternal, "plan_failed", "rollback plan could not be created")
+	}
+	return lifecycleExecution{operation: cli.OperationRollback, source: report, transition: transition, actions: actions, content: report.Content, conflicts: visible, degradedConflicts: degraded, final: final, disposition: result.UpdateNotChecked}, cli.Response{}, false, nil
 }
 
 func retainedArtifacts(report validation.LifecycleSelection) []installstate.NativeArtifact {

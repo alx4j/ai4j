@@ -248,8 +248,6 @@ func mustInstallation(value string) domain.InstallationID {
 	return id
 }
 
-func ptrInstallation(value domain.InstallationID) *domain.InstallationID { return &value }
-
 func recordInstallation(records ...*installstate.Record) *domain.InstallationID {
 	for _, record := range records {
 		if record != nil {

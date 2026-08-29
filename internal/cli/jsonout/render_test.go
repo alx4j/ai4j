@@ -227,18 +227,18 @@ func versionResponse(t *testing.T) cli.Response {
 	if err != nil {
 		t.Fatalf("NewDefaultSource() error = %v", err)
 	}
-	data, err := cli.NewVersionData(
-		"AI4J",
-		"ai4j",
-		"0.0.0-dev",
-		repository,
-		commit,
-		"go1.26.6",
-		time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC),
-		"darwin",
-		"arm64",
-		defaultSource,
-	)
+	data, err := cli.NewVersionData(cli.VersionDataInput{
+		Product:       "AI4J",
+		Executable:    "ai4j",
+		Version:       "0.0.0-dev",
+		Repository:    repository,
+		Commit:        commit,
+		GoVersion:     "go1.26.6",
+		BuildTime:     time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC),
+		TargetOS:      "darwin",
+		TargetArch:    "arm64",
+		DefaultSource: defaultSource,
+	})
 	if err != nil {
 		t.Fatalf("NewVersionData() error = %v", err)
 	}

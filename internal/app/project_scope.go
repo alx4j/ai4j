@@ -12,6 +12,7 @@ import (
 
 	"github.com/alx4j/ai4j/internal/diskcapacity"
 	"github.com/alx4j/ai4j/internal/installstate"
+	gitsource "github.com/alx4j/ai4j/internal/source/git"
 )
 
 const projectInspectionTimeout = 15 * time.Second
@@ -44,10 +45,7 @@ func (s *lifecycleService) resolveProjectRoot(ctx context.Context, project strin
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
-	observation, err := s.runner.Run(commandContext, canonical, git, []string{"rev-parse", "--show-toplevel"}, []string{
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-	})
+	observation, err := s.runner.RunIsolated(commandContext, canonical, git, []string{"rev-parse", "--show-toplevel"}, gitAuthenticatedEnvironment())
 	if err != nil || observation.ExitCode != 0 || len(observation.Stderr) != 0 {
 		return "", errors.New("Git root lookup failed")
 	}
@@ -108,7 +106,7 @@ func (s *lifecycleService) inspectProjectLocal(ctx context.Context, before *inst
 	defer cancel()
 	if desired.Rules != (installstate.OwnedFile{}) {
 		relative := filepath.ToSlash(desired.Rules.Path)
-		tracked, err := s.runner.Run(commandContext, desired.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
+		tracked, err := s.runner.RunIsolated(commandContext, desired.ScopeRoot, git, []string{"ls-files", "--error-unmatch", "--", relative}, gitAuthenticatedEnvironment())
 		if err != nil || tracked.ExitCode != 0 && tracked.ExitCode != 1 {
 			return errors.New("project rules tracking could not be inspected")
 		}
@@ -138,7 +136,7 @@ func (s *lifecycleService) projectExcludePath(ctx context.Context, record instal
 	}
 	commandContext, cancel := context.WithTimeout(ctx, projectInspectionTimeout)
 	defer cancel()
-	observation, err := s.runner.Run(commandContext, record.ScopeRoot, git, []string{"rev-parse", "--git-path", "info/exclude"}, []string{"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"})
+	observation, err := s.runner.RunIsolated(commandContext, record.ScopeRoot, git, []string{"rev-parse", "--git-path", "info/exclude"}, gitAuthenticatedEnvironment())
 	if err != nil || observation.ExitCode != 0 || len(observation.Stderr) != 0 {
 		return "", errors.New("Git local exclusion path could not be resolved")
 	}
@@ -150,6 +148,10 @@ func (s *lifecycleService) projectExcludePath(ctx context.Context, record instal
 		value = filepath.Join(record.ScopeRoot, value)
 	}
 	return filepath.Clean(value), nil
+}
+
+func gitAuthenticatedEnvironment() []string {
+	return gitsource.AuthenticatedProcessEnvironment(os.Environ())
 }
 
 func (s *lifecycleService) ensureProjectLocalExclusion(ctx context.Context, record installstate.Record) error {

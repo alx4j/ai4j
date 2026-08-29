@@ -142,7 +142,7 @@ func validateOwnedPath(home, path string) error {
 		return errors.New("owned path is outside the user home")
 	}
 	current := home
-	for _, component := range strings.Split(filepath.Dir(relative), string(filepath.Separator)) {
+	for component := range strings.SplitSeq(filepath.Dir(relative), string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		info, err := os.Lstat(current)
 		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || hostPathUnsafe(current) {

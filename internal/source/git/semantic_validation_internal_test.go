@@ -425,11 +425,6 @@ func TestMaterializationPlanBindsCommitTreeAndInventory(t *testing.T) {
 	if err != nil || !plan.Valid() || plan.Commit() != commit || plan.Tree() != tree {
 		t.Fatalf("plan = %#v, %v", plan, err)
 	}
-	budget := DefaultWorkspaceBudget()
-	if !budget.AllowsMaterialization(MaximumWorkspaceBytes-1, inventory) ||
-		budget.AllowsMaterialization(MaximumWorkspaceBytes, inventory) {
-		t.Fatal("workspace plus selected-tree arithmetic is incoherent")
-	}
 	copyInventory := plan.Inventory()
 	copyInventory.entries[0] = TreeEntry{}
 	if !plan.Inventory().Valid() {
@@ -708,9 +703,7 @@ func TestTreeInventoryReservesGitMetadataAliasesInEveryAncestor(t *testing.T) {
 }
 
 func TestTreeAndAttributeProtocolOverheadProofs(t *testing.T) {
-	if MaximumReferenceBytes != protocol.MaximumRemoteReferenceBytes ||
-		remoteOutputLimit != protocol.MaximumRemoteOutputBytes || protocolOutputLimit != protocol.MaximumTreeOutputBytes ||
-		attributeOutputLimit != protocol.MaximumAttributeOutputBytes || configurationOutputLimit != protocol.MaximumConfigOutputBytes {
+	if MaximumReferenceBytes != protocol.MaximumRemoteReferenceBytes {
 		t.Fatal("command and parser bounds drifted")
 	}
 	if !treeProtocolFits(MaximumInventoryPathBytes, MaximumInventoryPathCount) {
@@ -746,41 +739,6 @@ func TestTreeAndAttributeProtocolOverheadProofs(t *testing.T) {
 	validated, err := validateAttributeBatch(paths)
 	if err != nil || len(validated) != MaximumAttributeBatchPaths {
 		t.Fatalf("attribute boundary = %d, %v", len(validated), err)
-	}
-}
-
-func TestRepositoryConfigurationAuditIsClosed(t *testing.T) {
-	t.Parallel()
-
-	data := []byte("core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00" +
-		"core.logallrefupdates\ntrue\x00core.ignorecase\ntrue\x00core.precomposeunicode\ntrue\x00core.symlinks\nfalse\x00")
-	configuration, err := AuditLocalConfiguration(data)
-	if err != nil || !configuration.Valid() {
-		t.Fatalf("configuration = %#v, %v", configuration, err)
-	}
-	if value, present := configuration.IgnoreCase(); !present || !value {
-		t.Fatalf("ignorecase = %t, %t", value, present)
-	}
-	if value, present := configuration.Symlinks(); !present || value {
-		t.Fatalf("symlinks = %t, %t", value, present)
-	}
-	for _, invalid := range [][]byte{
-		nil,
-		[]byte("core.repositoryformatversion\n1\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00"),
-		[]byte("core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00remote.origin.url\nhttps://github.com/canary/secret\x00"),
-		[]byte("core.repositoryformatversion\n0\x00core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00"),
-		[]byte("core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00core.ignorecase\nfalse\x00"),
-		[]byte("core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00core.precomposeunicode\nfalse\x00"),
-		[]byte("core.repositoryformatversion\n0\x00core.filemode\ntrue\x00core.bare\nfalse\x00core.logallrefupdates\ntrue\x00core.symlinks\ntrue\x00"),
-	} {
-		if _, err := AuditLocalConfiguration(invalid); err == nil {
-			t.Errorf("unsafe config accepted: %q", invalid)
-		}
-	}
-	for _, rendered := range []string{fmt.Sprintf("%v", configuration), fmt.Sprintf("%+v", configuration), fmt.Sprintf("%#v", configuration)} {
-		if rendered != "<git-local-configuration:redacted>" {
-			t.Fatalf("config render = %q", rendered)
-		}
 	}
 }
 

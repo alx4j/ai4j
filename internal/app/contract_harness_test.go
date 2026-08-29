@@ -54,7 +54,6 @@ func TestContractHarnessEveryCanonicalCommandIsSchemaValidAndDeterministic(t *te
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -125,7 +124,6 @@ func TestContractHarnessResultFamiliesMatchProcessAndEnvelope(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -245,7 +243,6 @@ func TestContractHarnessUsageAndVersionNeverConstructCommandsOrReadStdin(t *test
 		{name: "version", arguments: []string{"ai4j", "version", "--json"}, schemaName: "version.json", wantExit: result.ExitSuccess},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -563,7 +560,17 @@ func newContractFixture(t *testing.T, reverse bool) contractFixture {
 	finalAbsent := mustFixture(cli.NewFinalState(cli.StateAbsent, cli.StateAbsent, cli.StateAbsent))
 	recordedSource := mustFixture(cli.NewRecordedSource(source.Selection(), source.Repository(), source.Transport(), source.RequestedRef(), source.HasRequestedRef(), source.ResolvedRefKind(), source.Commit().OID()))
 	installation := mustFixture(cli.NewInstallation(installationID, "ai4j", []string{"ai4j-default"}, recordedSource, "1.0.0", "0.0.0-dev", "2.0.0"))
-	nativePresent := mustFixture(cli.NewNativeState(cli.NativeRegistered, cli.NativeInstalled, cli.NativeEnabled, cli.NativeInactive, cli.NativeReloadRequired, cli.NativeNextSessionRequired, cli.NativePolicyAllowed, "2.0.0", cli.NativeVersionMatches))
+	nativePresent := mustFixture(cli.NewNativeState(cli.NativeStateInput{
+		Registration:  cli.NativeRegistered,
+		Installation:  cli.NativeInstalled,
+		Enablement:    cli.NativeEnabled,
+		Activation:    cli.NativeInactive,
+		Reload:        cli.NativeReloadRequired,
+		NextSession:   cli.NativeNextSessionRequired,
+		Policy:        cli.NativePolicyAllowed,
+		Version:       "2.0.0",
+		VersionStatus: cli.NativeVersionMatches,
+	}))
 	recoveryNone := mustFixture(cli.NewRecoveryState(cli.RecoveryStateNone, ""))
 
 	return contractFixture{

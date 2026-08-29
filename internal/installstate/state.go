@@ -243,7 +243,12 @@ func validLegacyPackageOwnership(packages []NativePackage) bool {
 
 func validStateSource(source Source) bool {
 	if source.Mode == "development_source" {
-		return source.Selection == domain.ExplicitSource().String() && source.Repository == "" && source.Transport == "" && source.RequestedRef == nil && source.RefKind == "" && source.Commit == "" && filepath.IsAbs(source.Checkout) && filepath.Clean(source.Checkout) == source.Checkout && digestPattern.MatchString(source.SourceDigest) && digestPattern.MatchString(source.BundleDigest)
+		if source.Selection != domain.ExplicitSource().String() || source.Repository != "" || source.Transport != "" ||
+			source.RequestedRef != nil || source.RefKind != "" || source.Commit != "" {
+			return false
+		}
+		return filepath.IsAbs(source.Checkout) && filepath.Clean(source.Checkout) == source.Checkout &&
+			digestPattern.MatchString(source.SourceDigest) && digestPattern.MatchString(source.BundleDigest)
 	}
 	if source.Mode != "git" && source.Mode != "github" && source.Mode != "" {
 		return false
@@ -265,7 +270,23 @@ func validStateSource(source Source) bool {
 			return false
 		}
 	}
-	if source.Selection != domain.BuiltInDefaultSource().String() && source.Selection != domain.ExplicitSource().String() || source.Selection == domain.BuiltInDefaultSource().String() && (source.Repository != "github.com/alx4j/ai4j" || source.Transport != "" && source.Transport != domain.HTTPSGitTransport().String()) || source.RefKind != "default_branch" && source.RefKind != "branch" && source.RefKind != "tag" && source.RefKind != "commit" || source.RequestedRef != nil && (*source.RequestedRef == "" || len(*source.RequestedRef) > 512) || (source.RefKind == "default_branch") != (source.RequestedRef == nil) || source.RefKind == "commit" && source.RequestedRef != nil && *source.RequestedRef != source.Commit {
+	if source.Selection != domain.BuiltInDefaultSource().String() && source.Selection != domain.ExplicitSource().String() {
+		return false
+	}
+	if source.Selection == domain.BuiltInDefaultSource().String() &&
+		(source.Repository != "github.com/alx4j/ai4j" || source.Transport != "" && source.Transport != domain.HTTPSGitTransport().String()) {
+		return false
+	}
+	if source.RefKind != "default_branch" && source.RefKind != "branch" && source.RefKind != "tag" && source.RefKind != "commit" {
+		return false
+	}
+	if source.RequestedRef != nil && (*source.RequestedRef == "" || len(*source.RequestedRef) > 512) {
+		return false
+	}
+	if (source.RefKind == "default_branch") != (source.RequestedRef == nil) {
+		return false
+	}
+	if source.RefKind == "commit" && source.RequestedRef != nil && *source.RequestedRef != source.Commit {
 		return false
 	}
 	return source.Checkout == "" && source.SourceDigest == "" && source.BundleDigest == "" && !source.Dirty
@@ -456,6 +477,35 @@ func (s Store) Save(record Record) error {
 		records = append(records, record)
 	}
 	return s.commit(records, expected)
+}
+
+// Replace atomically updates one installation only when its complete stored
+// record still matches expected. Recovery uses this compare-and-swap boundary
+// so an external state change cannot be overwritten after it was inspected.
+func (s Store) Replace(expectedRecord, desiredRecord Record) error {
+	expectedRecord = cloneRecord(expectedRecord)
+	desiredRecord = cloneRecord(desiredRecord)
+	if normalizeRecord(&expectedRecord) != nil || normalizeRecord(&desiredRecord) != nil ||
+		expectedRecord.InstallationID != desiredRecord.InstallationID {
+		return ErrMalformedState
+	}
+	records, expectedState, err := s.recordsForWrite()
+	if err != nil {
+		return err
+	}
+	encodedExpected, _ := encodeRecord(expectedRecord)
+	for index, current := range records {
+		if current.InstallationID != expectedRecord.InstallationID {
+			continue
+		}
+		encodedCurrent, _ := encodeRecord(current)
+		if !bytes.Equal(encodedCurrent, encodedExpected) {
+			return ErrStateChanged
+		}
+		records[index] = desiredRecord
+		return s.commit(records, expectedState)
+	}
+	return ErrStateChanged
 }
 
 func (s Store) SaveNew(record Record) error {

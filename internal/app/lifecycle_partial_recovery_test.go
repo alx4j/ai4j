@@ -24,7 +24,7 @@ func TestLifecycleRecoveryCompletesFreshInstallAfterSecondPackageFailure(t *test
 	if err != nil || stop {
 		t.Fatalf("install preparation stopped: %v", err)
 	}
-	secondPlugin := nativePluginID(execution.desired.Packages[1], execution.desired.MarketplaceID)
+	secondPlugin := nativePluginID(execution.transition.desired.Packages[1], execution.transition.desired.MarketplaceID)
 	harness.native.failPrefix = []string{"plugin", "install", secondPlugin}
 	harness.native.failCount = 1
 
@@ -32,7 +32,7 @@ func TestLifecycleRecoveryCompletesFreshInstallAfterSecondPackageFailure(t *test
 	if err != nil || response.Result().Failure() != result.FailureRecovery {
 		t.Fatalf("partial install = %#v, %v", response.Result(), err)
 	}
-	if !harness.native.plugins[nativePluginID(execution.desired.Packages[0], execution.desired.MarketplaceID)] || harness.native.plugins[secondPlugin] {
+	if !harness.native.plugins[nativePluginID(execution.transition.desired.Packages[0], execution.transition.desired.MarketplaceID)] || harness.native.plugins[secondPlugin] {
 		t.Fatalf("native state is not stopped after package one: %#v", harness.native.plugins)
 	}
 	selectionCalls := harness.validator.selectionCalls
@@ -44,7 +44,7 @@ func TestLifecycleRecoveryCompletesFreshInstallAfterSecondPackageFailure(t *test
 	if harness.validator.selectionCalls != selectionCalls {
 		t.Fatalf("recovery resolved the source: selection calls=%d, want %d", harness.validator.selectionCalls, selectionCalls)
 	}
-	current, present, err := harness.store.LoadByID(execution.desired.InstallationID)
+	current, present, err := harness.store.LoadByID(execution.transition.desired.InstallationID)
 	if err != nil || !present || current.Lifecycle != "active" || current.Selection.RequestedBundle != "full" {
 		t.Fatalf("recovered installation = %#v, present=%t, err=%v", current, present, err)
 	}

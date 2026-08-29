@@ -18,7 +18,6 @@ const (
 	MaximumIndexOutputBytes     = 16 << 20
 	MaximumAttributeOutputBytes = 2 << 20
 	MaximumScalarOutputBytes    = 4 << 10
-	MaximumConfigOutputBytes    = 64 << 10
 	MaximumStatusOutputBytes    = 16 << 20
 	MaximumRemoteReferenceBytes = 1024
 
@@ -61,13 +60,6 @@ type IndexRecord struct {
 type AttributeRecord struct {
 	Path  string
 	Name  string
-	Value string
-}
-
-// ConfigRecord is one `git config --null --list` key/value record. The exact
-// command emits a single LF between key and value and NUL between records.
-type ConfigRecord struct {
-	Key   string
 	Value string
 }
 
@@ -199,25 +191,6 @@ func ParseAttributes(data []byte) ([]AttributeRecord, error) {
 	return result, nil
 }
 
-func ParseConfig(data []byte) ([]ConfigRecord, error) {
-	if len(data) > MaximumConfigOutputBytes {
-		return nil, ErrMalformed
-	}
-	records, err := splitNullRecords(data, 512)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]ConfigRecord, 0, len(records))
-	for _, raw := range records {
-		key, value, ok := strings.Cut(raw, "\n")
-		if !ok || strings.ContainsRune(value, '\n') || !safeConfigKey(key) || !safeField(value) {
-			return nil, ErrMalformed
-		}
-		result = append(result, ConfigRecord{Key: strings.Clone(key), Value: strings.Clone(value)})
-	}
-	return result, nil
-}
-
 // ParseCleanStatus accepts the only post-materialization porcelain-v1 state
 // permitted by the executor: no tracked, untracked, ignored, renamed, or
 // unmerged records. It intentionally never retains hostile path records.
@@ -326,20 +299,6 @@ func safeToken(value string) bool {
 
 func safeReferenceField(value string) bool {
 	return len(value) <= MaximumRemoteReferenceBytes && safeToken(value)
-}
-
-func safeConfigKey(value string) bool {
-	if value == "" || len(value) > 256 || value[0] == '.' || value[len(value)-1] == '.' {
-		return false
-	}
-	for _, character := range value {
-		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
-			character == '.' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return strings.ContainsRune(value, '.')
 }
 
 func lowerHex(value string, size int) bool {

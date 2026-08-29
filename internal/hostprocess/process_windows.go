@@ -1,6 +1,6 @@
 //go:build windows
 
-package validate
+package hostprocess
 
 import (
 	"context"
@@ -13,22 +13,22 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func runOSProcess(ctx context.Context, directory, executable string, arguments, environment []string, inheritEnvironment bool) (ProcessResult, error) {
+func run(ctx context.Context, directory, executable string, arguments, environment []string, inheritEnvironment bool) (Result, error) {
 	if ctx == nil || executable == "" {
-		return ProcessResult{}, errors.New("invalid process request")
+		return Result{}, errors.New("invalid process request")
 	}
 	if err := ctx.Err(); err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 	defer windows.CloseHandle(job)
 	limits := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&limits)), uint32(unsafe.Sizeof(limits))); err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 
 	command := exec.Command(executable, arguments...)
@@ -42,25 +42,25 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Start(); err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 	process, openErr := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(command.Process.Pid))
 	if openErr != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		return ProcessResult{}, openErr
+		return Result{}, openErr
 	}
 	assignErr := windows.AssignProcessToJobObject(job, process)
 	_ = windows.CloseHandle(process)
 	if assignErr != nil {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		return ProcessResult{}, assignErr
+		return Result{}, assignErr
 	}
 	if err := resumeProcess(uint32(command.Process.Pid)); err != nil {
 		_ = windows.TerminateJobObject(job, 1)
 		_ = command.Wait()
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 
 	wait := make(chan error, 1)
@@ -70,12 +70,12 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 	case <-ctx.Done():
 		_ = windows.TerminateJobObject(job, 1)
 		<-wait
-		return ProcessResult{Started: true, TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded)}, ctx.Err()
+		return Result{Started: true, TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded)}, ctx.Err()
 	}
 	if stdout.overflow || stderr.overflow {
-		return ProcessResult{}, errors.New("process output limit exceeded")
+		return Result{}, errors.New("process output limit exceeded")
 	}
-	result := ProcessResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Started: true}
+	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Started: true}
 	if err == nil {
 		return result, nil
 	}
@@ -84,7 +84,7 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 		result.ExitCode = exitError.ExitCode()
 		return result, nil
 	}
-	return ProcessResult{}, err
+	return Result{}, err
 }
 
 func resumeProcess(pid uint32) error {

@@ -121,7 +121,7 @@ func TestLifecycleLocalRollbackRecoveryMatchesStoredRevision(t *testing.T) {
 				t.Fatalf("rollback marker revision = %q, desired=%q", marker.Commit, recordSourceRevision(*desired))
 			}
 			if test.mutateTarget {
-				if err := harness.service.applyTransition(context.Background(), execution.before, desired, execution.catalogBefore, execution.catalog, execution.rules, execution.artifacts, cli.ConflictFail, true); err != nil {
+				if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 					t.Fatal(err)
 				}
 			}

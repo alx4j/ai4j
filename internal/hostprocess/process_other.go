@@ -1,6 +1,6 @@
 //go:build !windows
 
-package validate
+package hostprocess
 
 import (
 	"context"
@@ -10,12 +10,12 @@ import (
 	"syscall"
 )
 
-func runOSProcess(ctx context.Context, directory, executable string, arguments, environment []string, inheritEnvironment bool) (ProcessResult, error) {
+func run(ctx context.Context, directory, executable string, arguments, environment []string, inheritEnvironment bool) (Result, error) {
 	if ctx == nil || executable == "" {
-		return ProcessResult{}, errors.New("invalid process request")
+		return Result{}, errors.New("invalid process request")
 	}
 	if err := ctx.Err(); err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 	command := exec.Command(executable, arguments...)
 	command.Dir = directory
@@ -28,7 +28,7 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 	command.Stderr = &stderr
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
-		return ProcessResult{}, err
+		return Result{}, err
 	}
 	wait := make(chan error, 1)
 	go func() { wait <- command.Wait() }()
@@ -44,9 +44,9 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 		err = ctx.Err()
 	}
 	if stdout.overflow || stderr.overflow {
-		return ProcessResult{}, errors.New("process output limit exceeded")
+		return Result{}, errors.New("process output limit exceeded")
 	}
-	result := ProcessResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Started: true, TimedOut: timedOut}
+	result := Result{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Started: true, TimedOut: timedOut}
 	if timedOut || ctx.Err() != nil {
 		return result, err
 	}
@@ -58,5 +58,5 @@ func runOSProcess(ctx context.Context, directory, executable string, arguments, 
 		result.ExitCode = exitError.ExitCode()
 		return result, nil
 	}
-	return ProcessResult{}, err
+	return Result{}, err
 }

@@ -23,7 +23,10 @@ func (s *lifecycleService) reconcileInterrupted(ctx context.Context) (bool, erro
 	if !present {
 		return s.reconcileOrphanedHistory(ctx)
 	}
-	if marker.Operation == "history_purge" || !slices.Contains(marker.Resources, "history:"+marker.InstallationID) {
+	if marker.Operation == "history_purge" {
+		return s.reconcileHistoryPurge(marker)
+	}
+	if !slices.Contains(marker.Resources, "history:"+marker.InstallationID) {
 		return false, nil
 	}
 	entry, historyPresent, err := s.state.LoadOperationHistory(marker.InstallationID, marker.OperationID)
@@ -129,6 +132,131 @@ func (s *lifecycleService) reconcileInterrupted(ctx context.Context) (bool, erro
 	}
 }
 
+func (s *lifecycleService) reconcileHistoryPurge(marker installstate.Marker) (bool, error) {
+	before, desired, ok := historyPurgeRecords(marker)
+	if !ok || recordSourceRevision(before) != marker.Commit {
+		return false, nil
+	}
+	current, present, err := s.state.LoadByID(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	if !historyPurgeStateMatches(current, present, before, desired) {
+		return false, nil
+	}
+	entries, err := s.state.LoadHistory(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	desiredHistory := []string{}
+	if desired != nil {
+		desiredHistory = desired.History
+	}
+	if !validPartialHistoryPurge(before.History, desiredHistory, marker.HistoryPurge.OperationIDs, historyEntryIDs(entries)) {
+		return false, nil
+	}
+	if err := s.state.DeleteHistory(marker.InstallationID, marker.HistoryPurge.OperationIDs); err != nil {
+		return false, err
+	}
+	entries, err = s.state.LoadHistory(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	if !slices.Equal(historyEntryIDs(entries), desiredHistory) {
+		return false, nil
+	}
+	current, present, err = s.state.LoadByID(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case present && reflect.DeepEqual(current, before):
+		if desired == nil {
+			err = s.state.Delete(before)
+		} else {
+			err = s.state.Replace(before, *desired)
+		}
+		if errors.Is(err, installstate.ErrStateChanged) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+	case desired != nil && present && reflect.DeepEqual(current, *desired):
+	case desired == nil && !present:
+	default:
+		return false, nil
+	}
+	current, present, err = s.state.LoadByID(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	if desired != nil && (!present || !reflect.DeepEqual(current, *desired)) || desired == nil && present {
+		return false, nil
+	}
+	if err := s.state.DeleteMarker(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func historyPurgeRecords(marker installstate.Marker) (installstate.Record, *installstate.Record, bool) {
+	journal := marker.HistoryPurge
+	if journal == nil {
+		return installstate.Record{}, nil, false
+	}
+	switch journal.DesiredState {
+	case installstate.HistoryPurgeStatePresent:
+		if journal.DesiredRecord == nil {
+			return installstate.Record{}, nil, false
+		}
+		desired := cloneRecord(*journal.DesiredRecord)
+		before := cloneRecord(desired)
+		before.History = append(before.History, journal.OperationIDs...)
+		slices.Sort(before.History)
+		return before, &desired, before.Validate() == nil
+	case installstate.HistoryPurgeStateAbsent:
+		if journal.ExpectedRecord == nil {
+			return installstate.Record{}, nil, false
+		}
+		before := cloneRecord(*journal.ExpectedRecord)
+		return before, nil, before.Validate() == nil
+	default:
+		return installstate.Record{}, nil, false
+	}
+}
+
+func historyPurgeStateMatches(current installstate.Record, present bool, before installstate.Record, desired *installstate.Record) bool {
+	return present && reflect.DeepEqual(current, before) ||
+		desired != nil && present && reflect.DeepEqual(current, *desired) ||
+		desired == nil && !present
+}
+
+func validPartialHistoryPurge(before, desired, selected, observed []string) bool {
+	expectedBefore := append(slices.Clone(desired), selected...)
+	slices.Sort(expectedBefore)
+	if !slices.Equal(before, expectedBefore) {
+		return false
+	}
+	beforeSet := make(map[string]struct{}, len(before))
+	observedSet := make(map[string]struct{}, len(observed))
+	for _, operationID := range before {
+		beforeSet[operationID] = struct{}{}
+	}
+	for _, operationID := range observed {
+		if _, expected := beforeSet[operationID]; !expected {
+			return false
+		}
+		observedSet[operationID] = struct{}{}
+	}
+	for _, operationID := range desired {
+		if _, present := observedSet[operationID]; !present {
+			return false
+		}
+	}
+	return true
+}
+
 type recoveryPluginState struct {
 	installed bool
 	enabled   bool
@@ -230,47 +358,14 @@ func (s *lifecycleService) resumeProjectSharedCatalog(ctx context.Context, entry
 
 func (s *lifecycleService) convergePartialActivation(ctx context.Context, entry installstate.HistoryEntry) (bool, error) {
 	desired := *entry.After
-	marketplace, plugins, known := s.recoveryNativeProgress(ctx, entry.Before, &desired)
-	if !known || !recoveryPluginStatesConsistent(plugins) || !marketplace && recoveryAnyPluginInstalled(plugins) {
-		return false, nil
-	}
-	desiredPackages := make(map[string]struct{}, len(desired.Packages))
-	for _, pkg := range desired.Packages {
-		desiredPackages[pkg.ID] = struct{}{}
-	}
-	for packageID, state := range plugins {
-		_, wanted := desiredPackages[packageID]
-		if state.installed && !wanted {
-			return false, nil
-		}
-	}
-	pathChanged := recoveryCatalogPathChanged(s, entry.Before, &desired)
-	if pathChanged {
-		if entry.Before == nil || !recoveryEndpointBytesValid(*entry.Before, entry.CatalogBefore, entry.RulesBefore) ||
-			!s.recoveryCatalogRemovalKnown(*entry.Before, entry.CatalogBefore, entry.NativeArtifactsBefore) {
-			return false, nil
-		}
-	} else if !marketplace && entry.Before != nil && entry.Before.Lifecycle == "active" {
-		return false, nil
-	}
-	if err := s.ensureProjectLocalExclusion(ctx, desired); err != nil {
-		return false, err
-	}
-	if err := s.completeRecoveryPackages(ctx, entry.Before, &desired, marketplace, plugins, entry.CatalogBefore, entry.NativeArtifactsBefore); err != nil {
-		return false, err
-	}
-	if err := s.resumeRecoveryRules(entry.Before, &desired, entry.RulesAfter); err != nil {
-		return false, err
-	}
-	if desired.Scope == "project-local" && desired.Rules == (installstate.OwnedFile{}) && entry.Before != nil && entry.Before.Rules != (installstate.OwnedFile{}) {
-		if err := s.removeProjectLocalExclusion(ctx, *entry.Before); err != nil {
-			return false, err
-		}
-	}
-	if err := s.verifyTransition(ctx, desired, entry.Before); err != nil {
-		return false, nil
-	}
-	return true, nil
+	return s.recoverPartialActivation(ctx, partialActivationDirection{
+		desired:              desired,
+		counterpart:          entry.Before,
+		desiredRules:         entry.RulesAfter,
+		counterpartCatalog:   entry.CatalogBefore,
+		counterpartRules:     entry.RulesBefore,
+		counterpartArtifacts: entry.NativeArtifactsBefore,
+	})
 }
 
 func (s *lifecycleService) compensatePartialActivation(ctx context.Context, entry installstate.HistoryEntry) (bool, error) {
@@ -284,44 +379,67 @@ func (s *lifecycleService) compensatePartialActivation(ctx context.Context, entr
 		!s.recoveryRulesTransitionKnown(entry.After, &before) {
 		return false, nil
 	}
-	marketplace, plugins, known := s.recoveryNativeProgress(ctx, &before, entry.After)
+	return s.recoverPartialActivation(ctx, partialActivationDirection{
+		desired:              before,
+		counterpart:          entry.After,
+		desiredRules:         entry.RulesBefore,
+		counterpartCatalog:   entry.CatalogAfter,
+		counterpartRules:     entry.RulesAfter,
+		counterpartArtifacts: entry.NativeArtifactsAfter,
+	})
+}
+
+type partialActivationDirection struct {
+	desired              installstate.Record
+	counterpart          *installstate.Record
+	desiredRules         []byte
+	counterpartCatalog   []byte
+	counterpartRules     []byte
+	counterpartArtifacts []installstate.NativeArtifact
+}
+
+func (s *lifecycleService) recoverPartialActivation(ctx context.Context, direction partialActivationDirection) (bool, error) {
+	desired := direction.desired
+	marketplace, plugins, known := s.recoveryNativeProgress(ctx, direction.counterpart, &desired)
 	if !known || !recoveryPluginStatesConsistent(plugins) || !marketplace && recoveryAnyPluginInstalled(plugins) {
 		return false, nil
 	}
-	beforePackages := make(map[string]struct{}, len(before.Packages))
-	for _, pkg := range before.Packages {
-		beforePackages[pkg.ID] = struct{}{}
+	desiredPackages := make(map[string]struct{}, len(desired.Packages))
+	for _, pkg := range desired.Packages {
+		desiredPackages[pkg.ID] = struct{}{}
 	}
 	for packageID, state := range plugins {
-		_, wanted := beforePackages[packageID]
+		_, wanted := desiredPackages[packageID]
 		if state.installed && !wanted {
 			return false, nil
 		}
 	}
-	pathChanged := recoveryCatalogPathChanged(s, &before, entry.After)
+	pathChanged := recoveryCatalogPathChanged(s, direction.counterpart, &desired)
 	if pathChanged {
-		if entry.After == nil || !recoveryEndpointBytesValid(*entry.After, entry.CatalogAfter, entry.RulesAfter) ||
-			!s.recoveryCatalogRemovalKnown(*entry.After, entry.CatalogAfter, entry.NativeArtifactsAfter) {
+		if direction.counterpart == nil ||
+			!recoveryEndpointBytesValid(*direction.counterpart, direction.counterpartCatalog, direction.counterpartRules) ||
+			!s.recoveryCatalogRemovalKnown(*direction.counterpart, direction.counterpartCatalog, direction.counterpartArtifacts) {
 			return false, nil
 		}
-	} else if !marketplace {
+	} else if !marketplace && direction.counterpart != nil && direction.counterpart.Lifecycle == "active" {
 		return false, nil
 	}
-	if err := s.ensureProjectLocalExclusion(ctx, before); err != nil {
+	if err := s.ensureProjectLocalExclusion(ctx, desired); err != nil {
 		return false, err
 	}
-	if err := s.completeRecoveryPackages(ctx, entry.After, &before, marketplace, plugins, entry.CatalogAfter, entry.NativeArtifactsAfter); err != nil {
+	if err := s.completeRecoveryPackages(ctx, direction.counterpart, &desired, marketplace, plugins, direction.counterpartCatalog, direction.counterpartArtifacts); err != nil {
 		return false, err
 	}
-	if err := s.resumeRecoveryRules(entry.After, &before, entry.RulesBefore); err != nil {
+	if err := s.resumeRecoveryRules(direction.counterpart, &desired, direction.desiredRules); err != nil {
 		return false, err
 	}
-	if before.Scope == "project-local" && before.Rules == (installstate.OwnedFile{}) && entry.After.Rules != (installstate.OwnedFile{}) {
-		if err := s.removeProjectLocalExclusion(ctx, *entry.After); err != nil {
+	if desired.Scope == "project-local" && desired.Rules == (installstate.OwnedFile{}) &&
+		direction.counterpart != nil && direction.counterpart.Rules != (installstate.OwnedFile{}) {
+		if err := s.removeProjectLocalExclusion(ctx, *direction.counterpart); err != nil {
 			return false, err
 		}
 	}
-	if err := s.verifyTransition(ctx, before, entry.After); err != nil {
+	if err := s.verifyTransition(ctx, desired, direction.counterpart); err != nil {
 		return false, nil
 	}
 	return true, nil

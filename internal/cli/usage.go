@@ -1,11 +1,5 @@
 package cli
 
-import (
-	"fmt"
-
-	"github.com/alx4j/ai4j/internal/fault"
-)
-
 // UsageIssue is a stable, typed reason that argv did not match the CLI grammar.
 type UsageIssue string
 
@@ -25,15 +19,14 @@ const (
 	UsageInvalidOptionValue    UsageIssue = "invalid_option_value"
 )
 
-// UsageError wraps the target-neutral invalid-input fault while retaining the
-// CLI-specific reason needed by later presentation code. It never retains an
-// arbitrary argument value.
+// UsageError retains the stable reason needed by presentation code without
+// retaining arbitrary argument values.
 type UsageError struct {
 	issue   UsageIssue
 	command Command
 	option  string
 	json    bool
-	fault   *fault.Error
+	cause   error
 }
 
 func (e *UsageError) Error() string {
@@ -50,7 +43,7 @@ func (e *UsageError) Error() string {
 	return message
 }
 
-func (e *UsageError) Unwrap() error       { return e.fault }
+func (e *UsageError) Unwrap() error       { return e.cause }
 func (e *UsageError) Issue() UsageIssue   { return e.issue }
 func (e *UsageError) Command() Command    { return e.command }
 func (e *UsageError) Option() string      { return e.option }
@@ -61,19 +54,13 @@ func newUsageError(
 	command Command,
 	option string,
 	jsonRequested bool,
-	field string,
-	reason fault.InvalidReason,
 	cause error,
 ) *UsageError {
-	detail, err := fault.NewInvalidDetail(field, reason)
-	if err != nil {
-		panic(fmt.Sprintf("invalid CLI fault detail: %v", err))
-	}
 	return &UsageError{
 		issue:   issue,
 		command: command,
 		option:  option,
 		json:    jsonRequested,
-		fault:   fault.MustNew(fault.InvalidInput, detail, cause),
+		cause:   cause,
 	}
 }

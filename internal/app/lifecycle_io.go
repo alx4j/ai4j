@@ -66,7 +66,7 @@ func writeOwnedNew(root, path string, contents []byte) error {
 		return errors.New("owned path is outside its root")
 	}
 	current := root
-	for _, component := range strings.Split(filepath.Dir(relative), string(filepath.Separator)) {
+	for component := range strings.SplitSeq(filepath.Dir(relative), string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		info, statErr := os.Lstat(current)
 		switch {

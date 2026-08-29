@@ -93,41 +93,39 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 		report.Failure = FailureEnvironment
 		return report
 	}
-	operationContext, cancelOperation := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancelOperation()
-	sourceWorkspace, err := workspace.Create(s.config.TempRoot, workspace.BuildSource)
-	if err != nil {
-		return buildFailure(report, FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
-	}
-	workspacePath := sourceWorkspace.Path()
+	session, err := s.openSource(ctx, 5*time.Minute, workspace.BuildSource, request.Source())
 	defer func() {
-		if err := sourceWorkspace.Close(); err != nil && len(report.Problems) == 0 {
+		if err := session.Close(); err != nil && len(report.Problems) == 0 {
 			report = buildFailure(report, FailureEnvironment, "workspace_cleanup_failed", "temporary source workspace could not be removed")
 		}
 	}()
-
-	acquired, err := s.acquireOptions(operationContext, workspacePath, request.Source())
 	if err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionWorkspace {
+			return buildFailure(report, FailureEnvironment, "workspace_create_failed", "temporary source workspace could not be created")
+		}
 		if code, message, ok := diskCapacityProblem(err); ok {
 			return buildFailure(report, FailureEnvironment, code, message)
 		}
 		return buildFailure(report, FailureSource, localSourceErrorCode(err), localSourceErrorMessage(err))
 	}
-	if acquired.local() {
+	if session.acquisition.local() {
 		output, outputErr := filepath.Abs(request.Output())
-		if outputErr != nil || inside(acquired.checkout, output) {
+		if outputErr != nil || inside(session.acquisition.checkout, output) {
 			return buildFailure(report, FailureConflict, "output_inside_source", "build output must be outside the local development checkout")
 		}
 	}
-	validated, err := validatePackage(workspacePath, acquired.inventory)
-	if err != nil {
+	if err := s.completeSource(session); err != nil {
+		if sourceSessionErrorStage(err) == sourceSessionConstruction {
+			return buildFailure(report, FailureInternal, "internal_error", "build result could not be constructed")
+		}
 		code, message := packageProblem(err)
 		return buildFailure(report, FailureValidation, code, message)
 	}
-	source, err := s.newCLISource(acquired, validated.digest)
-	if err != nil {
-		return buildFailure(report, FailureInternal, "internal_error", "build result could not be constructed")
-	}
+	operationContext := session.operationContext
+	workspacePath := session.workspacePath
+	acquired := session.acquisition
+	validated := session.validated
+	source := session.source
 	report.Source = source
 	report.Reproducible = !source.Dirty()
 	selection := selection{target: request.Target(), host: request.Host(), all: request.SelectAll(), assets: request.Assets(), bundles: request.Bundles()}
@@ -222,7 +220,7 @@ func (s Service) buildPreflight(ctx context.Context, request cli.BuildRequest) *
 		return &problem
 	}
 	gitExecutable, err := s.config.Runner.LookPath("git")
-	if err != nil || !s.probeExecutable(ctx, gitExecutable, gitEnvironment()) {
+	if err != nil || !s.probeGitExecutable(ctx, gitExecutable) {
 		problem, _ := result.NewProblem("git_unusable", "Git executable is required", nil)
 		return &problem
 	}

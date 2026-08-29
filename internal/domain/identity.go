@@ -39,7 +39,7 @@ func validRepositoryIdentity(value string) bool {
 	if !ok || host == "" || repositoryPath == "" || host != strings.ToLower(host) || len(host) > 253 || net.ParseIP(host) != nil || host == "github.com" && repositoryPath != strings.ToLower(repositoryPath) {
 		return false
 	}
-	for _, label := range strings.Split(host, ".") {
+	for label := range strings.SplitSeq(host, ".") {
 		if !repositoryHostLabelPattern.MatchString(label) {
 			return false
 		}
@@ -97,22 +97,6 @@ func NewRenderedDigest(value string) (RenderedDigest, error) {
 }
 func (v RenderedDigest) String() string { return hex.EncodeToString(v.value[:]) }
 func (v RenderedDigest) Valid() bool    { return v != RenderedDigest{} }
-
-// ExecutableDigest is a SHA-256 proof of the exact opened executable bytes.
-// It is intentionally distinct from rendered toolkit content.
-type ExecutableDigest struct{ value [32]byte }
-
-func NewExecutableDigest(value string) (ExecutableDigest, error) {
-	decoded, err := decodeLowerHex("executable digest", value, 32)
-	if err != nil {
-		return ExecutableDigest{}, err
-	}
-	var digest ExecutableDigest
-	copy(digest.value[:], decoded)
-	return digest, nil
-}
-func (v ExecutableDigest) String() string { return hex.EncodeToString(v.value[:]) }
-func (v ExecutableDigest) Valid() bool    { return v != ExecutableDigest{} }
 
 // BuildCommit is the CLI binary's source commit and is intentionally distinct
 // from the toolkit repository commit identity.
