@@ -196,7 +196,7 @@ printf '%s\n' \
   '        "hooks": [' \
   '          {' \
   '            "type": "command",' \
-  '            "command": "cat > \\"${CLAUDE_PLUGIN_ROOT}/session-start.json\\""' \
+  '            "command": "cat > \"${CLAUDE_PLUGIN_ROOT}/session-start.json\""' \
   '          }' \
   '        ]' \
   '      }' \
