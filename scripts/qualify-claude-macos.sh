@@ -58,10 +58,10 @@ assert_success() {
 
 assert_default_bundle_status() {
   local document="$1"
-  jq -e '.data.installation.nativePluginIds == ["ai4j-review", "ai4j-tools"] and
+  jq -e '.data.installation.nativePluginIds == ["ai4j-review", "ai4j-reviewer", "ai4j-tools"] and
     .data.summary.requestedBundle == "default" and
     .data.summary.resolvedBundles == ["default", "review", "tools"] and
-    .data.summary.packages == ["ai4j-review", "ai4j-tools"]' "$document" >/dev/null
+    .data.summary.packages == ["ai4j-review", "ai4j-reviewer", "ai4j-tools"]' "$document" >/dev/null
 }
 
 run_ai4j() {
@@ -119,11 +119,14 @@ run_project_journey() {
       | tee "$evidence_root/$prefix-settings.json" >/dev/null
     jq -e --arg id "$marketplace_id" --arg sha "$qualification_ref" \
       '.extraKnownMarketplaces[$id].source.source == "settings" and
-       (.extraKnownMarketplaces[$id].source.plugins | map(.name)) == ["ai4j-review", "ai4j-tools"] and
+       (.extraKnownMarketplaces[$id].source.plugins | map({name: .name, path: .source.path})) == [
+         {name: "ai4j-review", path: "plugins/ai4j-review"},
+         {name: "ai4j-reviewer", path: "plugins/ai4j-reviewer-claude"},
+         {name: "ai4j-tools", path: "plugins/ai4j-tools"}
+       ] and
        all(.extraKnownMarketplaces[$id].source.plugins[];
          .source.source == "git-subdir" and
-         .source.sha == $sha and
-         .source.path == ("plugins/" + .name))' \
+         .source.sha == $sha)' \
       "$evidence_root/$prefix-settings.json" >/dev/null
   fi
 
@@ -160,10 +163,65 @@ go test -mod=readonly ./internal/host/darwin/installlock \
   -run 'TestLock(BlocksConcurrentMutationAndReleases|IsReleasedWhenOwnerProcessExits)$' \
   -count=1 | tee "$evidence_root/darwin-lock-tests.txt"
 
-for package in ai4j-review ai4j-tools; do
+activation_plugin="$work_root/agent-activation-plugin"
+activation_config="$work_root/agent-activation-config"
+mkdir -p "$activation_plugin/.claude-plugin" "$activation_plugin/agents" "$activation_plugin/hooks" "$activation_config"
+printf '%s\n' \
+  '{' \
+  '  "name": "agent-activation-fixture",' \
+  '  "version": "1.0.0",' \
+  '  "description": "Validates Claude main-agent activation",' \
+  '  "author": {' \
+  '    "name": "AI4J"' \
+  '  }' \
+  '}' > "$activation_plugin/.claude-plugin/plugin.json"
+printf '%s\n' \
+  '---' \
+  'name: root-orchestrator' \
+  'description: Coordinates the requested work.' \
+  'tools: Read, Grep, Glob' \
+  '---' \
+  '' \
+  'Coordinate the requested work.' > "$activation_plugin/agents/root-orchestrator.md"
+printf '%s\n' \
+  '{' \
+  '  "agent": "root-orchestrator"' \
+  '}' > "$activation_plugin/settings.json"
+printf '%s\n' \
+  '{' \
+  '  "hooks": {' \
+  '    "SessionStart": [' \
+  '      {' \
+  '        "matcher": "startup",' \
+  '        "hooks": [' \
+  '          {' \
+  '            "type": "command",' \
+  '            "command": "cat > \"${CLAUDE_PLUGIN_ROOT}/session-start.json\""' \
+  '          }' \
+  '        ]' \
+  '      }' \
+  '    ]' \
+  '  }' \
+  '}' > "$activation_plugin/hooks/hooks.json"
+(
+  cd "$activation_plugin"
+  claude plugin validate . --strict
+) 2>&1 | tee "$evidence_root/native-agent-activation-validate.txt"
+(
+  cd "$activation_plugin"
+  CLAUDE_CONFIG_DIR="$activation_config" claude --plugin-dir . --init-only
+) 2>&1 | tee "$evidence_root/native-agent-activation-load.txt"
+jq . "$activation_plugin/session-start.json" \
+  | tee "$evidence_root/native-agent-activation-receipt.json" >/dev/null
+jq -e '.hook_event_name == "SessionStart" and
+  .source == "startup" and
+  .agent_type == "agent-activation-fixture:root-orchestrator"' \
+  "$evidence_root/native-agent-activation-receipt.json" >/dev/null
+
+for package in ai4j-review ai4j-reviewer-claude ai4j-tools; do
   (
     cd "plugins/$package"
-    claude plugin validate .
+    claude plugin validate . --strict
   ) 2>&1 | tee "$evidence_root/native-plugin-validate-$package.txt"
 done
 

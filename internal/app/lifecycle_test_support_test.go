@@ -35,7 +35,7 @@ func testPlanSourceFrom(t *testing.T, options cli.SourceOptions, commit string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := gitsource.ResolveReference(request, parsedAdvertisement)
+	resolution, err := gitsource.ResolveReference(parsedAdvertisement)
 	if err != nil {
 		t.Fatal(err)
 	}

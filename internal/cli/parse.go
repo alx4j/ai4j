@@ -9,10 +9,6 @@ import (
 	"github.com/alx4j/ai4j/internal/domain"
 )
 
-type Parser struct{}
-
-func NewParser() Parser { return Parser{} }
-
 type parsedOptions struct {
 	repository        string
 	hasRepository     bool
@@ -92,7 +88,8 @@ func isKnownOption(name string) bool {
 	return ok
 }
 
-func (p Parser) Parse(argv []string) (Request, error) {
+// Parse validates a complete argv vector and returns its typed request.
+func Parse(argv []string) (Request, error) {
 	jsonRequested := containsExactJSON(argv)
 	if len(argv) == 0 {
 		return nil, newUsageError(UsageMissingExecutable, "", "", jsonRequested, nil)
@@ -227,7 +224,7 @@ func parseCommand(arguments []string) (Command, int, UsageIssue) {
 }
 
 func parseInstallationArgument(command Command, arguments []string, jsonRequested bool) (domain.InstallationID, bool, []string, error) {
-	if !usesPositionalInstallation(command) || len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
+	if !command.UsesPositionalInstallation() || len(arguments) == 0 || strings.HasPrefix(arguments[0], "-") {
 		return domain.InstallationID{}, false, arguments, nil
 	}
 	installation, err := domain.NewInstallationID(arguments[0])
@@ -236,16 +233,6 @@ func parseInstallationArgument(command Command, arguments []string, jsonRequeste
 	}
 	return installation, true, arguments[1:], nil
 }
-
-func usesPositionalInstallation(command Command) bool {
-	switch command {
-	case CommandUpdate, CommandSync, CommandStatus, CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge:
-		return true
-	default:
-		return false
-	}
-}
-
 func parseOptions(command Command, arguments []string, jsonRequested bool) (parsedOptions, error) {
 	var result parsedOptions
 	seen := make(map[string]struct{}, len(arguments))

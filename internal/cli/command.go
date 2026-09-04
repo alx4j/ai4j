@@ -32,6 +32,17 @@ func (c Command) Valid() bool {
 	}
 }
 
+// UsesPositionalInstallation reports whether the command grammar places an
+// installation ID immediately after the command name.
+func (c Command) UsesPositionalInstallation() bool {
+	switch c {
+	case CommandUpdate, CommandSync, CommandStatus, CommandDoctor, CommandRollback, CommandUninstall, CommandHistory, CommandHistoryPurge:
+		return true
+	default:
+		return false
+	}
+}
+
 type OutputMode string
 
 const (

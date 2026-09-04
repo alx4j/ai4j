@@ -11,6 +11,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -88,6 +89,7 @@ type Record struct {
 	ToolkitID       string          `json:"toolkitId"`
 	DeclarationID   string          `json:"declarationId,omitempty"`
 	SettingsCreated bool            `json:"settingsCreated,omitempty"`
+	AgentActivation bool            `json:"agentActivation,omitempty"`
 	ToolkitVersion  string          `json:"toolkitVersion,omitempty"`
 	Components      []Component     `json:"components,omitempty"`
 	Packages        []NativePackage `json:"packages"`
@@ -132,7 +134,7 @@ func (r Record) Validate() error {
 		return ErrMalformedState
 	}
 	if (r.Source.RenderedDigest != "" && !digestPattern.MatchString(r.Source.RenderedDigest)) ||
-		(r.Target != "claude" && r.Target != "codex") || (r.Host != "darwin-arm64" && r.Host != "windows-amd64") ||
+		(r.Target != "claude" && r.Target != "codex") || (r.AgentActivation && r.Target != "claude") || (r.Host != "darwin-arm64" && r.Host != "windows-amd64") ||
 		(r.Scope != "user" && r.Scope != "project-local" && r.Scope != "project-shared") || !filepath.IsAbs(r.ScopeRoot) ||
 		(r.Lifecycle != "active" && r.Lifecycle != "archived") ||
 		(r.Health != "healthy" && r.Health != "drifted" && r.Health != "unknown" && r.Health != "recovery_required") ||
@@ -453,40 +455,14 @@ func (s Store) Load() (Record, bool, error) {
 	return records[0], true, nil
 }
 
-func (s Store) Save(record Record) error {
-	record = cloneRecord(record)
-	if err := normalizeRecord(&record); err != nil {
-		return err
-	}
-	records, expected, err := s.recordsForWrite()
-	if err != nil {
-		return err
-	}
-	found := false
-	for index := range records {
-		if records[index].InstallationID == record.InstallationID {
-			records[index] = record
-			found = true
-			break
-		}
-	}
-	if !found && len(records) != 0 {
-		return ErrStateChanged
-	}
-	if !found {
-		records = append(records, record)
-	}
-	return s.commit(records, expected)
-}
-
-// Replace atomically updates one installation only when its complete stored
-// record still matches expected. Recovery uses this compare-and-swap boundary
-// so an external state change cannot be overwritten after it was inspected.
+// Replace updates one installation only when its complete stored record still
+// matches expected. Callers hold the AI4J mutation lock while this optimistic
+// precondition detects stale snapshots from cooperating AI4J writers.
 func (s Store) Replace(expectedRecord, desiredRecord Record) error {
 	expectedRecord = cloneRecord(expectedRecord)
 	desiredRecord = cloneRecord(desiredRecord)
 	if normalizeRecord(&expectedRecord) != nil || normalizeRecord(&desiredRecord) != nil ||
-		expectedRecord.InstallationID != desiredRecord.InstallationID {
+		expectedRecord.InstallationID != desiredRecord.InstallationID || !sameLogicalIdentity(expectedRecord, desiredRecord) {
 		return ErrMalformedState
 	}
 	records, expectedState, err := s.recordsForWrite()
@@ -603,9 +579,12 @@ func decodeDocument(contents []byte) (stateDocument, error) {
 		return stateDocument{}, ErrMalformedState
 	}
 	for index, record := range document.Installations {
-		if record.Validate() != nil || record.SchemaVersion != SchemaVersion || index > 0 && document.Installations[index-1].InstallationID >= record.InstallationID {
+		if record.Validate() != nil || record.SchemaVersion != SchemaVersion || index > 0 && document.Installations[index-1].InstallationID > record.InstallationID {
 			return stateDocument{}, ErrMalformedState
 		}
+	}
+	if validateRecordSet(document.Installations, false) != nil {
+		return stateDocument{}, ErrMalformedState
 	}
 	return document, nil
 }
@@ -665,8 +644,115 @@ func cloneSource(source Source) Source {
 	return source
 }
 
+type logicalIdentity struct {
+	target    string
+	scope     string
+	scopeRoot string
+	toolkitID string
+}
+
+type agentActivationIdentity struct {
+	target    string
+	scope     string
+	scopeRoot string
+}
+
+func logicalIdentityOf(record Record) logicalIdentity {
+	return logicalIdentity{
+		target:    record.Target,
+		scope:     record.Scope,
+		scopeRoot: scopeRootIdentity(runtime.GOOS, record.ScopeRoot),
+		toolkitID: record.ToolkitID,
+	}
+}
+
+func scopeRootIdentity(goos, root string) string {
+	cleaned := filepath.Clean(root)
+	if goos == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+// SameScopeRoot compares scope roots using the current filesystem's identity
+// when path spelling alone is insufficient, such as case aliases on the
+// default macOS filesystem.
+func SameScopeRoot(left, right string) bool {
+	return sameScopeRoot(runtime.GOOS, left, right)
+}
+
+func sameScopeRoot(goos, left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if left == right {
+		return true
+	}
+	if goos == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	if goos != "darwin" || !strings.EqualFold(left, right) {
+		return false
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
+}
+
 func sameLogicalIdentity(left, right Record) bool {
-	return left.Target == right.Target && left.Scope == right.Scope && filepath.Clean(left.ScopeRoot) == filepath.Clean(right.ScopeRoot) && left.ToolkitID == right.ToolkitID
+	return left.Target == right.Target && left.Scope == right.Scope && left.ToolkitID == right.ToolkitID &&
+		SameScopeRoot(left.ScopeRoot, right.ScopeRoot)
+}
+
+func samePersistedLogicalIdentity(left, right Record) bool {
+	return left.Target == right.Target && left.Scope == right.Scope && left.ToolkitID == right.ToolkitID &&
+		scopeRootIdentity(runtime.GOOS, left.ScopeRoot) == scopeRootIdentity(runtime.GOOS, right.ScopeRoot)
+}
+
+func validateRecordSet(records []Record, compareFilesystemAliases bool) error {
+	installationIDs := make(map[string]struct{}, len(records))
+	logicalIdentities := make(map[logicalIdentity]struct{}, len(records))
+	activeAgentActivations := make(map[agentActivationIdentity]struct{}, len(records))
+	for index, record := range records {
+		if _, exists := installationIDs[record.InstallationID]; exists {
+			return ErrStateOccupied
+		}
+		installationIDs[record.InstallationID] = struct{}{}
+
+		identity := logicalIdentityOf(record)
+		if _, exists := logicalIdentities[identity]; exists {
+			return ErrStateOccupied
+		}
+		if compareFilesystemAliases && runtime.GOOS == "darwin" {
+			for _, current := range records[:index] {
+				if sameLogicalIdentity(current, record) {
+					return ErrStateOccupied
+				}
+			}
+		}
+		logicalIdentities[identity] = struct{}{}
+
+		if !record.AgentActivation || record.Lifecycle != "active" {
+			continue
+		}
+		activation := agentActivationIdentity{
+			target:    record.Target,
+			scope:     record.Scope,
+			scopeRoot: scopeRootIdentity(runtime.GOOS, record.ScopeRoot),
+		}
+		if _, exists := activeAgentActivations[activation]; exists {
+			return ErrStateOccupied
+		}
+		if compareFilesystemAliases && runtime.GOOS == "darwin" {
+			for _, current := range records[:index] {
+				if current.AgentActivation && current.Lifecycle == "active" && current.Target == record.Target && current.Scope == record.Scope &&
+					SameScopeRoot(current.ScopeRoot, record.ScopeRoot) {
+					return ErrStateOccupied
+				}
+			}
+		}
+		activeAgentActivations[activation] = struct{}{}
+	}
+	return nil
 }
 
 func encodeRecord(record Record) ([]byte, error) {
@@ -685,6 +771,9 @@ func (s Store) commit(records []Record, expected stateExpectation) error {
 	slices.SortFunc(records, func(left, right Record) int {
 		return bytes.Compare([]byte(left.InstallationID), []byte(right.InstallationID))
 	})
+	if err := validateRecordSet(records, true); err != nil {
+		return err
+	}
 	document := stateDocument{SchemaVersion: SchemaVersion, Installations: records}
 	contents, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {

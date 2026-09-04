@@ -72,6 +72,9 @@ func (e HistoryEntry) Validate() error {
 			return ErrMalformedHistory
 		}
 	}
+	if e.Before != nil && e.After != nil && !samePersistedLogicalIdentity(*e.Before, *e.After) {
+		return ErrMalformedHistory
+	}
 	if !validNativeArtifacts(e.Before, e.NativeArtifactsBefore, e.Restorable) || !validNativeArtifacts(e.After, e.NativeArtifactsAfter, e.Restorable) {
 		return ErrMalformedHistory
 	}

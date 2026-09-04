@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -59,6 +58,7 @@ type LifecycleSelection struct {
 	Content          []cli.ContentItem
 	Rules            []byte
 	RulesChecksum    string
+	AgentActivation  bool
 	Warnings         []result.Warning
 	Problems         []result.Problem
 	Failure          Failure
@@ -140,21 +140,16 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 		return LifecycleSelection{Source: source, Problems: []result.Problem{*dependencyProblem}, Failure: FailureValidation}
 	}
 	claude, _ := s.config.Runner.LookPath("claude")
-	for _, selectedPackage := range resolved.packages {
-		nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(selectedPackage.Path)), claude, []string{"plugin", "validate", "."}, claudeEnvironment())
-		cancelNative()
-		if runErr != nil || native.ExitCode != 0 {
-			return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("native_validation_failed", "Claude Code rejected a selected native package")}, Failure: FailureValidation}
-		}
+	if err := s.validateSelectedClaudePackages(operationContext, workspacePath, claude, validated.model, resolved); err != nil {
+		return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("native_validation_failed", "Claude Code rejected a selected native package")}, Failure: FailureValidation}
 	}
-	warning, _ := result.NewWarning("active_content_trust", "selected instructions can influence AI behavior and installed executables may later run with your permissions", nil)
+	warning, _ := result.NewWarning("active_content_trust", "selected active content can influence AI behavior and installed executables may later run with your permissions", nil)
 	warnings = append(warnings, warning)
 	lifecyclePackages := make([]LifecyclePackage, len(resolved.packages))
 	resolvedPackageIDs := make([]string, len(resolved.packages))
 	retainedBytes := 0
 	for index, selectedPackage := range resolved.packages {
-		artifact, artifactErr := archiveNativePackage(workspacePath, selectedPackage.Path, validated.model.tracked)
+		artifact, artifactErr := archiveNativePackage(workspacePath, selectedPackage, validated.model, resolved.assets)
 		if artifactErr != nil || len(artifact) > 16<<20-retainedBytes {
 			return LifecycleSelection{Source: source, Problems: []result.Problem{mustProblem("native_artifact_failed", "selected native packages could not be retained within rollback bounds")}, Failure: FailureValidation}
 		}
@@ -169,8 +164,18 @@ func (s Service) SelectLifecycle(ctx context.Context, options cli.SourceOptions,
 	return LifecycleSelection{
 		Source: source, ToolkitID: validated.model.manifest.Toolkit.ID, DeclarationID: declarationID(validated.model.manifest.Toolkit), ToolkitVersion: validated.model.manifest.Toolkit.Version,
 		RequestedBundle: bundleID, ResolvedBundles: slices.Clone(resolved.bundles), ResolvedPackages: resolvedPackageIDs, ResolvedAssets: resolvedAssetIDs,
-		Packages: lifecyclePackages, Content: content, Rules: slices.Clone(rules), RulesChecksum: rulesChecksum, Warnings: warnings,
+		Packages: lifecyclePackages, Content: content, Rules: slices.Clone(rules), RulesChecksum: rulesChecksum,
+		AgentActivation: selectionHasAgentActivation(resolved.assets), Warnings: warnings,
 	}
+}
+
+func selectionHasAgentActivation(assets []resolvedAsset) bool {
+	for _, selected := range assets {
+		if selected.asset.Type == "agent_activation" {
+			return true
+		}
+	}
+	return false
 }
 
 func declarationID(toolkit toolkitIdentity) string {
@@ -180,20 +185,20 @@ func declarationID(toolkit toolkitIdentity) string {
 	return toolkit.ID
 }
 
-func archiveNativePackage(root, packagePath string, tracked map[string]gitsource.TreeEntry) ([]byte, error) {
+func archiveNativePackage(root string, unit nativePackage, model validatedManifest, selected []resolvedAsset) ([]byte, error) {
 	var output bytes.Buffer
 	archive := zip.NewWriter(&output)
-	for _, source := range filesUnder(tracked, packagePath) {
-		content, err := readTrackedFile(root, source, tracked)
+	for _, source := range selectedPackageSources(unit, model, selected, cli.BuildTargetClaude) {
+		content, err := readTrackedFile(root, source, model.tracked)
 		if err != nil {
 			_ = archive.Close()
 			return nil, err
 		}
-		relative := strings.TrimPrefix(source, packagePath+"/")
+		relative := strings.TrimPrefix(source, unit.Path+"/")
 		header := &zip.FileHeader{Name: relative, Method: zip.Store}
 		header.SetModTime(time.Unix(0, 0).UTC())
 		mode := os.FileMode(0o644)
-		if tracked[source].Mode() == gitsource.SourceExecutableFile {
+		if model.tracked[source].Mode() == gitsource.SourceExecutableFile {
 			mode = 0o755
 		}
 		header.SetMode(mode)

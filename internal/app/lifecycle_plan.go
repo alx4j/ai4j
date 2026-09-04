@@ -68,7 +68,7 @@ func (s *lifecycleService) recordForSelection(report validation.LifecycleSelecti
 	}
 	record := installstate.Record{
 		SchemaVersion: installstate.SchemaVersion, InstallationID: installationID.String(), ToolkitID: report.ToolkitID, DeclarationID: report.DeclarationID, ToolkitVersion: report.ToolkitVersion,
-		Packages: packages, MarketplaceID: marketplaceID,
+		AgentActivation: report.AgentActivation, Packages: packages, MarketplaceID: marketplaceID,
 		Source: stateSource,
 		Target: "claude", Host: s.host(), Scope: string(scope), ScopeRoot: scopeRoot, Lifecycle: "active",
 		Selection:       installstate.Selection{RequestedBundle: selection.Bundle(), ResolvedBundles: slices.Clone(report.ResolvedBundles), ResolvedAssets: slices.Clone(report.ResolvedAssets)},
@@ -116,7 +116,7 @@ func (s *lifecycleService) recordForComposition(report validation.LifecycleSelec
 	}
 	record := installstate.Record{
 		SchemaVersion: installstate.SchemaVersion, InstallationID: installationID.String(), ToolkitID: "composition", DeclarationID: marketplaceID, ToolkitVersion: "composed",
-		Components: components, Packages: packages, MarketplaceID: marketplaceID,
+		AgentActivation: report.AgentActivation, Components: components, Packages: packages, MarketplaceID: marketplaceID,
 		Target: "claude", Host: s.host(), Scope: string(scope), ScopeRoot: scopeRoot, Lifecycle: "active",
 		Selection:       installstate.Selection{RequestedBundle: "composition", ResolvedBundles: []string{"composition"}, ResolvedAssets: slices.Clone(report.ResolvedAssets)},
 		NativeResources: nativeResources(packages, marketplaceID),

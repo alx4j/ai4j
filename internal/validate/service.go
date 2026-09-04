@@ -145,16 +145,16 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	workspacePath := session.workspacePath
 	validated := session.validated
 	source := session.source
-	resolved, selectionErr := resolveSelection(validated.model, selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), all: true})
+	resolved, selectionErr := resolveCanonicalSelection(validated.model, selection{target: cli.BuildTargetClaude, host: configuredBuildHost(s.config), all: true})
 	if selectionErr != nil {
 		code, message := packageProblem(selectionErr)
 		return reportWithSource(source, FailureValidation, code, message)
 	}
-	if selectionErr = validateSelectedExecutableFormats(workspacePath, resolved, configuredBuildHost(s.config), validated.model); selectionErr != nil {
+	if selectionErr = validateSelectedExecutableFormats(workspacePath, resolved.assets, configuredBuildHost(s.config), validated.model); selectionErr != nil {
 		code, message := packageProblem(selectionErr)
 		return reportWithSource(source, FailureValidation, code, message)
 	}
-	validated.content, selectionErr = selectedContent(workspacePath, validated.model, resolved)
+	validated.content, selectionErr = selectedContent(workspacePath, validated.model, resolved.assets)
 	if selectionErr != nil {
 		code, message := packageProblem(selectionErr)
 		return reportWithSource(source, FailureValidation, code, message)
@@ -168,19 +168,14 @@ func (s Service) validate(ctx context.Context, options cli.SourceOptions, inspec
 	if err != nil {
 		return reportWithSource(source, FailureEnvironment, "claude_not_found", "Claude Code executable is required")
 	}
-	if len(validated.nativePackagePaths) == 0 {
+	if len(resolved.packages) == 0 {
 		return reportWithSource(source, FailureValidation, "native_validation_failed", "toolkit does not declare a Claude native package")
 	}
-	for _, packagePath := range validated.nativePackagePaths {
-		nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(workspacePath, filepath.FromSlash(packagePath)), claude, []string{"plugin", "validate", "."}, claudeEnvironment())
-		cancelNative()
-		if runErr != nil || native.ExitCode != 0 {
-			return reportWithSource(source, FailureValidation, "native_validation_failed", "Claude Code rejected the toolkit package")
-		}
+	if err := s.validateSelectedClaudePackages(operationContext, workspacePath, claude, validated.model, resolved); err != nil {
+		return reportWithSource(source, FailureValidation, "native_validation_failed", "Claude Code rejected the toolkit package")
 	}
 
-	warning, err := result.NewWarning("active_content_trust", "validated instructions can influence AI behavior and installed executables may later run with your permissions", nil)
+	warning, err := result.NewWarning("active_content_trust", "validated active content can influence AI behavior and installed executables may later run with your permissions", nil)
 	if err != nil {
 		return failureReport(FailureInternal, "internal_error", "validation result could not be constructed")
 	}
@@ -343,7 +338,7 @@ func (s Service) acquire(ctx context.Context, workspace string, effective gitrem
 	if err != nil {
 		return acquisition{}, err
 	}
-	resolution, err := gitsource.ResolveReference(request, advertisement)
+	resolution, err := gitsource.ResolveReference(advertisement)
 	if err != nil {
 		return acquisition{}, err
 	}

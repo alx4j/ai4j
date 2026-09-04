@@ -7,7 +7,12 @@
     {
       "name": "ai4j-review",
       "source": "./plugins/ai4j-review",
-      "description": "Repository review guidance and a focused review agent"
+      "description": "Practical repository review guidance"
+    },
+    {
+      "name": "ai4j-reviewer",
+      "source": "./plugins/ai4j-reviewer-claude",
+      "description": "A focused repository review agent"
     },
     {
       "name": "ai4j-tools",

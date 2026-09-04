@@ -132,13 +132,15 @@ command.
 
 ## Install the toolkit in Codex
 
-These steps show the primary Windows workflow. Install Codex Desktop first.
-The review bundle only needs Git and AI4J on `PATH`.
+These steps show the primary Windows workflow. Install Codex Desktop and its
+CLI first. A review build needs Git, Codex, and AI4J on `PATH`; AI4J asks the
+installed Codex parser to check the generated agent configuration.
 
 1. Open PowerShell and check the prerequisites:
 
    ```powershell
    git --version
+   codex --version
    ai4j.exe version
    ```
 
@@ -151,15 +153,49 @@ The review bundle only needs Git and AI4J on `PATH`.
 
    The `codex-build` directory must not already exist.
 
-3. Verify the package:
+3. Verify the plugin, agent, and instructions:
 
    ```powershell
    Test-Path .\codex-build\plugin\.codex-plugin\plugin.json
+   Test-Path .\codex-build\configuration\.codex\agents\repository-reviewer.toml
+   Test-Path .\codex-build\configuration\AGENTS.md
    ```
 
-   PowerShell should print `True`.
+   PowerShell should print `True` three times.
 
-4. Open Codex and ask:
+4. Install the generated agent and instructions in your Codex user scope:
+
+   ```powershell
+   $codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+       Join-Path $env:USERPROFILE '.codex'
+   } else {
+       $env:CODEX_HOME
+   }
+   $agentDirectory = Join-Path $codexHome 'agents'
+   $agentDestination = Join-Path $agentDirectory 'repository-reviewer.toml'
+   $instructionsDestination = Join-Path $codexHome 'AGENTS.md'
+   $instructionsOverride = Join-Path $codexHome 'AGENTS.override.md'
+
+   if ((Test-Path -LiteralPath $agentDestination) -or
+       (Test-Path -LiteralPath $instructionsDestination) -or
+       (Test-Path -LiteralPath $instructionsOverride)) {
+       throw 'Review the existing agent and active AGENTS file before copying or merging generated configuration.'
+   }
+
+   New-Item -ItemType Directory -Force -Path $agentDirectory | Out-Null
+   Copy-Item -LiteralPath .\codex-build\configuration\.codex\agents\repository-reviewer.toml `
+       -Destination $agentDestination
+   Copy-Item -LiteralPath .\codex-build\configuration\AGENTS.md `
+       -Destination $instructionsDestination
+   ```
+
+   To keep the configuration inside one repository instead, copy the agent to
+   `<PROJECT>\.codex\agents\` and merge the generated instructions into that
+   project's `AGENTS.md`. If `AGENTS.override.md` already exists at the chosen
+   scope, merge the generated rules into that active override instead of adding
+   an `AGENTS.md` that Codex will ignore.
+
+5. Open Codex and ask:
 
    ```text
    Use $plugin-creator to add C:\full\path\to\codex-build\plugin to my personal marketplace.
@@ -168,22 +204,26 @@ The review bundle only needs Git and AI4J on `PATH`.
    Replace the example path with the absolute path to your generated
    `codex-build\plugin` directory.
 
-5. Refresh the plugin list in Codex Desktop.
+6. Refresh the plugin list in Codex Desktop.
 
-6. Open the Plugins tab and install `ai4j-review`.
+7. Open the Plugins tab and install `ai4j-review`.
 
-7. Start a new Codex session.
+8. Start a new Codex session.
 
 The plugin is ready when Codex shows `ai4j-review` as installed and the
-`repository-review` skill is available.
+`repository-review` skill and `repository-reviewer` agent are available.
+Codex 0.149.1 does not apply a role-local sandbox or approval policy, so the
+reviewer's read-only intent is an instruction, not a security boundary.
 
 To add the Claude-backed MCP server later, repeat the build with
 `--bundle tools`, use a different output directory, and install the generated
 `ai4j-tools` plugin. That optional plugin also requires Claude Code on `PATH`.
 
-AI4J builds the plugin but does not install or manage it inside Codex. Use
-Codex to update or remove it. If you use Codex CLI instead of Desktop, manage
-the plugin through `/plugins`.
+AI4J builds this output but does not manage it after you copy it into Codex.
+Codex manages the installed plugin only; update or remove the copied agent file
+yourself, and remove only the AI4J-owned text you merged into an instructions
+file. If you use Codex CLI instead of Desktop, manage the plugin through
+`/plugins`.
 
 ## Manage a Claude installation
 

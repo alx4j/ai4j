@@ -1,7 +1,6 @@
 package git
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,37 +55,24 @@ type RemoteAdvertisement struct {
 	hasHead       bool
 	defaultBranch string
 	references    []AdvertisedReference
-	seal          *remoteAdvertisementSeal
 }
 
-type remoteAdvertisementSeal struct{ marker byte }
-
-var issuedRemoteAdvertisementSeal = &remoteAdvertisementSeal{marker: 1}
-
-type referenceResolutionSeal struct{ marker byte }
-
-var issuedReferenceResolutionSeal = &referenceResolutionSeal{marker: 1}
-
 // ReferenceResolution is the immutable, request-bound result of resolving one
-// validated remote advertisement. Its private issuer seal prevents callers
-// from assembling an unrelated request, semantic reference, and object ID.
-// The selected object is the exact advertised object for a branch or tag; a
-// full commit request selects that exact requested object ID.
+// validated remote advertisement. The selected object is the exact advertised
+// object for a branch or tag; a full commit request selects that exact
+// requested object ID.
 type ReferenceResolution struct {
 	request  ResolutionRequest
 	resolved ResolvedReference
 	object   GitObjectOID
-	binding  [sha256.Size]byte
-	seal     *referenceResolutionSeal
 }
 
 func (r ReferenceResolution) Request() ResolutionRequest   { return r.request }
 func (r ReferenceResolution) Resolved() ResolvedReference  { return r.resolved }
 func (r ReferenceResolution) SelectedObject() GitObjectOID { return r.object }
 func (r ReferenceResolution) Valid() bool {
-	return r.seal == issuedReferenceResolutionSeal && r.request.Valid() && r.resolved.Valid() &&
-		r.object.Valid() && requestMatchesResolved(r.request.RequestedReference(), r.resolved, r.object) &&
-		r.binding == referenceResolutionBinding(r.request, r.resolved, r.object)
+	return r.request.Valid() && r.resolved.Valid() && r.object.Valid() &&
+		requestMatchesResolved(r.request.RequestedReference(), r.resolved, r.object)
 }
 
 func (ReferenceResolution) String() string   { return "<git-reference-resolution:redacted>" }
@@ -117,7 +103,7 @@ func ParseRemoteAdvertisement(request ResolutionRequest, data []byte) (RemoteAdv
 	}
 	pending := make(map[string]pendingReference, len(records))
 	seen := make(map[string]struct{}, len(records))
-	result := RemoteAdvertisement{request: request, seal: issuedRemoteAdvertisementSeal}
+	result := RemoteAdvertisement{request: request}
 	for _, record := range records {
 		kind := "oid"
 		if record.SymrefTarget != "" {
@@ -203,7 +189,7 @@ func (a RemoteAdvertisement) References() []AdvertisedReference {
 }
 
 func (a RemoteAdvertisement) Valid() bool {
-	if a.seal != issuedRemoteAdvertisementSeal || !a.request.Valid() || a.hasHead != a.head.Valid() ||
+	if !a.request.Valid() || a.hasHead != a.head.Valid() ||
 		a.defaultBranch != "" && !validShortReference(a.defaultBranch) ||
 		len(a.references) > MaximumReferenceCount {
 		return false
@@ -226,13 +212,14 @@ func (a RemoteAdvertisement) Valid() bool {
 	return true
 }
 
-// ResolveReference combines the original typed request with one validated
+// ResolveReference resolves the typed request retained by one validated
 // advertisement. A short spelling is accepted only when exactly one branch or
 // tag has that name; ambiguity is never resolved by preference or ordering.
-func ResolveReference(request ResolutionRequest, advertisement RemoteAdvertisement) (ReferenceResolution, error) {
-	if !request.Valid() || !advertisement.Valid() || !sameResolutionRequest(request, advertisement.request) {
+func ResolveReference(advertisement RemoteAdvertisement) (ReferenceResolution, error) {
+	if !advertisement.Valid() {
 		return ReferenceResolution{}, NewExecutorError(OperationEnumerateRefs, FailureInvalidOperation)
 	}
+	request := advertisement.request
 	requested, provided := request.RequestedReference().Value()
 	if !provided {
 		name, ok := advertisement.DefaultBranch()
@@ -296,8 +283,7 @@ func issueReferenceResolution(
 	if err != nil {
 		return ReferenceResolution{}, NewExecutorError(OperationEnumerateRefs, FailureMalformedProtocol)
 	}
-	result := ReferenceResolution{request: request, resolved: resolved, object: object, seal: issuedReferenceResolutionSeal}
-	result.binding = referenceResolutionBinding(request, resolved, object)
+	result := ReferenceResolution{request: request, resolved: resolved, object: object}
 	if !result.Valid() {
 		return ReferenceResolution{}, NewExecutorError(OperationEnumerateRefs, FailureMalformedProtocol)
 	}
@@ -328,31 +314,6 @@ func requestMatchesResolved(request RequestedReference, resolved ResolvedReferen
 		return resolved.kind == ResolvedTag && resolved.name == name
 	}
 	return (resolved.kind == ResolvedBranch || resolved.kind == ResolvedTag) && resolved.name == requested
-}
-
-func sameResolutionRequest(left, right ResolutionRequest) bool {
-	leftValue, leftProvided := left.RequestedReference().Value()
-	rightValue, rightProvided := right.RequestedReference().Value()
-	return left.Valid() && right.Valid() && left.SourceSelection() == right.SourceSelection() &&
-		left.Repository() == right.Repository() && left.Transport() == right.Transport() &&
-		leftValue == rightValue && leftProvided == rightProvided
-}
-
-func referenceResolutionBinding(
-	request ResolutionRequest,
-	resolved ResolvedReference,
-	object GitObjectOID,
-) [sha256.Size]byte {
-	requested, provided := request.RequestedReference().Value()
-	providedValue := "omitted"
-	if provided {
-		providedValue = "provided"
-	}
-	return sha256.Sum256([]byte(
-		request.SourceSelection().String() + "\x00" + request.Repository().String() + "\x00" +
-			request.Transport().String() + "\x00" + providedValue + "\x00" + requested + "\x00" +
-			resolved.Kind().String() + "\x00" + resolved.Name() + "\x00" + object.String(),
-	))
 }
 
 func (RemoteAdvertisement) String() string   { return "<git-remote-advertisement:redacted>" }

@@ -81,7 +81,7 @@ jobs:
         shell: bash
         env:
           AI4J_QUALIFICATION_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.ref_name }}
+          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           AI4J_QUALIFICATION_EVIDENCE: ${{ runner.temp }}/ai4j-qualification-evidence
           AI4J_QUALIFICATION_GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/qualify-claude-macos.sh

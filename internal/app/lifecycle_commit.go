@@ -137,12 +137,11 @@ func (s *lifecycleService) commitExecution(ctx context.Context, command cli.Comm
 	if transition.before == nil {
 		err = s.state.SaveNew(*desired)
 	} else {
-		err = s.state.Save(*desired)
+		err = s.state.Replace(*transition.before, *desired)
 	}
 	if err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "state_commit_failed")
 	}
-	entry.After = cloneRecordPtr(desired)
 	if err := s.state.CommitHistory(entry); err != nil {
 		return s.recovery(command, execution.operation, operationID, *installationID, execution.final, execution.actions, "history_commit_failed")
 	}

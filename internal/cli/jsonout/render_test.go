@@ -309,7 +309,7 @@ func testSource(t *testing.T) cli.Source {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := gitsource.ResolveReference(request, advertisement)
+	resolution, err := gitsource.ResolveReference(advertisement)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,8 +21,21 @@
     {
       "id": "repository-reviewer",
       "type": "agent",
-      "path": "plugins/ai4j-review/agents/repository-reviewer.md",
-      "ownership": "package"
+      "ownership": "package",
+      "variants": [
+        {
+          "id": "claude",
+          "path": "plugins/ai4j-reviewer-claude/agents/repository-reviewer.md",
+          "targets": ["claude"],
+          "hosts": ["darwin-arm64", "windows-amd64"]
+        },
+        {
+          "id": "codex",
+          "path": "plugins/ai4j-reviewer-codex/agents/repository-reviewer.toml",
+          "targets": ["codex"],
+          "hosts": ["darwin-arm64", "windows-amd64"]
+        }
+      ]
     },
     {
       "id": "ai4j-rules",
@@ -78,7 +91,7 @@
   "bundles": [
     {
       "id": "review",
-      "packages": ["ai4j-review"],
+      "packages": ["ai4j-review", "ai4j-reviewer"],
       "assets": ["ai4j-rules"]
     },
     {
@@ -96,7 +109,12 @@
         {
           "id": "ai4j-review",
           "path": "plugins/ai4j-review",
-          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff"]
+          "assets": ["repository-review", "review-checklist", "check-diff"]
+        },
+        {
+          "id": "ai4j-reviewer",
+          "path": "plugins/ai4j-reviewer-claude",
+          "assets": ["repository-reviewer"]
         },
         {
           "id": "ai4j-tools",
@@ -110,7 +128,12 @@
         {
           "id": "ai4j-review",
           "path": "plugins/ai4j-review",
-          "assets": ["repository-review", "repository-reviewer", "review-checklist", "check-diff"]
+          "assets": ["repository-review", "review-checklist", "check-diff"]
+        },
+        {
+          "id": "ai4j-reviewer",
+          "path": "plugins/ai4j-reviewer-codex",
+          "assets": ["repository-reviewer"]
         },
         {
           "id": "ai4j-tools",

@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/alx4j/ai4j/internal/cli"
 	gitsource "github.com/alx4j/ai4j/internal/source/git"
@@ -32,12 +34,11 @@ type mcpServer struct {
 }
 
 type packageResult struct {
-	content            []cli.ContentItem
-	rules              []byte
-	rulesChecksum      string
-	digest             string
-	nativePackagePaths []string
-	model              validatedManifest
+	content       []cli.ContentItem
+	rules         []byte
+	rulesChecksum string
+	digest        string
+	model         validatedManifest
 }
 
 func readStrictJSON(root, path string, tracked map[string]gitsource.TreeEntry, target any) error {
@@ -50,13 +51,80 @@ func readStrictJSON(root, path string, tracked map[string]gitsource.TreeEntry, t
 		return err
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maximumMetadataSize+1))
+	source, err := io.ReadAll(io.LimitReader(file, maximumMetadataSize+1))
+	if err != nil || len(source) > maximumMetadataSize || uint64(len(source)) != entry.SizeBytes() {
+		return errors.New("metadata content does not match its tracked entry")
+	}
+	if err := rejectDuplicateJSONKeys(source); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(source))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}
 	if decoder.Decode(new(any)) != io.EOF {
 		return errors.New("metadata contains trailing data")
+	}
+	return nil
+}
+
+func rejectDuplicateJSONKeys(source []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(source))
+	if err := consumeJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("metadata contains trailing data")
+	}
+	return nil
+}
+
+func consumeJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("metadata object key is invalid")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return errors.New("metadata contains a duplicate object key")
+			}
+			seen[key] = struct{}{}
+			if err := consumeJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim('}') {
+			return errors.New("metadata object is incomplete")
+		}
+	case '[':
+		for decoder.More() {
+			if err := consumeJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil || closing != json.Delim(']') {
+			return errors.New("metadata array is incomplete")
+		}
+	default:
+		return errors.New("metadata contains an unexpected delimiter")
 	}
 	return nil
 }
@@ -132,12 +200,11 @@ func validEnvironmentName(value string) bool {
 }
 
 func validHostCommand(value string) bool {
-	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "/\\") {
+	if value == "" || value == "." || value == ".." || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "/\\:") {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.') {
+		if unicode.IsSpace(character) || unicode.IsControl(character) {
 			return false
 		}
 	}

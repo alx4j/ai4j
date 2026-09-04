@@ -87,7 +87,7 @@
       "required": ["id", "type", "ownership"],
       "properties": {
         "id": {"$ref": "#/$defs/id"},
-        "type": {"type": "string", "enum": ["skill", "agent", "instruction", "prompt", "reference", "support", "script", "binary", "mcp", "hook", "extension"]},
+        "type": {"type": "string", "enum": ["skill", "agent", "agent_activation", "instruction", "prompt", "reference", "support", "script", "binary", "mcp", "hook", "extension"]},
         "path": {"$ref": "#/$defs/path"},
         "ownership": {"type": "string", "enum": ["package", "configuration"]},
         "dependencies": {"type": "array", "maxItems": 256, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
@@ -106,7 +106,33 @@
       "allOf": [
         {"if": {"properties": {"type": {"enum": ["script", "binary", "mcp"]}}, "required": ["path"]}, "then": {"required": ["executable"]}},
         {"if": {"properties": {"type": {"enum": ["script", "binary", "mcp"]}}, "required": ["variants"]}, "then": {"not": {"required": ["executable"]}}},
-        {"if": {"properties": {"type": {"not": {"enum": ["script", "binary", "mcp"]}}}}, "then": {"not": {"required": ["executable"]}}}
+        {
+          "if": {"properties": {"type": {"not": {"enum": ["script", "binary", "mcp"]}}}},
+          "then": {
+            "allOf": [
+              {"not": {"required": ["executable"]}},
+              {"properties": {"variants": {"items": {"not": {"required": ["executable"]}}}}}
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "agent_activation"}}},
+          "then": {
+            "required": ["dependencies", "variants"],
+            "properties": {
+              "ownership": {"const": "package"},
+              "dependencies": {"minItems": 1, "maxItems": 1},
+              "variants": {
+                "items": {
+                  "properties": {
+                    "targets": {"const": ["claude"]}
+                  }
+                }
+              }
+            },
+            "not": {"required": ["path"]}
+          }
+        }
       ],
       "additionalProperties": false
     },

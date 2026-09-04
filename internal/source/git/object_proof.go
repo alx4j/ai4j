@@ -1,7 +1,6 @@
 package git
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,18 +22,12 @@ func (t SelectedObjectType) Valid() bool {
 	return t == SelectedCommitObject || t == SelectedTagObject
 }
 
-type selectedObjectProofSeal struct{ marker byte }
-
-var issuedSelectedObjectProofSeal = &selectedObjectProofSeal{marker: 1}
-
 // SelectedObjectProof binds the exact selected OID to its observed Git object
 // type. Branch/default/full-commit selections must name a commit; a tag may be
 // either a lightweight commit or an annotated tag object.
 type SelectedObjectProof struct {
 	resolution ReferenceResolution
 	objectType SelectedObjectType
-	binding    [sha256.Size]byte
-	seal       *selectedObjectProofSeal
 }
 
 func NewSelectedObjectProof(resolution ReferenceResolution, data []byte) (SelectedObjectProof, error) {
@@ -49,10 +42,7 @@ func NewSelectedObjectProof(resolution ReferenceResolution, data []byte) (Select
 	if !objectType.Valid() || objectType == SelectedTagObject && resolution.Resolved().Kind() != ResolvedTag {
 		return SelectedObjectProof{}, NewExecutorError(OperationObjectType, FailurePolicyRejected)
 	}
-	proof := SelectedObjectProof{
-		resolution: resolution, objectType: objectType, seal: issuedSelectedObjectProofSeal,
-	}
-	proof.binding = selectedObjectProofBinding(resolution, objectType)
+	proof := SelectedObjectProof{resolution: resolution, objectType: objectType}
 	if !proof.Valid() {
 		return SelectedObjectProof{}, NewExecutorError(OperationObjectType, FailurePolicyRejected)
 	}
@@ -63,20 +53,8 @@ func (p SelectedObjectProof) Resolution() ReferenceResolution { return p.resolut
 func (p SelectedObjectProof) Object() GitObjectOID            { return p.resolution.SelectedObject() }
 func (p SelectedObjectProof) Type() SelectedObjectType        { return p.objectType }
 func (p SelectedObjectProof) Valid() bool {
-	return p.seal == issuedSelectedObjectProofSeal && p.resolution.Valid() && p.objectType.Valid() &&
-		(p.objectType == SelectedCommitObject || p.resolution.Resolved().Kind() == ResolvedTag) &&
-		p.binding == selectedObjectProofBinding(p.resolution, p.objectType)
-}
-
-func selectedObjectProofBinding(
-	resolution ReferenceResolution,
-	objectType SelectedObjectType,
-) [sha256.Size]byte {
-	value := make([]byte, 0, len(resolution.binding)+1+len(objectType))
-	value = append(value, resolution.binding[:]...)
-	value = append(value, 0)
-	value = append(value, objectType...)
-	return sha256.Sum256(value)
+	return p.resolution.Valid() && p.objectType.Valid() &&
+		(p.objectType == SelectedCommitObject || p.resolution.Resolved().Kind() == ResolvedTag)
 }
 
 type provenCommitMode string
@@ -86,10 +64,6 @@ const (
 	provenCommitPeeled provenCommitMode = "peeled"
 )
 
-type provenCommitSeal struct{ marker byte }
-
-var issuedProvenCommitSeal = &provenCommitSeal{marker: 1}
-
 // ProvenCommit binds either a directly selected commit or the peeled commit of
 // an exact selected annotated-tag object. It cannot be assembled from a free
 // commit identifier.
@@ -97,8 +71,6 @@ type ProvenCommit struct {
 	selected SelectedObjectProof
 	commit   domain.CommitOID
 	mode     provenCommitMode
-	binding  [sha256.Size]byte
-	seal     *provenCommitSeal
 }
 
 func NewDirectProvenCommit(selected SelectedObjectProof) (ProvenCommit, error) {
@@ -128,8 +100,7 @@ func NewPeeledProvenCommit(selected SelectedObjectProof, data []byte) (ProvenCom
 }
 
 func issueProvenCommit(selected SelectedObjectProof, commit domain.CommitOID, mode provenCommitMode) (ProvenCommit, error) {
-	proof := ProvenCommit{selected: selected, commit: commit, mode: mode, seal: issuedProvenCommitSeal}
-	proof.binding = provenCommitBinding(selected, commit, mode)
+	proof := ProvenCommit{selected: selected, commit: commit, mode: mode}
 	if !proof.Valid() {
 		return ProvenCommit{}, ErrExecutorContract
 	}
@@ -140,8 +111,7 @@ func (p ProvenCommit) SelectedObject() SelectedObjectProof { return p.selected }
 func (p ProvenCommit) Resolution() ReferenceResolution     { return p.selected.Resolution() }
 func (p ProvenCommit) Commit() domain.CommitOID            { return p.commit }
 func (p ProvenCommit) Valid() bool {
-	if p.seal != issuedProvenCommitSeal || !p.selected.Valid() || !p.commit.Valid() ||
-		p.binding != provenCommitBinding(p.selected, p.commit, p.mode) {
+	if !p.selected.Valid() || !p.commit.Valid() {
 		return false
 	}
 	switch p.mode {
@@ -152,20 +122,6 @@ func (p ProvenCommit) Valid() bool {
 	default:
 		return false
 	}
-}
-
-func provenCommitBinding(
-	selected SelectedObjectProof,
-	commit domain.CommitOID,
-	mode provenCommitMode,
-) [sha256.Size]byte {
-	value := make([]byte, 0, len(selected.binding)+len(commit.String())+len(mode)+2)
-	value = append(value, selected.binding[:]...)
-	value = append(value, 0)
-	value = append(value, commit.String()...)
-	value = append(value, 0)
-	value = append(value, mode...)
-	return sha256.Sum256(value)
 }
 
 func (SelectedObjectProof) String() string   { return "<git-selected-object-proof:redacted>" }

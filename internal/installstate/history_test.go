@@ -154,6 +154,31 @@ func TestHistoryRejectsMalformedEntryWithoutDisclosingContent(t *testing.T) {
 	}
 }
 
+func TestHistoryScopeIdentityDoesNotDependOnCurrentFilesystemState(t *testing.T) {
+	root := t.TempDir()
+	before := testRecord()
+	before.ScopeRoot = root
+	after := cloneRecord(before)
+	after.ScopeRoot = strings.ToUpper(root)
+	entry := HistoryEntry{
+		SchemaVersion:  HistorySchemaVersion,
+		Operation:      "update",
+		OperationID:    "operation-history",
+		InstallationID: before.InstallationID,
+		Timestamp:      "2026-08-25T10:00:00Z",
+		Before:         &before,
+		After:          &after,
+	}
+	beforeRemoval := entry.Validate()
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	afterRemoval := entry.Validate()
+	if (beforeRemoval == nil) != (afterRemoval == nil) || !errors.Is(beforeRemoval, afterRemoval) {
+		t.Fatalf("history validity changed after scope removal: before=%v after=%v", beforeRemoval, afterRemoval)
+	}
+}
+
 func TestHistoryLoadersRejectEntryIdentityThatDoesNotMatchItsPath(t *testing.T) {
 	t.Parallel()
 	const (
@@ -298,5 +323,25 @@ func TestRestorableHistoryRequiresCanonicalArtifactSetForEveryActivePackage(t *t
 				t.Fatalf("Validate() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestHistoryEntryRejectsChangedLogicalInstallationIdentity(t *testing.T) {
+	t.Parallel()
+	before := testRecord()
+	after := cloneRecord(before)
+	after.ToolkitID = "other-toolkit"
+	entry := HistoryEntry{
+		SchemaVersion:  HistorySchemaVersion,
+		Operation:      "sync",
+		OperationID:    "operation-history",
+		InstallationID: before.InstallationID,
+		Timestamp:      before.LastOperation.Timestamp,
+		Before:         &before,
+		After:          &after,
+	}
+
+	if err := entry.Validate(); !errors.Is(err, ErrMalformedHistory) {
+		t.Fatalf("identity-changing history error = %v", err)
 	}
 }

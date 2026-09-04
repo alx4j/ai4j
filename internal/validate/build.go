@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -70,11 +69,12 @@ type buildMapping struct {
 }
 
 type codexPluginManifest struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
-	Skills      string `json:"skills,omitempty"`
-	MCPServers  string `json:"mcpServers,omitempty"`
+	Name        string          `json:"name"`
+	Version     string          `json:"version"`
+	Description string          `json:"description"`
+	Skills      string          `json:"skills,omitempty"`
+	MCPServers  string          `json:"mcpServers,omitempty"`
+	Commands    json.RawMessage `json:"commands,omitempty"`
 }
 
 type codexMCPServer struct {
@@ -134,10 +134,24 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 		code, message := packageProblem(err)
 		return buildFailure(report, FailureValidation, code, message)
 	}
-	codexAgents, err := codexAgentOutputs(validated.model, resolved, request.Target())
+	codexAgents, err := codexAgentOutputs(workspacePath, validated.model, resolved, request.Target())
 	if err != nil {
 		code, message := packageProblem(err)
 		return buildFailure(report, FailureValidation, code, message)
+	}
+	codexExecutable := ""
+	if len(codexAgents) != 0 {
+		var lookupErr error
+		codexExecutable, lookupErr = s.config.Runner.LookPath("codex")
+		if lookupErr != nil || !s.probeExecutable(ctx, codexExecutable, nil) {
+			return buildFailure(report, FailureEnvironment, "unsupported_capability", "Codex native validation is unavailable")
+		}
+	}
+	if request.Target() == cli.BuildTargetCodex {
+		if err := validateCodexRendering(workspacePath, validated.model, resolved.assets); err != nil {
+			code, message := packageProblem(err)
+			return buildFailure(report, FailureValidation, code, message)
+		}
 	}
 	if err = validateSelectedExecutableFormats(workspacePath, resolved.assets, request.Host(), validated.model); err != nil {
 		code, message := packageProblem(err)
@@ -170,13 +184,17 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 					continue
 				}
 				nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-				native, runErr := s.config.Runner.Run(nativeContext, root, claudeExecutable, []string{"plugin", "validate", "."}, claudeEnvironment())
+				native, runErr := s.config.Runner.Run(nativeContext, root, claudeExecutable, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
 				cancelNative()
 				if runErr != nil || native.ExitCode != 0 {
 					return errNativeBuildValidation
 				}
 			}
 			return nil
+		}
+	} else if len(codexAgents) != 0 {
+		validateOutput = func(stage string) error {
+			return s.validateRenderedCodexAgents(operationContext, stage, codexExecutable)
 		}
 	}
 	warnings, dependencyProblem := s.checkHostDependencies(validated.content)
@@ -193,12 +211,19 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 		if errors.Is(err, errBuildOutputOccupied) {
 			return buildFailure(report, FailureConflict, "output_occupied", "build output must not already exist")
 		}
+		if errors.Is(err, errNativeValidationEnvironment) {
+			return buildFailure(report, FailureEnvironment, "native_validation_unavailable", "target-native validation could not be completed")
+		}
 		if errors.Is(err, errNativeBuildValidation) {
-			return buildFailure(report, FailureValidation, "native_validation_failed", "Claude rejected the rendered output")
+			message := "Claude rejected the rendered output"
+			if request.Target() == cli.BuildTargetCodex {
+				message = "Codex rejected the rendered output"
+			}
+			return buildFailure(report, FailureValidation, "native_validation_failed", message)
 		}
 		return buildFailure(report, FailureEnvironment, "build_output_failed", "target-native build output could not be created")
 	}
-	warning, _ := result.NewWarning("active_content_trust", "built instructions can influence AI behavior and built executables may later run with your permissions", nil)
+	warning, _ := result.NewWarning("active_content_trust", "built active content can influence AI behavior and built executables may later run with your permissions", nil)
 	report.Artifacts = artifacts
 	report.Content = validated.content
 	report.Warnings = append(warnings, warning)
@@ -224,7 +249,8 @@ func (s Service) buildPreflight(ctx context.Context, request cli.BuildRequest) *
 		problem, _ := result.NewProblem("git_unusable", "Git executable is required", nil)
 		return &problem
 	}
-	if request.Target() == cli.BuildTargetClaude {
+	switch request.Target() {
+	case cli.BuildTargetClaude:
 		claudeExecutable, lookupErr := s.config.Runner.LookPath("claude")
 		if lookupErr != nil || !s.probeExecutable(ctx, claudeExecutable, claudeEnvironment()) {
 			problem, _ := result.NewProblem("unsupported_capability", "Claude native validation is unavailable", nil)
@@ -235,8 +261,9 @@ func (s Service) buildPreflight(ctx context.Context, request cli.BuildRequest) *
 }
 
 var (
-	errBuildOutputOccupied   = errors.New("build output is occupied")
-	errNativeBuildValidation = errors.New("native build validation failed")
+	errBuildOutputOccupied         = errors.New("build output is occupied")
+	errNativeBuildValidation       = errors.New("native build validation failed")
+	errNativeValidationEnvironment = errors.New("native build validation environment failed")
 )
 
 func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved resolvedSelection, codexAgents map[string]codexAgentOutput, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
@@ -418,16 +445,4 @@ func buildFailure(report BuildReport, failure Failure, code, message string) Bui
 	report.Problems = []result.Problem{problem}
 	report.Failure = failure
 	return report
-}
-
-func codexAgentNamed(source []byte, name string) []byte {
-	body := string(source)
-	if strings.HasPrefix(body, "---\n") {
-		if end := strings.Index(body[4:], "\n---\n"); end >= 0 {
-			body = body[4+end+5:]
-		}
-	}
-	return []byte("name = " + strconv.Quote(name) + "\n" +
-		"description = \"Reviews a repository change against explicit requirements and acceptance criteria.\"\n" +
-		"developer_instructions = " + strconv.Quote(strings.TrimSpace(body)) + "\n")
 }
