@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
@@ -33,7 +32,6 @@ type nativeStatusInspector interface {
 type statusService struct {
 	validation statusValidation
 	state      installstate.Store
-	home       string
 }
 
 func inspectRecordNative(ctx context.Context, inspector nativeStatusInspector, record installstate.Record) (validation.NativeStatus, *result.Problem) {
@@ -290,10 +288,6 @@ func installationFromRecord(record installstate.Record) (cli.Installation, error
 	if err != nil {
 		return cli.Installation{}, err
 	}
-	toolkitVersion := record.ToolkitVersion
-	if toolkitVersion == "" {
-		toolkitVersion = "unversioned"
-	}
 	if len(record.Components) != 0 {
 		components, componentErr := recordedComponentsFromRecord(record)
 		if componentErr != nil {
@@ -301,7 +295,7 @@ func installationFromRecord(record installstate.Record) (cli.Installation, error
 		}
 		return cli.NewComposedInstallation(installationID, packageIDs(record.Packages), components, record.AI4JVersion)
 	}
-	return cli.NewInstallation(installationID, record.ToolkitID, packageIDs(record.Packages), source, toolkitVersion, record.AI4JVersion, "")
+	return cli.NewInstallation(installationID, record.ToolkitID, packageIDs(record.Packages), source, record.ToolkitVersion, record.AI4JVersion, "")
 }
 
 func recordedComponentsFromRecord(record installstate.Record) ([]cli.RecordedComponent, error) {
@@ -362,7 +356,7 @@ func recordedSourceFromStateSource(sourceState installstate.Source) (cli.Recorde
 	if hasRequested {
 		requested = *sourceState.RequestedRef
 	}
-	transport, err := storedSourceTransport(sourceState)
+	transport, err := domain.NewGitTransport(sourceState.Transport)
 	if err != nil {
 		return cli.RecordedSource{}, err
 	}
@@ -378,17 +372,13 @@ func (s statusService) inspectDrift(record installstate.Record) ([]cli.Drift, er
 	if record.Scope == "project-shared" {
 		catalogPath = filepath.Join(record.ScopeRoot, filepath.FromSlash(record.Catalog.Path))
 	}
-	rulesRoot := record.ScopeRoot
-	if rulesRoot == "" || record.Scope == "user" && strings.HasPrefix(record.Rules.Path, ".claude/") {
-		rulesRoot = s.home
-	}
 	checks := []struct {
 		path     string
 		resource string
 		checksum string
 	}{
 		{catalogPath, record.Catalog.Path, record.Catalog.Checksum},
-		{filepath.Join(rulesRoot, filepath.FromSlash(record.Rules.Path)), record.Rules.Path, record.Rules.Checksum},
+		{filepath.Join(record.ScopeRoot, filepath.FromSlash(record.Rules.Path)), record.Rules.Path, record.Rules.Checksum},
 	}
 	if record.Scope == "project-shared" && record.NativeCatalog != (installstate.OwnedFile{}) {
 		nativeCatalog, err := projectSharedNativeCatalogFile(record)

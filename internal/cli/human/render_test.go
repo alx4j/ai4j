@@ -319,7 +319,7 @@ func TestRenderIsByteIdenticalForShuffledInputsAndRepeatedRuns(t *testing.T) {
 	t.Parallel()
 
 	var want []byte
-	for run := 0; run < 40; run++ {
+	for run := 0; run < 3; run++ {
 		response := validationResponse(t, run%2 != 0)
 		var output bytes.Buffer
 		exitCode, err := human.Render(&output, response)

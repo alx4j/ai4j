@@ -26,6 +26,36 @@ func TestInspectNativeStatusAtRunsQueriesFromProjectDirectory(t *testing.T) {
 	}
 }
 
+func TestInspectNativeStatusAtDistinguishesAbsentDisabledAndEnabledPlugins(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		marketplaces string
+		plugins      string
+		want         NativeStatus
+	}{
+		{name: "absent", marketplaces: `[]`, plugins: `[]`},
+		{name: "marketplace only", marketplaces: `[{"name":"selected"}]`, plugins: `[]`, want: NativeStatus{MarketplaceRegistered: true}},
+		{name: "disabled", marketplaces: `[{"name":"selected"}]`, plugins: `[{"id":"plugin@selected","enabled":false}]`, want: NativeStatus{MarketplaceRegistered: true, PluginInstalled: true}},
+		{name: "enabled without marketplace", marketplaces: `[]`, plugins: `[{"id":"plugin@selected","enabled":true}]`, want: NativeStatus{PluginInstalled: true, PluginEnabled: true}},
+		{name: "unrelated enabled plugin", marketplaces: `[{"name":"other"}]`, plugins: `[{"id":"plugin@other","enabled":true}]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &inspectionRunner{marketplaces: []byte(test.marketplaces), plugins: []byte(test.plugins)}
+			service, err := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: runner})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			status, problem := service.InspectNativeStatusAt(context.Background(), "", "selected", "plugin@selected")
+
+			if problem != nil || status != test.want {
+				t.Fatalf("status=%#v problem=%v, want %#v", status, problem, test.want)
+			}
+		})
+	}
+}
+
 type inspectionRunner struct {
 	marketplaces []byte
 	plugins      []byte

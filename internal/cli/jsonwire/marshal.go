@@ -48,7 +48,7 @@ func Marshal(response cli.Response) ([]byte, error) {
 	case cli.VersionData:
 		return json.Marshal(envelope(response, versionData(data)))
 	case cli.UnavailableData:
-		return marshalUnavailable(response)
+		return json.Marshal(envelope[*struct{}](response, nil))
 	default:
 		return nil, fmt.Errorf("unsupported response data %T", data)
 	}
@@ -76,31 +76,6 @@ func envelope[D any](response cli.Response, data D) Envelope[D] {
 		Data:          data,
 		Warnings:      warnings(commandResult.Warnings()),
 		Errors:        problems(commandResult.Errors()),
-	}
-}
-
-func marshalUnavailable(response cli.Response) ([]byte, error) {
-	switch response.Command() {
-	case cli.CommandInit:
-		return json.Marshal(envelope[*InitData](response, nil))
-	case cli.CommandValidate:
-		return json.Marshal(envelope[*ValidateData](response, nil))
-	case cli.CommandBuild:
-		return json.Marshal(envelope[*BuildData](response, nil))
-	case cli.CommandInstall, cli.CommandUpdate, cli.CommandSync, cli.CommandRollback, cli.CommandUninstall, cli.CommandHistoryPurge:
-		return json.Marshal(envelope[*MutationData](response, nil))
-	case cli.CommandList:
-		return json.Marshal(envelope[*ListData](response, nil))
-	case cli.CommandHistory:
-		return json.Marshal(envelope[*HistoryData](response, nil))
-	case cli.CommandDoctor:
-		return json.Marshal(envelope[*DoctorData](response, nil))
-	case cli.CommandStatus:
-		return json.Marshal(envelope[*StatusData](response, nil))
-	case cli.CommandVersion:
-		return json.Marshal(envelope[*VersionData](response, nil))
-	default:
-		return nil, fmt.Errorf("unavailable data requires a canonical command")
 	}
 }
 

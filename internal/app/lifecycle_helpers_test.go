@@ -60,21 +60,6 @@ func TestStoredSourceOptionsPreserveSelection(t *testing.T) {
 	}
 }
 
-func TestStoredSourceTransportDefaultsOnlyLegacyGitHubState(t *testing.T) {
-	t.Parallel()
-	legacy := testInstallationRecord("branch", strings.Repeat("a", 40)).Source
-	legacy.Transport = ""
-	transport, err := storedSourceTransport(legacy)
-	if err != nil || transport != domain.HTTPSGitTransport() {
-		t.Fatalf("legacy GitHub transport = %q, %v", transport.String(), err)
-	}
-
-	legacy.Repository = "gitlab.barclays.example/division/team/toolkit"
-	if _, err := storedSourceTransport(legacy); err == nil {
-		t.Fatal("custom-host legacy source unexpectedly acquired an implicit transport")
-	}
-}
-
 func TestActiveContentDiffReportsEveryChange(t *testing.T) {
 	t.Parallel()
 	item := func(identifier, checksum string) cli.ContentItem {
@@ -119,7 +104,7 @@ func TestSameCurrentStateRejectsDifferentTopLevelBundle(t *testing.T) {
 		ResolvedBundles: []string{"review", "shared"},
 		ResolvedAssets:  []string{"ai4j-rules", "repository-review"},
 	}
-	expected := cloneRecord(current)
+	expected := current.Clone()
 	expected.Selection.RequestedBundle = "default"
 	expected.Selection.ResolvedBundles = []string{"default", "review", "shared"}
 

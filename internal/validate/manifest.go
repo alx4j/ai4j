@@ -1,5 +1,7 @@
 package validate
 
+import "github.com/alx4j/ai4j/internal/cli"
+
 type toolkitManifest struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	Toolkit       toolkitIdentity   `json:"toolkit"`
@@ -37,6 +39,18 @@ type executable struct {
 	Args        []string `json:"args,omitempty"`
 	Dependency  string   `json:"dependency"`
 	Environment []string `json:"environment,omitempty"`
+}
+
+func (e executable) disclosure(assetType string) (cli.Execution, error) {
+	dependency := cli.DependencyRequired
+	if e.Dependency == "optional" {
+		dependency = cli.DependencyOptional
+	}
+	ownership := cli.ExecutionHostResolved
+	if assetType == "script" || assetType == "binary" {
+		ownership = cli.ExecutionToolkitOwned
+	}
+	return cli.NewExecution(ownership, dependency, e.Command, e.Args, "", nil, e.Environment)
 }
 
 type targetOverlay struct {

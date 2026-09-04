@@ -292,16 +292,7 @@ func selectedContent(root string, model validatedManifest, resolved []resolvedAs
 		}
 		var execution *cli.Execution
 		if selected.executable != nil {
-			declaration := selected.executable
-			dependency := cli.DependencyRequired
-			if declaration.Dependency == "optional" {
-				dependency = cli.DependencyOptional
-			}
-			ownership := cli.ExecutionHostResolved
-			if selected.asset.Type == "script" || selected.asset.Type == "binary" {
-				ownership = cli.ExecutionToolkitOwned
-			}
-			value, executionErr := cli.NewExecution(ownership, dependency, declaration.Command, declaration.Args, "", nil, declaration.Environment)
+			value, executionErr := selected.executable.disclosure(selected.asset.Type)
 			if executionErr != nil {
 				return nil, validationError("invalid_executable", "selected asset executable disclosure is invalid")
 			}

@@ -19,17 +19,9 @@ type NativeStatus struct {
 // InspectNativeStatusAt observes project-scoped Claude state from the selected
 // project directory. User scope uses an empty directory.
 func (s Service) InspectNativeStatusAt(ctx context.Context, directory, marketplaceID, pluginID string) (NativeStatus, *result.Problem) {
-	marketplace, plugin, enabled, problem := s.inspectNativeIdentityAt(ctx, directory, marketplaceID, pluginID)
-	if problem != nil {
-		return NativeStatus{}, problem
-	}
-	return NativeStatus{MarketplaceRegistered: marketplace, PluginInstalled: plugin, PluginEnabled: enabled}, nil
-}
-
-func (s Service) inspectNativeIdentityAt(ctx context.Context, directory, marketplaceID, pluginID string) (bool, bool, bool, *result.Problem) {
 	claude, err := s.config.Runner.LookPath("claude")
 	if err != nil {
-		return false, false, false, inspectionProblem("claude_not_found", "Claude Code executable is required")
+		return NativeStatus{}, inspectionProblem("claude_not_found", "Claude Code executable is required")
 	}
 	queries := [][]string{
 		{"plugin", "marketplace", "list", "--json"},
@@ -41,7 +33,7 @@ func (s Service) inspectNativeIdentityAt(ctx context.Context, directory, marketp
 		observation, runErr := s.config.Runner.Run(queryContext, directory, claude, arguments, claudeEnvironment())
 		cancel()
 		if runErr != nil || observation.ExitCode != 0 || len(observation.Stderr) != 0 {
-			return false, false, false, inspectionProblem("native_inspection_failed", "Claude plugin state could not be inspected")
+			return NativeStatus{}, inspectionProblem("native_inspection_failed", "Claude plugin state could not be inspected")
 		}
 		outputs[index] = observation.Stdout
 	}
@@ -54,20 +46,19 @@ func (s Service) inspectNativeIdentityAt(ctx context.Context, directory, marketp
 	}
 	if len(outputs[0]) == 0 || json.Unmarshal(outputs[0], &marketplaces) != nil ||
 		len(outputs[1]) == 0 || json.Unmarshal(outputs[1], &plugins) != nil {
-		return false, false, false, inspectionProblem("native_inspection_failed", "Claude plugin state returned invalid JSON")
+		return NativeStatus{}, inspectionProblem("native_inspection_failed", "Claude plugin state returned invalid JSON")
 	}
-	marketplaceFound := false
+	var status NativeStatus
 	for _, marketplace := range marketplaces {
-		marketplaceFound = marketplaceFound || marketplace.Name == marketplaceID
+		status.MarketplaceRegistered = status.MarketplaceRegistered || marketplace.Name == marketplaceID
 	}
-	pluginFound, pluginEnabled := false, false
 	for _, plugin := range plugins {
 		if plugin.ID == pluginID {
-			pluginFound = true
-			pluginEnabled = plugin.Enabled
+			status.PluginInstalled = true
+			status.PluginEnabled = plugin.Enabled
 		}
 	}
-	return marketplaceFound, pluginFound, pluginEnabled, nil
+	return status, nil
 }
 
 func inspectionProblem(code, message string) *result.Problem {

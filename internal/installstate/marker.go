@@ -93,7 +93,7 @@ func (j HistoryPurgeJournal) valid(installationID string) bool {
 			j.DesiredRecord.InstallationID != installationID || j.DesiredRecord.Validate() != nil {
 			return false
 		}
-		before := cloneRecord(*j.DesiredRecord)
+		before := j.DesiredRecord.Clone()
 		for _, operationID := range j.OperationIDs {
 			if slices.Contains(before.History, operationID) {
 				return false
@@ -131,7 +131,7 @@ func NewResourceMarker(operation, operationID, installationID, commit string, re
 }
 
 func NewHistoryPurgeMarker(operationID, commit string, resources, operationIDs []string, before Record, desired *Record) (Marker, error) {
-	before = cloneRecord(before)
+	before = before.Clone()
 	if normalizeRecord(&before) != nil {
 		return Marker{}, ErrMalformedMarker
 	}
@@ -145,14 +145,14 @@ func NewHistoryPurgeMarker(operationID, commit string, resources, operationIDs [
 		journal.DesiredState = HistoryPurgeStateAbsent
 		journal.ExpectedRecord = &before
 	} else {
-		clonedDesired := cloneRecord(*desired)
+		clonedDesired := desired.Clone()
 		if normalizeRecord(&clonedDesired) != nil {
 			return Marker{}, ErrMalformedMarker
 		}
 		if len(clonedDesired.History) == 0 {
 			clonedDesired.History = nil
 		}
-		expectedDesired := cloneRecord(before)
+		expectedDesired := before.Clone()
 		expectedDesired.History = slices.DeleteFunc(expectedDesired.History, func(value string) bool {
 			return slices.Contains(operationIDs, value)
 		})

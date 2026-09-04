@@ -31,11 +31,7 @@ func makeActions(specs []planActionSpec) ([]cli.Action, error) {
 func contentWithChange(content []cli.ContentItem, change cli.ContentChange) ([]cli.ContentItem, error) {
 	changed := make([]cli.ContentItem, 0, len(content))
 	for _, item := range content {
-		var execution *cli.Execution
-		if value, present := item.Execution(); present {
-			execution = &value
-		}
-		value, err := cli.NewContentItem(item.ComponentType(), item.Identifier(), item.SourcePath(), item.Checksum(), change, execution)
+		value, err := contentItemWithChange(item, change)
 		if err != nil {
 			return nil, err
 		}
@@ -67,37 +63,27 @@ func diffActiveContent(installed, desired []cli.ContentItem) ([]cli.ContentItem,
 	for _, key := range ordered {
 		before, hadBefore := installedByKey[key]
 		after, hasAfter := desiredByKey[key]
+		item, change := after, cli.ContentUnchanged
 		switch {
 		case !hadBefore:
-			item, err := contentItemWithChange(after, cli.ContentAdded)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, item)
+			change = cli.ContentAdded
 		case !hasAfter:
-			item, err := contentItemWithChange(before, cli.ContentRemoved)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, item)
-		default:
-			change := cli.ContentUnchanged
-			if !sameContentItem(before, after) {
-				change = cli.ContentChanged
-			}
-			item, err := contentItemWithChange(after, change)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, item)
+			item, change = before, cli.ContentRemoved
+		case !sameContentItem(before, after):
+			change = cli.ContentChanged
 		}
+		changed, err := contentItemWithChange(item, change)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, changed)
 	}
 	return items, nil
 }
 
 // recordedTransitionContent reports only content that can be described from
-// the newly validated bundle. Earlier state retained asset identifiers, but not the
-// type, path, checksum, or execution metadata needed to construct truthful
+// the newly validated bundle. The installation record stores asset identifiers,
+// without the type, path, checksum, or execution metadata needed for truthful
 // removal disclosures for assets that are no longer selected.
 func recordedTransitionContent(recordedAssets []string, desired []cli.ContentItem) ([]cli.ContentItem, error) {
 	recorded := make(map[string]struct{}, len(recordedAssets))

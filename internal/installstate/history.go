@@ -286,21 +286,9 @@ func (s Store) LoadHistory(installationID string) ([]HistoryEntry, error) {
 }
 
 func (s Store) LoadHistoryEntry(installationID, operationID string) (HistoryEntry, bool, error) {
-	if _, err := domain.NewInstallationID(installationID); err != nil {
-		return HistoryEntry{}, false, ErrMalformedHistory
-	}
-	if _, err := domain.NewOperationID(operationID); err != nil {
-		return HistoryEntry{}, false, ErrMalformedHistory
-	}
-	entry, err := s.loadHistoryFile(s.HistoryPath(installationID, operationID))
-	if errors.Is(err, os.ErrNotExist) {
-		return HistoryEntry{}, false, nil
-	}
-	if err != nil {
+	entry, present, err := s.LoadOperationHistory(installationID, operationID)
+	if err != nil || !present {
 		return HistoryEntry{}, false, err
-	}
-	if entry.InstallationID != installationID || entry.OperationID != operationID {
-		return HistoryEntry{}, false, ErrMalformedHistory
 	}
 	if !entry.Committed {
 		return HistoryEntry{}, false, nil

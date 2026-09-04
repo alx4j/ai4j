@@ -27,7 +27,7 @@ func TestDoctorIsStaticByDefaultAndMCPStartupIsExplicit(t *testing.T) {
 		t.Fatalf("load installation = %t, %v", present, err)
 	}
 	runner := &doctorRunnerStub{paths: map[string]string{"git": "/usr/bin/git", "claude": "/usr/bin/claude"}}
-	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store, home: harness.home}, harness.validator, runner)
+	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store}, harness.validator, runner)
 
 	staticRequest := parseRequest[cli.DoctorRequest](t, "doctor", record.InstallationID, "--json")
 	staticResponse, err := service.Doctor(context.Background(), staticRequest, CommandIO{})
@@ -79,7 +79,7 @@ func TestDoctorRejectsUnknownMCPBeforeExecution(t *testing.T) {
 	_, _ = harness.service.Install(context.Background(), install, CommandIO{})
 	record, _, _ := harness.store.Load()
 	runner := &doctorRunnerStub{paths: map[string]string{"git": "/usr/bin/git", "claude": "/usr/bin/claude"}}
-	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store, home: harness.home}, harness.validator, runner)
+	service := newDoctorService(harness.store, statusService{validation: harness.validator, state: harness.store}, harness.validator, runner)
 	request := parseRequest[cli.DoctorRequest](t, "doctor", record.InstallationID, "--test-mcp", "missing", "--yes", "--json")
 	response, err := service.Doctor(context.Background(), request, CommandIO{})
 	if err != nil || response.Result().ExitCode() != result.ExitValidation || runner.calls != 0 || response.Result().Errors()[0].Code() != "mcp_not_found" {

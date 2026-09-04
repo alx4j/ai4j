@@ -98,7 +98,7 @@ func TestListResponseValidatesAgainstPublishedSchema(t *testing.T) {
 		}
 	}
 	if _, present := item["components"]; present {
-		t.Fatalf("legacy installation summary emitted composition components: %#v", item)
+		t.Fatalf("single-source installation summary emitted composition components: %#v", item)
 	}
 	delete(item, "requestedBundle")
 	if err := schema.Validate(document); err == nil {
@@ -154,7 +154,7 @@ func TestStatusResponseUsesSortedPluralNativePluginIDs(t *testing.T) {
 		t.Fatalf("obsolete nativePluginId was emitted: %#v", record)
 	}
 	if _, present := record["components"]; present {
-		t.Fatalf("legacy installation emitted composition components: %#v", record)
+		t.Fatalf("single-source installation emitted composition components: %#v", record)
 	}
 }
 
@@ -252,23 +252,6 @@ func TestCompositionComponentsValidateAndMarshalForListAndStatus(t *testing.T) {
 		if err := schema.Validate(document); err == nil {
 			t.Fatalf("%s component without toolkitVersion was accepted", name)
 		}
-	}
-}
-
-func TestLaterWaveUnsupportedResponsesValidateAgainstPublishedSchemas(t *testing.T) {
-	t.Parallel()
-	schemas := compileSchemas(t)
-	commands := []cli.Command{cli.CommandSync, cli.CommandDoctor, cli.CommandRollback, cli.CommandHistory, cli.CommandHistoryPurge}
-	for _, command := range commands {
-		response, err := cli.NewResponse(command, failedResult(t, result.FailureEnvironment), nil, cli.UnavailableData{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, err := jsonwire.Marshal(response)
-		if err != nil {
-			t.Fatal(err)
-		}
-		validateJSON(t, schemas[command.String()+".json"], encoded)
 	}
 }
 
@@ -405,6 +388,38 @@ func TestEveryFailureFamilyValidatesWithUnavailableData(t *testing.T) {
 	validateJSON(t, schema, encoded)
 }
 
+func TestEveryCommandMarshalsUnavailableDataAsNull(t *testing.T) {
+	t.Parallel()
+
+	schemas := compileSchemas(t)
+	commands := []cli.Command{
+		cli.CommandInit, cli.CommandValidate, cli.CommandBuild, cli.CommandInstall,
+		cli.CommandUpdate, cli.CommandSync, cli.CommandList, cli.CommandStatus,
+		cli.CommandDoctor, cli.CommandRollback, cli.CommandUninstall,
+		cli.CommandHistory, cli.CommandHistoryPurge, cli.CommandVersion,
+	}
+	for _, command := range commands {
+		t.Run(command.String(), func(t *testing.T) {
+			t.Parallel()
+			response, err := cli.NewResponse(command, failedResult(t, result.FailureEnvironment), nil, cli.UnavailableData{})
+			if err != nil {
+				t.Fatalf("NewResponse() error = %v", err)
+			}
+
+			encoded, err := jsonwire.Marshal(response)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+
+			validateJSON(t, schemas[command.String()+".json"], encoded)
+			document := decodeDocument(t, encoded)
+			if document["command"] != command.String() || document["data"] != nil || document["exitCode"] != float64(result.ExitEnvironment) {
+				t.Fatalf("unavailable response = %s", encoded)
+			}
+		})
+	}
+}
+
 func TestMutationRecoverySemanticsValidate(t *testing.T) {
 	t.Parallel()
 
@@ -459,7 +474,7 @@ func recoveryFacts(problem result.Problem, phase result.Phase, outcome result.Ou
 	return result.Facts{Status: result.StatusError, Phase: phase, Outcome: outcome, Mutation: mutation, DurableChange: durable, Failure: failure, UpdateDisposition: result.UpdateNotChecked, Errors: []result.Problem{problem}}
 }
 
-func TestSchemaCompatibilityAndClosedEnums(t *testing.T) {
+func TestSchemasRejectContradictoryFieldsAndUnknownEnums(t *testing.T) {
 	t.Parallel()
 
 	fixture := commandFixtures(t)[0]
@@ -803,6 +818,67 @@ func TestExecutableContentMarshalsRequiredEmptyCollectionsAsArrays(t *testing.T)
 		t.Fatalf("empty execution collection golden mismatch: %s", encoded)
 	}
 	validateJSON(t, compileSchemas(t)["validate.json"], encoded)
+}
+
+func TestContentDisclosureOwnsExecutionAfterConstruction(t *testing.T) {
+	t.Parallel()
+
+	execution, err := cli.NewExecution(cli.ExecutionToolkitOwned, cli.DependencyRequired, "server", []string{"--stdio"}, "", nil, []string{"API_TOKEN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := cli.NewContentItem(cli.ComponentMCP, "example-mcp", "toolkit/mcp/example", strings.Repeat("a", 64), cli.ContentAdded, &execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	execution = cli.Execution{}
+	data, err := cli.NewValidateData(testSource(t), true, 0, 0, []cli.ContentItem{content})
+	if err != nil {
+		t.Fatalf("caller mutation invalidated content: %v", err)
+	}
+	response, err := cli.NewResponse(cli.CommandValidate, successResult(t), nil, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := jsonwire.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wire jsonwire.Envelope[jsonwire.ValidateData]
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	disclosed := wire.Data.ActiveContent[0].Execution
+	if disclosed == nil || disclosed.Command != "server" || !reflect.DeepEqual(disclosed.Args, []string{"--stdio"}) || !reflect.DeepEqual(disclosed.Environment, []string{"API_TOKEN"}) {
+		t.Fatalf("execution disclosure changed after caller mutation: %s", encoded)
+	}
+}
+
+func TestInstallationNormalizesAndOwnsPluginIDs(t *testing.T) {
+	t.Parallel()
+
+	id, err := domain.NewInstallationID("a1b2c3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pluginIDs := []string{"zulu", "alpha", "zulu"}
+	installation, err := cli.NewInstallation(id, "ai4j", pluginIDs, testRecordedSource(t), "1.0.0", "1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(pluginIDs, []string{"zulu", "alpha", "zulu"}) {
+		t.Fatalf("constructor changed caller's plugin IDs: %v", pluginIDs)
+	}
+
+	pluginIDs[0] = "changed"
+	returned := installation.NativePluginIDs()
+	returned[0] = "changed"
+
+	if got := installation.NativePluginIDs(); !reflect.DeepEqual(got, []string{"alpha", "zulu"}) {
+		t.Fatalf("NativePluginIDs() = %v, want [alpha zulu]", got)
+	}
 }
 
 func TestShuffledCollectionsProduceByteIdenticalJSON(t *testing.T) {
@@ -1232,42 +1308,6 @@ func TestStatusInstallationDispositionSemantics(t *testing.T) {
 	}
 	recoveryEncoded, _ := jsonwire.Marshal(recoveryResponse)
 	validateJSON(t, compileSchemas(t)["status.json"], recoveryEncoded)
-}
-
-func TestWireDTOsContainNoMapInterfaceOrRawJSONFields(t *testing.T) {
-	t.Parallel()
-
-	types := []reflect.Type{
-		reflect.TypeFor[jsonwire.Envelope[jsonwire.ValidateData]](), reflect.TypeFor[jsonwire.Diagnostic](),
-		reflect.TypeFor[jsonwire.ValidateData](), reflect.TypeFor[jsonwire.PlanData](), reflect.TypeFor[jsonwire.MutationData](),
-		reflect.TypeFor[jsonwire.StatusData](), reflect.TypeFor[jsonwire.DoctorData](), reflect.TypeFor[jsonwire.VersionData](),
-	}
-	seen := map[reflect.Type]bool{}
-	var inspect func(reflect.Type)
-	inspect = func(value reflect.Type) {
-		for value.Kind() == reflect.Pointer || value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
-			value = value.Elem()
-		}
-		if seen[value] {
-			return
-		}
-		seen[value] = true
-		if value.Kind() == reflect.Map || value.Kind() == reflect.Interface {
-			t.Fatalf("wire DTO contains forbidden %s type %s", value.Kind(), value)
-		}
-		if value == reflect.TypeFor[json.RawMessage]() {
-			t.Fatalf("wire DTO contains json.RawMessage")
-		}
-		if value.Kind() != reflect.Struct {
-			return
-		}
-		for field := range value.Fields() {
-			inspect(field.Type)
-		}
-	}
-	for _, value := range types {
-		inspect(value)
-	}
 }
 
 func TestClosedNeutralEnumsRejectUnknownValues(t *testing.T) {

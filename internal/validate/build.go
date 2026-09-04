@@ -123,7 +123,6 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 	}
 	operationContext := session.operationContext
 	workspacePath := session.workspacePath
-	acquired := session.acquisition
 	validated := session.validated
 	source := session.source
 	report.Source = source
@@ -166,44 +165,13 @@ func (s Service) Build(ctx context.Context, request cli.BuildRequest) (report Bu
 	if err != nil {
 		return buildFailure(report, FailureInternal, "internal_error", "build selection result could not be constructed")
 	}
-	var validateOutput func(string) error
-	if request.Target() == cli.BuildTargetClaude {
-		validateOutput = func(stage string) error {
-			claudeExecutable, _ := s.config.Runner.LookPath("claude")
-			roots := []string{filepath.Join(stage, "plugin")}
-			if entries, readErr := os.ReadDir(filepath.Join(stage, "plugins")); readErr == nil {
-				roots = roots[:0]
-				for _, entry := range entries {
-					if entry.IsDir() {
-						roots = append(roots, filepath.Join(stage, "plugins", entry.Name()))
-					}
-				}
-			}
-			for _, root := range roots {
-				if info, statErr := os.Stat(root); statErr != nil || !info.IsDir() {
-					continue
-				}
-				nativeContext, cancelNative := context.WithTimeout(operationContext, 2*time.Minute)
-				native, runErr := s.config.Runner.Run(nativeContext, root, claudeExecutable, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
-				cancelNative()
-				if runErr != nil || native.ExitCode != 0 {
-					return errNativeBuildValidation
-				}
-			}
-			return nil
-		}
-	} else if len(codexAgents) != 0 {
-		validateOutput = func(stage string) error {
-			return s.validateRenderedCodexAgents(operationContext, stage, codexExecutable)
-		}
-	}
 	warnings, dependencyProblem := s.checkHostDependencies(validated.content)
 	if dependencyProblem != nil {
 		report.Problems = []result.Problem{*dependencyProblem}
 		report.Failure = FailureValidation
 		return report
 	}
-	artifacts, err := renderBuildOutput(workspacePath, acquired, validated, resolved, codexAgents, source, request, validateOutput, s.config.Capacity)
+	artifacts, err := s.renderBuildOutput(operationContext, session, resolved, codexAgents, request, codexExecutable)
 	if err != nil {
 		if code, message, ok := diskCapacityProblem(err); ok {
 			return buildFailure(report, FailureEnvironment, code, message)
@@ -266,7 +234,7 @@ var (
 	errNativeValidationEnvironment = errors.New("native build validation environment failed")
 )
 
-func renderBuildOutput(workspacePath string, acquired acquisition, validated packageResult, resolved resolvedSelection, codexAgents map[string]codexAgentOutput, source cli.Source, request cli.BuildRequest, validateOutput func(string) error, capacity func(string, uint64) error) ([]cli.BuildArtifact, error) {
+func (s Service) renderBuildOutput(ctx context.Context, session *sourceSession, resolved resolvedSelection, codexAgents map[string]codexAgentOutput, request cli.BuildRequest, codexExecutable string) ([]cli.BuildArtifact, error) {
 	output, err := filepath.Abs(request.Output())
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize output: %w", err)
@@ -283,7 +251,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 	if info, err := os.Stat(parent); err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("output parent is unavailable")
 	}
-	if err := capacity(parent, acquired.inventory.TreeBytes()+maximumMetadataSize); err != nil {
+	if err := s.config.Capacity(parent, session.acquisition.inventory.TreeBytes()+maximumMetadataSize); err != nil {
 		return nil, err
 	}
 	stageWorkspace, err := workspace.Create(parent, workspace.BuildStage)
@@ -293,12 +261,17 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 	defer func() { _ = stageWorkspace.Close() }()
 	stage := stageWorkspace.Path()
 
-	mappings, err := renderBuild(stage, workspacePath, validated.model, resolved, codexAgents, request.Target())
+	mappings, err := renderBuild(stage, session.workspacePath, session.validated.model, resolved, codexAgents, request.Target())
 	if err != nil {
 		return nil, err
 	}
-	if validateOutput != nil {
-		if err := validateOutput(stage); err != nil {
+	switch {
+	case request.Target() == cli.BuildTargetClaude:
+		if err := s.validateRenderedClaudePackages(ctx, stage); err != nil {
+			return nil, err
+		}
+	case len(codexAgents) != 0:
+		if err := s.validateRenderedCodexAgents(ctx, stage, codexExecutable); err != nil {
 			return nil, err
 		}
 	}
@@ -307,6 +280,7 @@ func renderBuildOutput(workspacePath string, acquired acquisition, validated pac
 		return nil, err
 	}
 	sourceCommit := ""
+	source := session.source
 	sourceDigest := source.RenderedDigest().String()
 	if source.Mode() == cli.SourceGit {
 		sourceCommit = source.Commit().OID().String()

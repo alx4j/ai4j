@@ -796,6 +796,28 @@ func TestBuildRejectsNativeInvalidOutputBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestBuildClaudeConfigurationOnlySkipsNativePluginValidation(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "rules")
+	runner := &fixtureRunner{files: firstPartyFiles(t), nativeExitCode: 1}
+	service, err := NewService(Config{GOOS: "darwin", GOARCH: "arm64", Home: t.TempDir(), BuildCommit: testBuild, Runner: runner, TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := cli.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", output, "--asset", "ai4j-rules"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report := service.Build(context.Background(), request.(cli.BuildRequest))
+
+	if report.Failure != FailureNone || runner.claudeValidations != 0 || runner.toolkitExecutions != 0 {
+		t.Fatalf("failure=%s problems=%v native validations=%d toolkit executions=%d", report.Failure, report.Problems, runner.claudeValidations, runner.toolkitExecutions)
+	}
+	if _, err := os.Stat(filepath.Join(output, "configuration", "rules", "ai4j-rules.md")); err != nil {
+		t.Fatalf("rendered instruction is missing: %v", err)
+	}
+}
+
 func TestBuildRefusesToOverwriteExistingOutput(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "existing")
 	if err := os.Mkdir(output, 0o700); err != nil {

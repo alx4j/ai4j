@@ -99,7 +99,7 @@ func (t preparedTransition) validate() error {
 		if t.before.Validate() != nil {
 			return errors.New("current transition state is invalid")
 		}
-		if !sameInstallationIdentity(*t.before, *t.desired) {
+		if !t.before.SameInstallation(*t.desired) {
 			return errors.New("transition installation identity changed")
 		}
 	}
@@ -142,22 +142,15 @@ func (t preparedTransition) validate() error {
 	return nil
 }
 
-func sameInstallationIdentity(current, desired installstate.Record) bool {
-	return current.InstallationID == desired.InstallationID &&
-		current.ToolkitID == desired.ToolkitID &&
-		current.Target == desired.Target &&
-		current.Scope == desired.Scope &&
-		installstate.SameScopeRoot(current.ScopeRoot, desired.ScopeRoot)
-}
-
 func (t preparedTransition) withDesired(desired *installstate.Record) preparedTransition {
 	t.desired = cloneRecordPtr(desired)
 	return t
 }
 
-type applyRequest struct {
+type lifecycleRequest struct {
 	command           cli.Command
 	output            cli.OutputMode
+	dryRun            bool
 	approved          bool
 	commandIO         CommandIO
 	conflictPolicy    cli.ConflictPolicy
@@ -190,20 +183,11 @@ func (s *lifecycleService) Install(ctx context.Context, request cli.InstallReque
 		}
 		return s.prepareInstall(ctx, request.Source(), request.Target(), request.Scope(), project, hasProject, request.Selection(), request.InstallationID(), request.HasInstallationID(), policy)
 	}
-	if request.DryRun() {
-		execution, response, stop, err := prepare(cli.ConflictFail)
-		if err != nil {
-			return cli.Response{}, err
-		}
-		if stop {
-			return response, nil
-		}
-		return s.planResponse(cli.CommandInstall, execution)
-	}
 	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
 	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
-	return s.apply(ctx, applyRequest{
+	return s.execute(ctx, lifecycleRequest{
 		command: cli.CommandInstall, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		dryRun:         request.DryRun(),
 		conflictPolicy: cli.ConflictFail, expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
 		expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
 		prepare: prepare,
@@ -213,23 +197,12 @@ func (s *lifecycleService) Install(ctx context.Context, request cli.InstallReque
 func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest, commandIO CommandIO) (cli.Response, error) {
 	expectedCommit, hasExpectedCommit := request.ExpectedCommit()
 	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
-	if request.DryRun() {
-		execution, response, stop, err := s.prepareUpdate(ctx, request.InstallationID(), request.Source(), request.ConflictPolicy())
-		if err != nil {
-			return cli.Response{}, err
-		}
-		if stop {
-			return response, nil
-		}
-		return s.planResponse(cli.CommandUpdate, execution)
+	if !request.DryRun() && !hasExpectedCommit && (request.Source().HasRepository() || request.Source().HasReference()) {
+		return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_required", "changing source or reference requires --expected-commit", result.UpdateNotChecked, nil)
 	}
-	if request.Source().HasRepository() || request.Source().HasReference() {
-		if !hasExpectedCommit {
-			return lifecycleFailure(cli.CommandUpdate, result.FailureConflict, "expected_commit_required", "changing source or reference requires --expected-commit", result.UpdateNotChecked, nil)
-		}
-	}
-	return s.apply(ctx, applyRequest{
+	return s.execute(ctx, lifecycleRequest{
 		command: cli.CommandUpdate, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		dryRun:         request.DryRun(),
 		conflictPolicy: request.ConflictPolicy(), expectedCommit: expectedCommit, hasExpectedCommit: hasExpectedCommit,
 		expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
 		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -240,18 +213,9 @@ func (s *lifecycleService) Update(ctx context.Context, request cli.UpdateRequest
 
 func (s *lifecycleService) Sync(ctx context.Context, request cli.SyncRequest, commandIO CommandIO) (cli.Response, error) {
 	expectedDigest, hasExpectedDigest := request.ExpectedSourceDigest()
-	if request.DryRun() {
-		execution, response, stop, err := s.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), request.ConflictPolicy())
-		if err != nil {
-			return cli.Response{}, err
-		}
-		if stop {
-			return response, nil
-		}
-		return s.planResponse(cli.CommandSync, execution)
-	}
-	return s.apply(ctx, applyRequest{
+	return s.execute(ctx, lifecycleRequest{
 		command: cli.CommandSync, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		dryRun:         request.DryRun(),
 		conflictPolicy: request.ConflictPolicy(), expectedDigest: expectedDigest, hasExpectedDigest: hasExpectedDigest,
 		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
 			return s.prepareSync(ctx, request.InstallationID(), request.Selection(), request.AllowDirty(), policy)
@@ -260,18 +224,9 @@ func (s *lifecycleService) Sync(ctx context.Context, request cli.SyncRequest, co
 }
 
 func (s *lifecycleService) Rollback(ctx context.Context, request cli.RollbackRequest, commandIO CommandIO) (cli.Response, error) {
-	if request.DryRun() {
-		execution, response, stop, err := s.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), request.ConflictPolicy())
-		if err != nil {
-			return cli.Response{}, err
-		}
-		if stop {
-			return response, nil
-		}
-		return s.planResponse(cli.CommandRollback, execution)
-	}
-	return s.apply(ctx, applyRequest{
+	return s.execute(ctx, lifecycleRequest{
 		command: cli.CommandRollback, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		dryRun:         request.DryRun(),
 		conflictPolicy: request.ConflictPolicy(),
 		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
 			return s.prepareRollback(ctx, request.InstallationID(), request.OperationID(), request.HasOperationID(), policy)
@@ -280,18 +235,9 @@ func (s *lifecycleService) Rollback(ctx context.Context, request cli.RollbackReq
 }
 
 func (s *lifecycleService) Uninstall(ctx context.Context, request cli.UninstallRequest, commandIO CommandIO) (cli.Response, error) {
-	if request.DryRun() {
-		execution, response, stop, err := s.prepareUninstall(ctx, request.InstallationID(), request.ConflictPolicy())
-		if err != nil {
-			return cli.Response{}, err
-		}
-		if stop {
-			return response, nil
-		}
-		return s.planResponse(cli.CommandUninstall, execution)
-	}
-	return s.apply(ctx, applyRequest{
+	return s.execute(ctx, lifecycleRequest{
 		command: cli.CommandUninstall, output: request.OutputMode(), approved: request.Approved(), commandIO: commandIO,
+		dryRun:         request.DryRun(),
 		conflictPolicy: request.ConflictPolicy(),
 		prepare: func(policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
 			return s.prepareUninstall(ctx, request.InstallationID(), policy)
@@ -299,7 +245,18 @@ func (s *lifecycleService) Uninstall(ctx context.Context, request cli.UninstallR
 	})
 }
 
-func (s *lifecycleService) apply(ctx context.Context, request applyRequest) (cli.Response, error) {
+func (s *lifecycleService) execute(ctx context.Context, request lifecycleRequest) (cli.Response, error) {
+	if request.dryRun {
+		execution, response, stop, err := request.prepare(request.conflictPolicy)
+		if err != nil {
+			return cli.Response{}, err
+		}
+		if stop {
+			return response, nil
+		}
+		return s.planResponse(request.command, execution)
+	}
+
 	release, err := s.acquire(ctx)
 	if err != nil {
 		return mutationLockResponse(request.command, err, result.UpdateNotChecked, nil)
@@ -427,7 +384,7 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 			}
 		}
 	}
-	if before != nil && !sameInstallationIdentity(*before, desired) {
+	if before != nil && !before.SameInstallation(desired) {
 		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
 	}
 	if hasAgentActivationConflict(records, desired) {
@@ -593,7 +550,7 @@ func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Comm
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
 	}
-	if !sameInstallationIdentity(record, desired) {
+	if !record.SameInstallation(desired) {
 		return stopLifecycle(command, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
 	}
 	desired.History = slices.Clone(record.History)
@@ -763,9 +720,9 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 	if !entry.Restorable || entry.After == nil || !sameCurrentState(record, *entry.After) {
 		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_conflict", "current installation state no longer matches the rollback point")
 	}
-	desired := cloneRecord(record)
+	desired := record.Clone()
 	if entry.Before != nil {
-		desired = cloneRecord(*entry.Before)
+		desired = entry.Before.Clone()
 	} else {
 		desired.Lifecycle = "archived"
 		desired.Catalog = installstate.OwnedFile{}
@@ -773,7 +730,7 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 		desired.Rules = installstate.OwnedFile{}
 		desired.NativeResources = []string{}
 	}
-	if !sameInstallationIdentity(record, desired) {
+	if !record.SameInstallation(desired) {
 		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_conflict", "the rollback point changes the installation identity")
 	}
 	desired.History = slices.Clone(record.History)

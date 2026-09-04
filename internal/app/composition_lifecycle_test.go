@@ -52,7 +52,7 @@ func TestCompositionInstallStatusSyncUninstallAndRollback(t *testing.T) {
 		}
 	}
 
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	response, err = status.Status(context.Background(), statusRequest)
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Data().(cli.StatusData).UpdateDisposition() != result.UpdatePinned {
@@ -244,7 +244,7 @@ func TestCompositionSupportsARulesOnlyComponent(t *testing.T) {
 	if err != nil || !present || len(record.Components) != 2 || len(record.Components[1].Packages) != 0 || !slices.Equal(record.Components[1].Selection.ResolvedAssets, []string{"policy-rules"}) {
 		t.Fatalf("rules-only composition state = %#v, %t, %v", record, present, err)
 	}
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	response, err = status.Status(context.Background(), parseRequest[cli.StatusRequest](t, "status", record.InstallationID))
 	installation, installed := response.Data().(cli.StatusData).Installation()
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || !installed || len(installation.Components()) != 2 {
@@ -327,7 +327,7 @@ func TestCompositionTagRewriteIsReportedAndUpdateIsRefused(t *testing.T) {
 	commandsBefore := len(harness.native.commands)
 	harness.validator.update = true
 
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	statusRequest := parseRequest[cli.StatusRequest](t, "status", recordBefore.InstallationID)
 	response, err = status.Status(context.Background(), statusRequest)
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Result().Status() != result.StatusDegraded || response.Result().UpdateDisposition() != result.UpdateRefRewritten || response.Data().(cli.StatusData).UpdateDisposition() != result.UpdateRefRewritten {
@@ -376,7 +376,7 @@ func TestCompositionStatusReportsRewritesAlongsideUnavailableComponents(t *testi
 	harness.validator.update = true
 	harness.validator.failUpdateBundle = "everpure"
 
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	response, err = status.Status(context.Background(), parseRequest[cli.StatusRequest](t, "status", record.InstallationID))
 	warnings := response.Result().Warnings()
 	problems := response.Result().Errors()
@@ -398,7 +398,7 @@ func TestCompositionStatusNamesTheComponentWithNativeDrift(t *testing.T) {
 	harness.native.plugins[everpurePlugin] = false
 	harness.native.enabled[everpurePlugin] = false
 
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	response, err = status.Status(context.Background(), parseRequest[cli.StatusRequest](t, "status", record.InstallationID))
 	warnings := response.Result().Warnings()
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Result().Status() != result.StatusDegraded || len(warnings) != 1 ||
@@ -418,7 +418,7 @@ func TestCompositionStatusContinuesAfterAComponentInspectorError(t *testing.T) {
 	harness.validator.inspectionDirectories = nil
 	harness.validator.failNativePlugin = "common-plugin"
 
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	response, err = status.Status(context.Background(), parseRequest[cli.StatusRequest](t, "status", record.InstallationID))
 	warnings := response.Result().Warnings()
 	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Result().Status() != result.StatusDegraded || len(harness.validator.inspectionDirectories) != 3 ||
