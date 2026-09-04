@@ -123,7 +123,7 @@ func (r Record) Validate() error {
 		return ErrMalformedState
 	}
 	composition := len(r.Components) != 0
-	if composition && !validComposition(r) || !composition && (!validStateSource(r.Source) || !validLegacyPackageOwnership(r.Packages)) {
+	if composition && !validComposition(r) || !composition && (r.ToolkitVersion == "" || !validStateSource(r.Source) || !validSingleSourcePackageOwnership(r.Packages)) {
 		return ErrMalformedState
 	}
 	if _, err := domain.NewOperationID(r.LastOperation.ID); err != nil {
@@ -234,7 +234,7 @@ func validComponent(component Component) bool {
 	return err == nil
 }
 
-func validLegacyPackageOwnership(packages []NativePackage) bool {
+func validSingleSourcePackageOwnership(packages []NativePackage) bool {
 	for _, unit := range packages {
 		if unit.Component != "" {
 			return false
@@ -252,10 +252,7 @@ func validStateSource(source Source) bool {
 		return filepath.IsAbs(source.Checkout) && filepath.Clean(source.Checkout) == source.Checkout &&
 			digestPattern.MatchString(source.SourceDigest) && digestPattern.MatchString(source.BundleDigest)
 	}
-	if source.Mode != "git" && source.Mode != "github" && source.Mode != "" {
-		return false
-	}
-	if (source.Mode == "github" || source.Mode == "") && !strings.HasPrefix(source.Repository, "github.com/") {
+	if source.Mode != "git" {
 		return false
 	}
 	if _, err := domain.NewRepositoryIdentity(source.Repository); err != nil {
@@ -264,19 +261,14 @@ func validStateSource(source Source) bool {
 	if _, err := domain.NewCommitOID(source.Commit); err != nil {
 		return false
 	}
-	if source.Mode == "git" && source.Transport == "" {
+	if _, err := domain.NewGitTransport(source.Transport); err != nil {
 		return false
-	}
-	if source.Transport != "" {
-		if _, err := domain.NewGitTransport(source.Transport); err != nil {
-			return false
-		}
 	}
 	if source.Selection != domain.BuiltInDefaultSource().String() && source.Selection != domain.ExplicitSource().String() {
 		return false
 	}
 	if source.Selection == domain.BuiltInDefaultSource().String() &&
-		(source.Repository != "github.com/alx4j/ai4j" || source.Transport != "" && source.Transport != domain.HTTPSGitTransport().String()) {
+		(source.Repository != "github.com/alx4j/ai4j" || source.Transport != domain.HTTPSGitTransport().String()) {
 		return false
 	}
 	if source.RefKind != "default_branch" && source.RefKind != "branch" && source.RefKind != "tag" && source.RefKind != "commit" {
@@ -353,13 +345,19 @@ func validOwnedFile(file OwnedFile, expectedPath string) bool {
 }
 
 func validCatalogFile(file OwnedFile, installationID string) bool {
-	return validOwnedFile(file, "state/catalog/.claude-plugin/marketplace.json") ||
-		validOwnedFile(file, "state/catalogs/"+installationID+"/.claude-plugin/marketplace.json") ||
-		strings.HasPrefix(file.Path, "state/bundles/") && strings.HasSuffix(file.Path, "/.claude-plugin/marketplace.json") && len(strings.TrimSuffix(strings.TrimPrefix(file.Path, "state/bundles/"), "/.claude-plugin/marketplace.json")) == 64 && digestPattern.MatchString(strings.TrimSuffix(strings.TrimPrefix(file.Path, "state/bundles/"), "/.claude-plugin/marketplace.json")) && digestPattern.MatchString(file.Checksum)
+	if validOwnedFile(file, "state/catalogs/"+installationID+"/.claude-plugin/marketplace.json") {
+		return true
+	}
+	bundlePath, ok := strings.CutPrefix(file.Path, "state/bundles/")
+	if !ok {
+		return false
+	}
+	digest, ok := strings.CutSuffix(bundlePath, "/.claude-plugin/marketplace.json")
+	return ok && digestPattern.MatchString(digest) && digestPattern.MatchString(file.Checksum)
 }
 
 func validRulesFile(file OwnedFile, installationID, declarationID string) bool {
-	return validOwnedFile(file, ".claude/rules/ai4j.md") || validOwnedFile(file, ".claude/rules/ai4j-"+installationID+".md") || validOwnedFile(file, "rules/ai4j-"+installationID+".md") || declarationID != "" && validOwnedFile(file, ".claude/rules/"+declarationID+".md")
+	return validOwnedFile(file, ".claude/rules/ai4j-"+installationID+".md") || validOwnedFile(file, "rules/ai4j-"+installationID+".md") || declarationID != "" && validOwnedFile(file, ".claude/rules/"+declarationID+".md")
 }
 
 type Snapshot struct {
@@ -404,20 +402,11 @@ func (s Store) Snapshot() (Snapshot, error) {
 	if err != nil || !present {
 		return Snapshot{}, err
 	}
-	var header struct {
-		SchemaVersion int `json:"schemaVersion"`
-	}
-	if json.Unmarshal(contents, &header) != nil {
-		return Snapshot{}, ErrMalformedState
-	}
-	if header.SchemaVersion != SchemaVersion {
-		return Snapshot{}, ErrUnsupportedSchema
-	}
 	document, err := decodeDocument(contents)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{SchemaVersion: SchemaVersion, Installations: cloneRecords(document.Installations)}, nil
+	return Snapshot{SchemaVersion: SchemaVersion, Installations: document.Installations}, nil
 }
 
 func (s Store) LoadAll() ([]Record, error) {
@@ -425,7 +414,10 @@ func (s Store) LoadAll() ([]Record, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cloneRecords(snapshot.Installations), nil
+	if snapshot.Installations == nil {
+		return []Record{}, nil
+	}
+	return snapshot.Installations, nil
 }
 
 func (s Store) LoadByID(id string) (Record, bool, error) {
@@ -459,10 +451,10 @@ func (s Store) Load() (Record, bool, error) {
 // matches expected. Callers hold the AI4J mutation lock while this optimistic
 // precondition detects stale snapshots from cooperating AI4J writers.
 func (s Store) Replace(expectedRecord, desiredRecord Record) error {
-	expectedRecord = cloneRecord(expectedRecord)
-	desiredRecord = cloneRecord(desiredRecord)
+	expectedRecord = expectedRecord.Clone()
+	desiredRecord = desiredRecord.Clone()
 	if normalizeRecord(&expectedRecord) != nil || normalizeRecord(&desiredRecord) != nil ||
-		expectedRecord.InstallationID != desiredRecord.InstallationID || !sameLogicalIdentity(expectedRecord, desiredRecord) {
+		!expectedRecord.SameInstallation(desiredRecord) {
 		return ErrMalformedState
 	}
 	records, expectedState, err := s.recordsForWrite()
@@ -485,7 +477,7 @@ func (s Store) Replace(expectedRecord, desiredRecord Record) error {
 }
 
 func (s Store) SaveNew(record Record) error {
-	record = cloneRecord(record)
+	record = record.Clone()
 	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
@@ -503,7 +495,7 @@ func (s Store) SaveNew(record Record) error {
 }
 
 func (s Store) Delete(record Record) error {
-	record = cloneRecord(record)
+	record = record.Clone()
 	if err := normalizeRecord(&record); err != nil {
 		return err
 	}
@@ -537,15 +529,19 @@ func (s Store) Delete(record Record) error {
 }
 
 func (s Store) recordsForWrite() ([]Record, stateExpectation, error) {
-	expectedContents, expectedPresent, err := s.readState()
+	contents, present, err := s.readState()
 	if err != nil {
 		return nil, stateExpectation{}, err
 	}
-	snapshot, err := s.Snapshot()
+	expected := stateExpectation{contents: contents, present: present}
+	if !present {
+		return []Record{}, expected, nil
+	}
+	document, err := decodeDocument(contents)
 	if err != nil {
 		return nil, stateExpectation{}, err
 	}
-	return cloneRecords(snapshot.Installations), stateExpectation{contents: expectedContents, present: expectedPresent}, nil
+	return document.Installations, expected, nil
 }
 
 func (s Store) readState() ([]byte, bool, error) {
@@ -572,6 +568,15 @@ func (s Store) readState() ([]byte, bool, error) {
 }
 
 func decodeDocument(contents []byte) (stateDocument, error) {
+	var header struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if json.Unmarshal(contents, &header) != nil {
+		return stateDocument{}, ErrMalformedState
+	}
+	if header.SchemaVersion != SchemaVersion {
+		return stateDocument{}, ErrUnsupportedSchema
+	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var document stateDocument
@@ -611,15 +616,8 @@ func normalizeRecord(record *Record) error {
 	return record.Validate()
 }
 
-func cloneRecords(records []Record) []Record {
-	cloned := make([]Record, len(records))
-	for index, record := range records {
-		cloned[index] = cloneRecord(record)
-	}
-	return cloned
-}
-
-func cloneRecord(record Record) Record {
+// Clone returns an independent copy, including nested source and selection data.
+func (record Record) Clone() Record {
 	record.Source = cloneSource(record.Source)
 	record.Selection.ResolvedBundles = slices.Clone(record.Selection.ResolvedBundles)
 	record.Selection.ResolvedAssets = slices.Clone(record.Selection.ResolvedAssets)
@@ -701,6 +699,12 @@ func sameScopeRoot(goos, left, right string) bool {
 func sameLogicalIdentity(left, right Record) bool {
 	return left.Target == right.Target && left.Scope == right.Scope && left.ToolkitID == right.ToolkitID &&
 		SameScopeRoot(left.ScopeRoot, right.ScopeRoot)
+}
+
+// SameInstallation compares the installation ID and logical destination using
+// the current host's scope-root identity rules.
+func (r Record) SameInstallation(other Record) bool {
+	return r.InstallationID == other.InstallationID && sameLogicalIdentity(r, other)
 }
 
 func samePersistedLogicalIdentity(left, right Record) bool {

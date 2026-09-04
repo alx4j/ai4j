@@ -748,15 +748,7 @@ func contentForManifest(root string, model validatedManifest) ([]cli.ContentItem
 			declaration = variants[0].Executable
 		}
 		if declaration != nil {
-			dependency := cli.DependencyRequired
-			if declaration.Dependency == "optional" {
-				dependency = cli.DependencyOptional
-			}
-			ownership := cli.ExecutionHostResolved
-			if asset.Type == "script" || asset.Type == "binary" {
-				ownership = cli.ExecutionToolkitOwned
-			}
-			value, executionErr := cli.NewExecution(ownership, dependency, declaration.Command, declaration.Args, "", nil, declaration.Environment)
+			value, executionErr := declaration.disclosure(asset.Type)
 			if executionErr != nil {
 				return nil, validationError("invalid_executable", "asset executable disclosure is invalid")
 			}

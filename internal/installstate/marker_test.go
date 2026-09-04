@@ -78,7 +78,7 @@ func TestStoreRoundTripsRecoverableHistoryPurgeMarker(t *testing.T) {
 	}
 	before := testRecord()
 	before.History = []string{"operation-001", "operation-002"}
-	desired := cloneRecord(before)
+	desired := before.Clone()
 	desired.History = []string{"operation-002"}
 	marker, err := NewHistoryPurgeMarker(
 		"operation-purge", before.Source.Commit,
@@ -95,7 +95,7 @@ func TestStoreRoundTripsRecoverableHistoryPurgeMarker(t *testing.T) {
 	if err != nil || !present || !reflect.DeepEqual(loaded, marker) {
 		t.Fatalf("LoadMarker() = %#v, %t, %v", loaded, present, err)
 	}
-	changed := cloneRecord(desired)
+	changed := desired.Clone()
 	changed.Health = "drifted"
 	if _, err := NewHistoryPurgeMarker(
 		"operation-invalid-purge", before.Source.Commit,
@@ -124,8 +124,8 @@ func testMarkerResources() []string {
 		"claude:ai4j-review@ai4j",
 		"claude:ai4j-tools@ai4j",
 		"claude:marketplace:ai4j",
-		"owned:.claude/rules/ai4j.md",
-		"owned:state/catalog/.claude-plugin/marketplace.json",
+		"owned:rules/ai4j-install-aaaaaaaaaaaa.md",
+		"owned:state/catalogs/install-aaaaaaaaaaaa/.claude-plugin/marketplace.json",
 		"owned:state/installation.json",
 	}
 }

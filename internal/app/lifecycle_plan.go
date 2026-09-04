@@ -25,9 +25,6 @@ func (s *lifecycleService) recordForSelection(report validation.LifecycleSelecti
 	marketplaceID := marketplaceIDFor(installationID)
 	if scope == cli.ScopeProjectShared {
 		marketplaceID = report.DeclarationID
-		if marketplaceID == "" {
-			marketplaceID = report.ToolkitID
-		}
 	}
 	packages := make([]installstate.NativePackage, len(report.Packages))
 	catalogPackages := make([]catalog.Package, len(report.Packages))

@@ -64,7 +64,7 @@ func (s *lifecycleService) prepareCompositionInstall(ctx context.Context, rootVa
 	}
 	if before != nil {
 		desired.History = slices.Clone(before.History)
-		if !sameInstallationIdentity(*before, desired) {
+		if !before.SameInstallation(desired) {
 			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
 		}
 	}

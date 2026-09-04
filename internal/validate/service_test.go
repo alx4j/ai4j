@@ -104,6 +104,21 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 				if strings.HasSuffix(item.SourcePath(), ".go") || item.SourcePath() == "cmd/ai4j/main.go" {
 					t.Fatalf("unrelated repository file entered disclosure: %s", item.SourcePath())
 				}
+				execution, executable := item.Execution()
+				switch item.Identifier() {
+				case "check-diff":
+					if !executable || execution.Ownership() != cli.ExecutionToolkitOwned || execution.Dependency() != cli.DependencyOptional || execution.Command() != item.SourcePath() {
+						t.Fatalf("script execution disclosure = %#v, present=%t", execution, executable)
+					}
+				case "claude-tools":
+					if !executable || execution.Ownership() != cli.ExecutionHostResolved || execution.Dependency() != cli.DependencyRequired || execution.Command() != "claude" || !slices.Equal(execution.Args(), []string{"mcp", "serve"}) {
+						t.Fatalf("MCP execution disclosure = %#v, present=%t", execution, executable)
+					}
+				default:
+					if executable {
+						t.Fatalf("non-executable asset %q has execution disclosure", item.Identifier())
+					}
+				}
 			}
 			entries, err := os.ReadDir(temporary)
 			if err != nil || len(entries) != 0 {

@@ -555,9 +555,6 @@ func (s *lifecycleService) planProjectShared(record *installstate.Record, previo
 	if record.Scope != "project-shared" {
 		return nil, nil, nil
 	}
-	if record.DeclarationID == "" {
-		record.DeclarationID = record.ToolkitID
-	}
 	if previous != nil && previous.Lifecycle == "active" && previous.DeclarationID != record.DeclarationID {
 		return nil, nil, errors.New("project declaration identity is immutable")
 	}
@@ -673,7 +670,7 @@ func projectSharedNativeCatalog(record installstate.Record) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		transport, err := storedSourceTransport(source)
+		transport, err := domain.NewGitTransport(source.Transport)
 		if err != nil {
 			return nil, err
 		}

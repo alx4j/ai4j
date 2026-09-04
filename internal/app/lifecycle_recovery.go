@@ -206,8 +206,8 @@ func historyPurgeRecords(marker installstate.Marker) (installstate.Record, *inst
 		if journal.DesiredRecord == nil {
 			return installstate.Record{}, nil, false
 		}
-		desired := cloneRecord(*journal.DesiredRecord)
-		before := cloneRecord(desired)
+		desired := journal.DesiredRecord.Clone()
+		before := desired.Clone()
 		before.History = append(before.History, journal.OperationIDs...)
 		slices.Sort(before.History)
 		return before, &desired, before.Validate() == nil
@@ -215,7 +215,7 @@ func historyPurgeRecords(marker installstate.Marker) (installstate.Record, *inst
 		if journal.ExpectedRecord == nil {
 			return installstate.Record{}, nil, false
 		}
-		before := cloneRecord(*journal.ExpectedRecord)
+		before := journal.ExpectedRecord.Clone()
 		return before, nil, before.Validate() == nil
 	default:
 		return installstate.Record{}, nil, false

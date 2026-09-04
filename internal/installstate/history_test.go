@@ -28,8 +28,14 @@ func TestHistoryStagesCommitsLoadsAndPurgesOpaqueOwnedMaterial(t *testing.T) {
 	if pending, present, err := store.LoadOperationHistory(record.InstallationID, entry.OperationID); err != nil || !present || pending.Committed {
 		t.Fatalf("operation history = %#v, present:%t, err:%v", pending, present, err)
 	}
+	if pending, present, err := store.LoadHistoryEntry(record.InstallationID, entry.OperationID); err != nil || present {
+		t.Fatalf("pending history entry = %#v, present:%t, err:%v", pending, present, err)
+	}
 	if err := store.CommitHistory(entry); err != nil {
 		t.Fatal(err)
+	}
+	if committed, present, err := store.LoadHistoryEntry(record.InstallationID, entry.OperationID); err != nil || !present || !committed.Committed {
+		t.Fatalf("committed history entry = %#v, present:%t, err:%v", committed, present, err)
 	}
 	entries, err := store.LoadHistory(record.InstallationID)
 	if err != nil || len(entries) != 1 || string(entries[0].RulesAfter) != "rules" {
@@ -158,7 +164,7 @@ func TestHistoryScopeIdentityDoesNotDependOnCurrentFilesystemState(t *testing.T)
 	root := t.TempDir()
 	before := testRecord()
 	before.ScopeRoot = root
-	after := cloneRecord(before)
+	after := before.Clone()
 	after.ScopeRoot = strings.ToUpper(root)
 	entry := HistoryEntry{
 		SchemaVersion:  HistorySchemaVersion,
@@ -329,7 +335,7 @@ func TestRestorableHistoryRequiresCanonicalArtifactSetForEveryActivePackage(t *t
 func TestHistoryEntryRejectsChangedLogicalInstallationIdentity(t *testing.T) {
 	t.Parallel()
 	before := testRecord()
-	after := cloneRecord(before)
+	after := before.Clone()
 	after.ToolkitID = "other-toolkit"
 	entry := HistoryEntry{
 		SchemaVersion:  HistorySchemaVersion,

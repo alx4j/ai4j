@@ -1,9 +1,6 @@
 package app
 
 import (
-	"errors"
-	"strings"
-
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/domain"
 	"github.com/alx4j/ai4j/internal/installstate"
@@ -51,24 +48,9 @@ func storedSourceRemote(source installstate.Source) (gitremote.Remote, error) {
 	if err != nil {
 		return gitremote.Remote{}, err
 	}
-	transport, err := storedSourceTransport(source)
+	transport, err := domain.NewGitTransport(source.Transport)
 	if err != nil {
 		return gitremote.Remote{}, err
 	}
-	remote, err := gitremote.ReconstructRemote(identity, transport)
-	if err != nil {
-		return gitremote.Remote{}, err
-	}
-	return remote, nil
-}
-
-func storedSourceTransport(source installstate.Source) (domain.GitTransport, error) {
-	if source.Transport != "" {
-		return domain.NewGitTransport(source.Transport)
-	}
-	if (source.Mode == "github" || source.Mode == "") && strings.HasPrefix(source.Repository, "github.com/") {
-		return domain.HTTPSGitTransport(), nil
-	}
-	var transport domain.GitTransport
-	return transport, errors.New("stored Git transport is unavailable")
+	return gitremote.ReconstructRemote(identity, transport)
 }

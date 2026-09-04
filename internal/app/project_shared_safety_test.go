@@ -294,7 +294,7 @@ func TestProjectSharedStatusAndRecoveryIncludeNativeCatalog(t *testing.T) {
 	if err := os.WriteFile(path, []byte("status drift\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.service.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	response, err = status.Status(context.Background(), statusRequest)
 	if err != nil {

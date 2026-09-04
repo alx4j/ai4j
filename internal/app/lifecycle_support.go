@@ -270,31 +270,8 @@ func cloneRecordPtr(record *installstate.Record) *installstate.Record {
 	if record == nil {
 		return nil
 	}
-	copy := cloneRecord(*record)
+	copy := record.Clone()
 	return &copy
-}
-
-func cloneRecord(record installstate.Record) installstate.Record {
-	record.Selection.ResolvedBundles = slices.Clone(record.Selection.ResolvedBundles)
-	record.Selection.ResolvedAssets = slices.Clone(record.Selection.ResolvedAssets)
-	record.Packages = slices.Clone(record.Packages)
-	record.Components = slices.Clone(record.Components)
-	for index := range record.Components {
-		record.Components[index].Selection.ResolvedBundles = slices.Clone(record.Components[index].Selection.ResolvedBundles)
-		record.Components[index].Selection.ResolvedAssets = slices.Clone(record.Components[index].Selection.ResolvedAssets)
-		record.Components[index].Packages = slices.Clone(record.Components[index].Packages)
-		if record.Components[index].Source.RequestedRef != nil {
-			value := *record.Components[index].Source.RequestedRef
-			record.Components[index].Source.RequestedRef = &value
-		}
-	}
-	record.NativeResources = slices.Clone(record.NativeResources)
-	record.History = slices.Clone(record.History)
-	if record.Source.RequestedRef != nil {
-		value := *record.Source.RequestedRef
-		record.Source.RequestedRef = &value
-	}
-	return record
 }
 
 func cloneNativeArtifacts(artifacts []installstate.NativeArtifact) []installstate.NativeArtifact {

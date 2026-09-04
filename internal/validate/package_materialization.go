@@ -2,7 +2,6 @@ package validate
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -96,12 +95,41 @@ func (s Service) validateSelectedClaudePackages(ctx context.Context, workspacePa
 		if err := materializeSelectedPackage(stage, unit.ID, workspacePath, unit, model, resolved.assets, cli.BuildTargetClaude); err != nil {
 			return err
 		}
-		nativeContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		native, runErr := s.config.Runner.Run(nativeContext, filepath.Join(stage, unit.ID), claude, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
-		cancel()
-		if runErr != nil || native.ExitCode != 0 {
-			return errors.New("Claude rejected the selected native package")
+		if err := s.validateClaudePackage(ctx, filepath.Join(stage, unit.ID), claude); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func (s Service) validateRenderedClaudePackages(ctx context.Context, stage string) error {
+	claude, _ := s.config.Runner.LookPath("claude")
+	roots := []string{filepath.Join(stage, "plugin")}
+	if entries, err := os.ReadDir(filepath.Join(stage, "plugins")); err == nil {
+		roots = roots[:0]
+		for _, entry := range entries {
+			if entry.IsDir() {
+				roots = append(roots, filepath.Join(stage, "plugins", entry.Name()))
+			}
+		}
+	}
+	for _, root := range roots {
+		if info, err := os.Stat(root); err != nil || !info.IsDir() {
+			continue
+		}
+		if err := s.validateClaudePackage(ctx, root, claude); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Service) validateClaudePackage(ctx context.Context, root, claude string) error {
+	nativeContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	native, err := s.config.Runner.Run(nativeContext, root, claude, []string{"plugin", "validate", ".", "--strict"}, claudeEnvironment())
+	if err != nil || native.ExitCode != 0 {
+		return errNativeBuildValidation
 	}
 	return nil
 }

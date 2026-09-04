@@ -59,7 +59,7 @@ func productionOtherCommands(build buildinfo.Info, tool string) OtherCommandsFac
 		}
 		router := commandRouter{validation: validator}
 		router.lifecycle = newLifecycleService(validator, state, runner, home, claudeRoot, build, acquire)
-		router.status = statusService{validation: validator, state: state, home: home}
+		router.status = statusService{validation: validator, state: state}
 		router.doctor = newDoctorService(state, router.status, validator, runner)
 		return newCommandHandler(router, state.DataRoot(), tool), nil
 	}

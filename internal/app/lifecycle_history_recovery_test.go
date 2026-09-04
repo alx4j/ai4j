@@ -15,7 +15,7 @@ import (
 func TestLifecycleHistoryPurgeDoesNotOverwriteAStalePreparedRecord(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	before := installUpdatedHistory(t, &harness)
-	changed := cloneRecord(before)
+	changed := before.Clone()
 	changed.Health = "drifted"
 	originalNow := harness.service.now
 	nowCalls := 0
@@ -56,7 +56,7 @@ func TestLifecycleHistoryPurgeRecoveryRollsForwardPartialDeletion(t *testing.T) 
 		t.Fatalf("history = %#v, %v", entries, err)
 	}
 	selected := historyEntryIDs(entries)
-	desired := cloneRecord(before)
+	desired := before.Clone()
 	desired.History = nil
 	stageHistoryPurge(t, &harness, before, &desired, selected)
 	if err := harness.store.DeleteHistory(before.InstallationID, selected[:1]); err != nil {
@@ -132,7 +132,7 @@ func TestLifecycleHistoryPurgeRecoveryFailsClosedWhenRetainedHistoryIsMissing(t 
 	}
 	ids := historyEntryIDs(entries)
 	selected := ids[:1]
-	desired := cloneRecord(before)
+	desired := before.Clone()
 	desired.History = ids[1:]
 	stageHistoryPurge(t, &harness, before, &desired, selected)
 	if err := harness.store.DeleteHistory(before.InstallationID, ids); err != nil {

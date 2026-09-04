@@ -151,7 +151,7 @@ func TestLifecycleStateCommitDoesNotOverwriteAStalePreparedRecord(t *testing.T) 
 		t.Fatalf("install = %#v, %v", response.Result(), err)
 	}
 	before, _, _ := harness.store.Load()
-	changed := cloneRecord(before)
+	changed := before.Clone()
 	changed.Health = "drifted"
 	harness.validator.update = true
 	request := parseRequest[cli.UpdateRequest](t, "update", before.InstallationID)

@@ -149,40 +149,6 @@ func TestInstallReusesCanonicalScopeRootAcrossEquivalentSpellings(t *testing.T) 
 	}
 }
 
-func TestInstallationIdentityIncludesStableCoordinates(t *testing.T) {
-	identity := installstate.Record{
-		InstallationID: "installation-001",
-		ToolkitID:      "ai4j",
-		Target:         "claude",
-		Scope:          "user",
-		ScopeRoot:      filepath.Join(t.TempDir(), "scope"),
-	}
-	equivalent := identity
-	equivalent.ScopeRoot = filepath.Join(identity.ScopeRoot, ".")
-	if !sameInstallationIdentity(identity, equivalent) {
-		t.Fatal("equivalent canonical scope roots changed the installation identity")
-	}
-
-	for _, test := range []struct {
-		name   string
-		mutate func(*installstate.Record)
-	}{
-		{name: "installation ID", mutate: func(record *installstate.Record) { record.InstallationID = "installation-002" }},
-		{name: "toolkit ID", mutate: func(record *installstate.Record) { record.ToolkitID = "other-toolkit" }},
-		{name: "target", mutate: func(record *installstate.Record) { record.Target = "codex" }},
-		{name: "scope", mutate: func(record *installstate.Record) { record.Scope = "project-local" }},
-		{name: "canonical scope root", mutate: func(record *installstate.Record) { record.ScopeRoot = filepath.Join(record.ScopeRoot, "other") }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			changed := identity
-			test.mutate(&changed)
-			if sameInstallationIdentity(identity, changed) {
-				t.Fatal("changed installation identity was accepted")
-			}
-		})
-	}
-}
-
 func TestLifecycleClaudeUserLifecycleRetainsRollbackHistoryAndTombstone(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
@@ -555,7 +521,7 @@ func TestTransitionVerificationRequiresRemovedPackagesToBeAbsent(t *testing.T) {
 	if err != nil || !present {
 		t.Fatalf("load flattened package set = %#v, %t, %v", before, present, err)
 	}
-	desired := cloneRecord(before)
+	desired := before.Clone()
 	desired.Packages = slices.Clone(before.Packages[:1])
 	desired.NativeResources = nativeResources(desired.Packages, desired.MarketplaceID)
 
@@ -739,6 +705,50 @@ func TestLifecycleDryRunsReturnPlansWithoutLockingPromptingOrMutation(t *testing
 	}
 }
 
+func TestLifecycleUpdateCanPreviewReferenceChangeWithoutCommitPrecondition(t *testing.T) {
+	harness := newLifecycleHarness(t)
+	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	response, err := harness.service.Install(context.Background(), install, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("install = %#v, %v", response.Result(), err)
+	}
+	record, present, err := harness.store.Load()
+	if err != nil || !present {
+		t.Fatalf("installed record: present=%t err=%v", present, err)
+	}
+	harness.validator.update = true
+	harness.service.acquire = func(context.Context) (func() error, error) {
+		t.Fatal("preview or rejected update acquired the mutation lock")
+		return nil, nil
+	}
+	nativeCalls := len(harness.native.commands)
+	prompt := new(bytes.Buffer)
+	commandIO := CommandIO{Input: strings.NewReader("yes\n"), Output: prompt, Interactive: true}
+	arguments := []string{"update", record.InstallationID, "--ref", strings.Repeat("b", 40)}
+
+	preview := parseRequest[cli.UpdateRequest](t, append(slices.Clone(arguments), "--dry-run")...)
+	response, err = harness.service.Update(context.Background(), preview, commandIO)
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("preview = %#v, %v", response.Result(), err)
+	}
+	if _, ok := response.Data().(cli.PlanData); !ok {
+		t.Fatalf("preview data = %T, want cli.PlanData", response.Data())
+	}
+	update := parseRequest[cli.UpdateRequest](t, append(slices.Clone(arguments), "--yes")...)
+	response, err = harness.service.Update(context.Background(), update, commandIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems := response.Result().Errors()
+	if response.Result().ExitCode() != result.ExitConflict || len(problems) != 1 || problems[0].Code() != "expected_commit_required" {
+		t.Fatalf("update without precondition = %#v", response.Result())
+	}
+	current, present, err := harness.store.Load()
+	if err != nil || !present || !reflect.DeepEqual(current, record) || prompt.Len() != 0 || len(harness.native.commands) != nativeCalls {
+		t.Fatalf("preview or rejected update changed state or prompted: present=%t err=%v", present, err)
+	}
+}
+
 func TestLifecycleWindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	dataRoot := filepath.Join(t.TempDir(), "AI4J")
@@ -776,7 +786,7 @@ func TestLifecycleWindowsClaudeUserJourneyUsesWindowsStateAndHost(t *testing.T) 
 	if response, err := harness.service.Sync(context.Background(), sync, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("sync = %#v, %v", response.Result(), err)
 	}
-	status := statusService{validation: harness.validator, state: store, home: harness.service.home}
+	status := statusService{validation: harness.validator, state: store}
 	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	if response, err := status.Status(context.Background(), statusRequest); err != nil || response.Result().ExitCode() != result.ExitSuccess {
 		t.Fatalf("status = %#v, %v", response.Result(), err)
@@ -1197,7 +1207,7 @@ func TestLifecycleClaudeProjectSharedJourneyPreservesUnrelatedSettings(t *testin
 			t.Fatalf("history copied unrelated project settings: %#v", entry)
 		}
 	}
-	status := statusService{validation: harness.validator, state: harness.store, home: harness.service.home}
+	status := statusService{validation: harness.validator, state: harness.store}
 	statusRequest := parseRequest[cli.StatusRequest](t, "status", record.InstallationID)
 	harness.native.marketplaces[record.MarketplaceID] = false
 	if response, err = status.Status(context.Background(), statusRequest); err != nil || response.Result().ExitCode() != result.ExitSuccess {
@@ -1691,7 +1701,7 @@ func TestLifecycleRecoveryDoesNotOverwriteStateChangedAfterItsSnapshot(t *testin
 	if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 		t.Fatal(err)
 	}
-	changed := cloneRecord(before)
+	changed := before.Clone()
 	changed.Health = "drifted"
 	inspections := 0
 	var hookErr error

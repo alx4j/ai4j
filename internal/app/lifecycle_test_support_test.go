@@ -78,15 +78,15 @@ func testInstallationRecord(refKind, commit string) installstate.Record {
 	requested := "main"
 	scopeRoot, _ := filepath.Abs(".")
 	return installstate.Record{
-		SchemaVersion: installstate.SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j",
+		SchemaVersion: installstate.SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j", ToolkitVersion: "1.0.0",
 		Packages:      []installstate.NativePackage{{ID: "ai4j-default", Path: "plugins/ai4j-default"}},
 		MarketplaceID: "ai4j",
-		Source:        installstate.Source{Mode: "github", Selection: "explicit", Repository: "github.com/alx4j/ai4j", RequestedRef: &requested, RefKind: refKind, Commit: commit, RenderedDigest: strings.Repeat("e", 64)},
+		Source:        installstate.Source{Mode: "git", Transport: "https", Selection: "explicit", Repository: "github.com/alx4j/ai4j", RequestedRef: &requested, RefKind: refKind, Commit: commit, RenderedDigest: strings.Repeat("e", 64)},
 		Target:        "claude", Host: "darwin-arm64", Scope: "user", ScopeRoot: scopeRoot, Lifecycle: "active",
 		Selection:       installstate.Selection{RequestedBundle: "default", ResolvedBundles: []string{"default"}, ResolvedAssets: []string{"ai4j-rules"}},
 		NativeResources: []string{"claude:ai4j-default@ai4j", "claude:marketplace:ai4j"}, Health: "healthy", AI4JVersion: "0.0.0-dev",
-		Catalog:       installstate.OwnedFile{Path: "state/catalog/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
-		Rules:         installstate.OwnedFile{Path: ".claude/rules/ai4j.md", Checksum: strings.Repeat("f", 64)},
+		Catalog:       installstate.OwnedFile{Path: "state/catalogs/installation-001/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
+		Rules:         installstate.OwnedFile{Path: "rules/ai4j-installation-001.md", Checksum: strings.Repeat("f", 64)},
 		LastOperation: installstate.LastOperation{ID: "operation-001", Timestamp: "2026-08-24T12:00:00Z"},
 	}
 }

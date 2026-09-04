@@ -210,23 +210,30 @@ type ContentItem struct {
 }
 
 func NewContentItem(componentType ComponentType, identifier, sourcePath, checksum string, change ContentChange, execution *Execution) (ContentItem, error) {
-	cleanPath := path.Clean(sourcePath)
-	if !validComponentType(componentType) || !contentIdentifierPattern.MatchString(identifier) || !boundedText(sourcePath, 1024, false) || cleanPath != sourcePath || cleanPath == "." || strings.HasPrefix(cleanPath, "../") || strings.HasPrefix(cleanPath, "/") || !validSHA256(checksum) || !change.valid() {
-		return ContentItem{}, fmt.Errorf("active-content item is incomplete")
+	value := ContentItem{componentType: componentType, identifier: identifier, sourcePath: sourcePath, checksum: checksum, change: change, execution: execution}
+	if err := value.validate(); err != nil {
+		return ContentItem{}, err
 	}
-	wantsExecution := componentType == ComponentScript || componentType == ComponentBinary || componentType == ComponentMCP
-	if wantsExecution != (execution != nil) {
-		return ContentItem{}, fmt.Errorf("component execution disclosure is inconsistent")
-	}
-	var owned *Execution
 	if execution != nil {
-		copy := execution.clone()
-		if !copy.valid() {
-			return ContentItem{}, fmt.Errorf("execution disclosure is invalid")
-		}
-		owned = &copy
+		owned := execution.clone()
+		value.execution = &owned
 	}
-	return ContentItem{componentType: componentType, identifier: identifier, sourcePath: sourcePath, checksum: checksum, change: change, execution: owned}, nil
+	return value, nil
+}
+
+func (v ContentItem) validate() error {
+	cleanPath := path.Clean(v.sourcePath)
+	if !validComponentType(v.componentType) || !contentIdentifierPattern.MatchString(v.identifier) || !boundedText(v.sourcePath, 1024, false) || cleanPath != v.sourcePath || cleanPath == "." || strings.HasPrefix(cleanPath, "../") || strings.HasPrefix(cleanPath, "/") || !validSHA256(v.checksum) || !v.change.valid() {
+		return fmt.Errorf("active-content item is incomplete")
+	}
+	wantsExecution := v.componentType == ComponentScript || v.componentType == ComponentBinary || v.componentType == ComponentMCP
+	if wantsExecution != (v.execution != nil) {
+		return fmt.Errorf("component execution disclosure is inconsistent")
+	}
+	if v.execution != nil && !v.execution.valid() {
+		return fmt.Errorf("execution disclosure is invalid")
+	}
+	return nil
 }
 func (v ContentItem) ComponentType() ComponentType { return v.componentType }
 func (v ContentItem) Identifier() string           { return v.identifier }
@@ -975,11 +982,11 @@ func NewComposedInstallation(id domain.InstallationID, nativePluginIDs []string,
 }
 
 func NewInstallation(id domain.InstallationID, toolkitID string, nativePluginIDs []string, source RecordedSource, toolkitVersion, cliVersion, expectedNativeVersion string) (Installation, error) {
-	pluginIDs := uniqueSortedStrings(nativePluginIDs)
-	if !id.Valid() || !hyphenatedIdentifierPattern.MatchString(toolkitID) || len(pluginIDs) == 0 || len(pluginIDs) > 256 || !hasUniqueSortedPluginIDs(pluginIDs) || !source.valid() || !boundedText(toolkitVersion, 128, false) || !boundedText(cliVersion, 128, false) || (expectedNativeVersion != "" && !boundedText(expectedNativeVersion, 128, false)) {
+	value := Installation{id: id, toolkitID: toolkitID, nativePluginIDs: uniqueSortedStrings(nativePluginIDs), source: source, toolkitVersion: toolkitVersion, cliVersion: cliVersion, expectedNativeVersion: expectedNativeVersion}
+	if !value.valid() {
 		return Installation{}, fmt.Errorf("installation is incomplete")
 	}
-	return Installation{id: id, toolkitID: toolkitID, nativePluginIDs: pluginIDs, source: source, toolkitVersion: toolkitVersion, cliVersion: cliVersion, expectedNativeVersion: expectedNativeVersion}, nil
+	return value, nil
 }
 func (i Installation) ID() domain.InstallationID { return i.id }
 func (i Installation) ToolkitID() string         { return i.toolkitID }
@@ -1090,10 +1097,7 @@ type NativeStateInput struct {
 }
 
 func NewNativeState(input NativeStateInput) (NativeState, error) {
-	if !validNativeRegistration(input.Registration) || !validNativeInstallation(input.Installation) || !validNativeEnablement(input.Enablement) || !validNativeActivation(input.Activation) || !validNativeReload(input.Reload) || !validNativeNextSession(input.NextSession) || !validNativePolicy(input.Policy) || (input.Version != "" && !boundedText(input.Version, 128, false)) || !validNativeVersionStatus(input.VersionStatus) {
-		return NativeState{}, fmt.Errorf("native state contains an unknown value")
-	}
-	return NativeState{
+	value := NativeState{
 		registration:  input.Registration,
 		installation:  input.Installation,
 		enablement:    input.Enablement,
@@ -1103,7 +1107,11 @@ func NewNativeState(input NativeStateInput) (NativeState, error) {
 		policy:        input.Policy,
 		version:       input.Version,
 		versionStatus: input.VersionStatus,
-	}, nil
+	}
+	if !value.valid() {
+		return NativeState{}, fmt.Errorf("native state contains an unknown value")
+	}
+	return value, nil
 }
 func (s NativeState) Registration() NativeRegistration   { return s.registration }
 func (s NativeState) Installation() NativeInstallation   { return s.installation }
@@ -1705,8 +1713,7 @@ func sortedConflicts(values []Conflict) []Conflict {
 }
 
 func (v ContentItem) valid() bool {
-	_, err := NewContentItem(v.componentType, v.identifier, v.sourcePath, v.checksum, v.change, v.execution)
-	return err == nil
+	return v.validate() == nil
 }
 func (a Action) valid() bool {
 	return a.sequence > 0 && validActionOwner(a.owner) && validActionKind(a.kind) && boundedText(a.resource, 256, false) && a.expectedPrecondition.valid() && a.proposedPostcondition.valid() && validRecoveryRequirement(a.recoveryRequirement)
@@ -1722,22 +1729,10 @@ func (i Installation) valid() bool {
 	if len(i.components) != 0 && (!validRecordedComponents(i.components) || i.toolkitID != "composition" || i.source != i.components[0].source) {
 		return false
 	}
-	_, err := NewInstallation(i.id, i.toolkitID, i.nativePluginIDs, i.source, i.toolkitVersion, i.cliVersion, i.expectedNativeVersion)
-	return err == nil
+	return i.id.Valid() && hyphenatedIdentifierPattern.MatchString(i.toolkitID) && len(i.nativePluginIDs) > 0 && len(i.nativePluginIDs) <= 256 && hasUniqueSortedPluginIDs(i.nativePluginIDs) && i.source.valid() && boundedText(i.toolkitVersion, 128, false) && boundedText(i.cliVersion, 128, false) && (i.expectedNativeVersion == "" || boundedText(i.expectedNativeVersion, 128, false))
 }
 func (s NativeState) valid() bool {
-	_, err := NewNativeState(NativeStateInput{
-		Registration:  s.registration,
-		Installation:  s.installation,
-		Enablement:    s.enablement,
-		Activation:    s.activation,
-		Reload:        s.reload,
-		NextSession:   s.nextSession,
-		Policy:        s.policy,
-		Version:       s.version,
-		VersionStatus: s.versionStatus,
-	})
-	return err == nil
+	return validNativeRegistration(s.registration) && validNativeInstallation(s.installation) && validNativeEnablement(s.enablement) && validNativeActivation(s.activation) && validNativeReload(s.reload) && validNativeNextSession(s.nextSession) && validNativePolicy(s.policy) && (s.version == "" || boundedText(s.version, 128, false)) && validNativeVersionStatus(s.versionStatus)
 }
 
 func nativeVersionSemantics(installation *Installation, native NativeState) bool {

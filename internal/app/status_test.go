@@ -23,17 +23,34 @@ import (
 
 func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	t.Parallel()
-	home, store, first := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, first := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	second := first
 	second.InstallationID = "installation-002"
 	second.ToolkitID = "zeta-toolkit"
 	second.Packages = []installstate.NativePackage{{ID: "zeta-plugin", Path: "plugins/zeta-plugin"}}
 	second.NativeResources = []string{"claude:marketplace:ai4j", "claude:zeta-plugin@ai4j"}
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
+	for _, pair := range [][2]string{
+		{filepath.Join(store.DataRoot(), filepath.FromSlash(first.Catalog.Path)), filepath.Join(store.DataRoot(), filepath.FromSlash(second.Catalog.Path))},
+		{filepath.Join(first.ScopeRoot, filepath.FromSlash(first.Rules.Path)), filepath.Join(second.ScopeRoot, filepath.FromSlash(second.Rules.Path))},
+	} {
+		contents, err := os.ReadFile(pair[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(pair[1]), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pair[1], contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := store.SaveNew(second); err != nil {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
-	service := statusService{validation: validator, state: store, home: home}
+	service := statusService{validation: validator, state: store}
 	request, err := cli.Parse([]string{"ai4j", "list", "--target", "claude", "--scope", "user", "--json"})
 	if err != nil {
 		t.Fatal(err)
@@ -67,13 +84,13 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 
 func TestStatusReportsInstalledSourceNativeAndOwnedStateWithoutMutation(t *testing.T) {
 	t.Parallel()
-	home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	stateBefore, err := os.ReadFile(store.Path())
 	if err != nil {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
-	service := statusService{validation: validator, state: store, home: home}
+	service := statusService{validation: validator, state: store}
 
 	response, err := service.Status(context.Background(), statusRequest(t))
 	if err != nil {
@@ -122,7 +139,7 @@ func TestStatusReportsMissingSelectedInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t}
-	service := statusService{validation: validator, state: store, home: home}
+	service := statusService{validation: validator, state: store}
 
 	response, err := service.Status(context.Background(), statusRequest(t))
 	if err != nil {
@@ -169,11 +186,11 @@ func TestStatusClassifiesOrdinaryOwnedFileDrift(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
-			test.apply(t, filepath.Join(home, filepath.FromSlash(record.Rules.Path)))
+			store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+			test.apply(t, filepath.Join(record.ScopeRoot, filepath.FromSlash(record.Rules.Path)))
 			validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
 
-			response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+			response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,13 +213,13 @@ func TestStatusClassifiesOrdinaryOwnedFileDrift(t *testing.T) {
 
 func TestStatusReportsPinnedSourceAndCurrentDriftTogether(t *testing.T) {
 	t.Parallel()
-	home, store, record := prepareStatusInstallation(t, "commit", strings.Repeat("a", 40))
-	if err := os.WriteFile(filepath.Join(home, filepath.FromSlash(record.Rules.Path)), []byte("changed rules"), 0o600); err != nil {
+	store, record := prepareStatusInstallation(t, "commit", strings.Repeat("a", 40))
+	if err := os.WriteFile(filepath.Join(record.ScopeRoot, filepath.FromSlash(record.Rules.Path)), []byte("changed rules"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +230,7 @@ func TestStatusReportsPinnedSourceAndCurrentDriftTogether(t *testing.T) {
 
 func TestStatusTreatsArchivedInstallationAsIntentionallyInactive(t *testing.T) {
 	t.Parallel()
-	home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	before := record
 	record.Lifecycle = "archived"
 	record.Health = "healthy"
@@ -225,7 +242,7 @@ func TestStatusTreatsArchivedInstallationAsIntentionallyInactive(t *testing.T) {
 	}
 	validator := &statusValidationStub{t: t}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +262,7 @@ func TestStatusTreatsArchivedInstallationAsIntentionallyInactive(t *testing.T) {
 
 func TestStatusReportsInterruptedOperationWithoutRepair(t *testing.T) {
 	t.Parallel()
-	home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	marker, err := installstate.NewResourceMarker("install", "operation-002", record.InstallationID, record.Source.Commit, append(record.NativeResources,
 		"owned:"+record.Catalog.Path,
 		"owned:state/installation.json",
@@ -260,7 +277,7 @@ func TestStatusReportsInterruptedOperationWithoutRepair(t *testing.T) {
 	markerBefore, _ := os.ReadFile(store.MarkerPath())
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +308,7 @@ func TestStatusReportsUnsupportedStateSchemaWithoutRepair(t *testing.T) {
 	}
 	validator := &statusValidationStub{t: t}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,10 +332,10 @@ func TestStatusDistinguishesDisabledAndMissingNativePlugin(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			home, store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+			store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 			validator := &statusValidationStub{t: t, native: test.observation}
 
-			response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+			response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -335,14 +352,14 @@ func TestStatusDistinguishesDisabledAndMissingNativePlugin(t *testing.T) {
 
 func TestStatusWarnsWhenNativeStateCannotBeObserved(t *testing.T) {
 	t.Parallel()
-	home, store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	problem, err := result.NewProblem("native_inspection_failed", "Claude plugin state could not be inspected", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t, nativeProblem: &problem}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,14 +394,14 @@ func TestStatusCheckUpdatesClassifiesStoredReferences(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			home, store, _ := prepareStatusInstallation(t, test.refKind, test.commit)
+			store, _ := prepareStatusInstallation(t, test.refKind, test.commit)
 			stateBefore, err := os.ReadFile(store.Path())
 			if err != nil {
 				t.Fatal(err)
 			}
 			validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}, update: test.update}
 
-			response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+			response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -411,7 +428,7 @@ func TestStatusChecksLocalDevelopmentSourceDigest(t *testing.T) {
 		{name: "update available", current: strings.Repeat("d", 64), disposition: result.UpdateAvailable},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+			store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 			before := record
 			checkout := t.TempDir()
 			record.Source = installstate.Source{
@@ -432,7 +449,7 @@ func TestStatusChecksLocalDevelopmentSourceDigest(t *testing.T) {
 				t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true},
 				selection: validation.LifecycleSelection{Source: source},
 			}
-			response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+			response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -445,7 +462,7 @@ func TestStatusChecksLocalDevelopmentSourceDigest(t *testing.T) {
 
 func TestStatusPreservesSpecificUpdateCheckProblem(t *testing.T) {
 	t.Parallel()
-	home, store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	store, _ := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
 	problem, err := result.NewProblem("git_executable_unavailable", "Git is required to check this toolkit source", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -455,7 +472,7 @@ func TestStatusPreservesSpecificUpdateCheckProblem(t *testing.T) {
 		update: validation.UpdateReport{Report: validation.Report{Failure: validation.FailureEnvironment, Problems: []result.Problem{problem}}},
 	}
 
-	response, err := (statusService{validation: validator, state: store, home: home}).Status(context.Background(), statusRequest(t))
+	response, err := (statusService{validation: validator, state: store}).Status(context.Background(), statusRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,10 +528,11 @@ func statusRequest(t *testing.T) cli.StatusRequest {
 	return request.(cli.StatusRequest)
 }
 
-func prepareStatusInstallation(t *testing.T, refKind, commit string) (string, installstate.Store, installstate.Record) {
+func prepareStatusInstallation(t *testing.T, refKind, commit string) (installstate.Store, installstate.Record) {
 	t.Helper()
 	home := t.TempDir()
 	record := testInstallationRecord(refKind, commit)
+	record.ScopeRoot = filepath.Join(home, ".claude")
 	if refKind == "default_branch" {
 		record.Source.RequestedRef = nil
 	}
@@ -529,7 +547,7 @@ func prepareStatusInstallation(t *testing.T, refKind, commit string) (string, in
 	record.Catalog.Checksum = fmt.Sprintf("%x", catalogDigest)
 	record.Rules.Checksum = fmt.Sprintf("%x", rulesDigest)
 	catalogPath := filepath.Join(home, "Library", "Application Support", "ai4j", filepath.FromSlash(record.Catalog.Path))
-	rulesPath := filepath.Join(home, filepath.FromSlash(record.Rules.Path))
+	rulesPath := filepath.Join(record.ScopeRoot, filepath.FromSlash(record.Rules.Path))
 	for path, contents := range map[string][]byte{catalogPath: catalog, rulesPath: rules} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -545,7 +563,7 @@ func prepareStatusInstallation(t *testing.T, refKind, commit string) (string, in
 	if err := store.SaveNew(record); err != nil {
 		t.Fatal(err)
 	}
-	return home, store, record
+	return store, record
 }
 
 func assertStatusDrift(t *testing.T, data cli.StatusData, resource string, want cli.DriftState) {

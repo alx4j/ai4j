@@ -69,6 +69,8 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	}
 	second := testRecord()
 	second.InstallationID = "installation-002"
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
 	second.ToolkitID = "zeta-toolkit"
 	second.Packages = []NativePackage{{ID: "zeta-plugin", Path: "plugins/zeta-plugin"}}
 	second.Target = "codex"
@@ -98,6 +100,8 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	}
 	conflict := first
 	conflict.InstallationID = "installation-003"
+	conflict.Catalog.Path = "state/catalogs/installation-003/.claude-plugin/marketplace.json"
+	conflict.Rules.Path = "rules/ai4j-installation-003.md"
 	conflict.Lifecycle = "archived"
 	conflict.NativeResources = nil
 	if err := store.SaveNew(conflict); !errors.Is(err, ErrStateOccupied) {
@@ -112,8 +116,10 @@ func TestStoreRejectsPersistedDuplicateLogicalIdentities(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := testRecord()
-	second := cloneRecord(first)
+	second := first.Clone()
 	second.InstallationID = "installation-002"
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
 	if err := second.Validate(); err != nil {
 		t.Fatalf("duplicate test record is invalid: %v", err)
 	}
@@ -144,8 +150,10 @@ func TestStoreRejectsPersistedDuplicateActiveAgentActivations(t *testing.T) {
 	}
 	first := testRecord()
 	first.AgentActivation = true
-	second := cloneRecord(first)
+	second := first.Clone()
 	second.InstallationID = "installation-002"
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
 	second.ToolkitID = "other-toolkit"
 	if err := first.Validate(); err != nil {
 		t.Fatalf("first activation record is invalid: %v", err)
@@ -180,8 +188,10 @@ func TestStoreAppliesHostCaseSemanticsToPersistedActivationScopes(t *testing.T) 
 	}
 	first := testRecord()
 	first.AgentActivation = true
-	second := cloneRecord(first)
+	second := first.Clone()
 	second.InstallationID = "installation-002"
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
 	second.ToolkitID = "other-toolkit"
 	second.ScopeRoot = strings.ToUpper(first.ScopeRoot)
 	if second.ScopeRoot == first.ScopeRoot {
@@ -221,8 +231,10 @@ func TestStoreAppliesHostCaseSemanticsToNewActivationScopes(t *testing.T) {
 	if err := store.SaveNew(first); err != nil {
 		t.Fatal(err)
 	}
-	second := cloneRecord(first)
+	second := first.Clone()
 	second.InstallationID = "installation-002"
+	second.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	second.Rules.Path = "rules/ai4j-installation-002.md"
 	second.ToolkitID = "other-toolkit"
 	second.ScopeRoot = strings.ToUpper(first.ScopeRoot)
 	if second.ScopeRoot == first.ScopeRoot {
@@ -272,7 +284,7 @@ func TestStoreRejectsConflictingActiveAgentActivationWritesWithoutMutation(t *te
 	if err := store.SaveNew(active); err != nil {
 		t.Fatal(err)
 	}
-	archived := cloneRecord(active)
+	archived := active.Clone()
 	archived.InstallationID = "installation-002"
 	archived.ToolkitID = "archived-toolkit"
 	archived.Lifecycle = "archived"
@@ -287,16 +299,20 @@ func TestStoreRejectsConflictingActiveAgentActivationWritesWithoutMutation(t *te
 		t.Fatal(err)
 	}
 
-	activated := cloneRecord(archived)
+	activated := archived.Clone()
 	activated.Lifecycle = "active"
 	activated.NativeResources = slices.Clone(active.NativeResources)
 	activated.Catalog = active.Catalog
 	activated.Rules = active.Rules
+	activated.Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	activated.Rules.Path = "rules/ai4j-installation-002.md"
 	if err := store.Replace(archived, activated); !errors.Is(err, ErrStateOccupied) {
 		t.Fatalf("conflicting Replace() error = %v", err)
 	}
-	conflict := cloneRecord(active)
+	conflict := active.Clone()
 	conflict.InstallationID = "installation-003"
+	conflict.Catalog.Path = "state/catalogs/installation-003/.claude-plugin/marketplace.json"
+	conflict.Rules.Path = "rules/ai4j-installation-003.md"
 	conflict.ToolkitID = "new-toolkit"
 	if err := store.SaveNew(conflict); !errors.Is(err, ErrStateOccupied) {
 		t.Fatalf("conflicting SaveNew() error = %v", err)
@@ -318,7 +334,7 @@ func TestStoreReplaceRequiresTheCompleteExpectedRecord(t *testing.T) {
 	if err := store.SaveNew(before); err != nil {
 		t.Fatal(err)
 	}
-	desired := cloneRecord(before)
+	desired := before.Clone()
 	desired.History = []string{"operation-002"}
 	if err := store.Replace(before, desired); err != nil {
 		t.Fatal(err)
@@ -327,12 +343,12 @@ func TestStoreReplaceRequiresTheCompleteExpectedRecord(t *testing.T) {
 	if err != nil || !present || !reflect.DeepEqual(loaded, desired) {
 		t.Fatalf("replaced record = %#v, %t, %v", loaded, present, err)
 	}
-	staleDesired := cloneRecord(desired)
+	staleDesired := desired.Clone()
 	staleDesired.History = nil
 	if err := store.Replace(before, staleDesired); !errors.Is(err, ErrStateChanged) {
 		t.Fatalf("stale Replace() error = %v", err)
 	}
-	changedIdentity := cloneRecord(desired)
+	changedIdentity := desired.Clone()
 	changedIdentity.ToolkitID = "other-toolkit"
 	if err := store.Replace(desired, changedIdentity); !errors.Is(err, ErrMalformedState) {
 		t.Fatalf("identity-changing Replace() error = %v", err)
@@ -498,7 +514,7 @@ func TestRecordRejectsMalformedMultiSourceComposition(t *testing.T) {
 			record.Selection.ResolvedBundles = []string{"common", "composition"}
 		}},
 		{name: "component source is not git", mutate: func(record *Record) {
-			record.Components[0].Source.Mode = "github"
+			record.Components[0].Source.Mode = "archive"
 		}},
 		{name: "component source is not explicit", mutate: func(record *Record) {
 			record.Components[0].Source.Selection = "built_in_default"
@@ -648,12 +664,109 @@ func TestStoreDistinguishesAbsentUnsupportedAndMalformedState(t *testing.T) {
 	}
 }
 
+func TestStoreDistinguishesAbsentAndEmptySnapshots(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := store.Snapshot()
+	if err != nil || snapshot.SchemaVersion != 0 || snapshot.Installations != nil {
+		t.Fatalf("absent Snapshot() = %#v, %v", snapshot, err)
+	}
+	records, err := store.LoadAll()
+	if err != nil || records == nil || len(records) != 0 {
+		t.Fatalf("absent LoadAll() = %#v, %v", records, err)
+	}
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), []byte(`{"schemaVersion":1,"installations":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err = store.Snapshot()
+	if err != nil || snapshot.SchemaVersion != SchemaVersion || snapshot.Installations == nil || len(snapshot.Installations) != 0 {
+		t.Fatalf("empty Snapshot() = %#v, %v", snapshot, err)
+	}
+}
+
+func TestStoreReadsReturnIndependentRecords(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Record{testRecord(), compositionRecord()}
+	want[1].InstallationID = "installation-002"
+	want[1].Catalog.Path = "state/catalogs/installation-002/.claude-plugin/marketplace.json"
+	want[1].Rules.Path = "rules/ai4j-installation-002.md"
+	for index := range want {
+		want[index].History = []string{"operation-history"}
+		if err := store.SaveNew(want[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.LoadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clones := make([]Record, len(snapshot.Installations))
+	for index, record := range snapshot.Installations {
+		clones[index] = record.Clone()
+	}
+
+	for index := range snapshot.Installations {
+		record := &snapshot.Installations[index]
+		if record.Source.RequestedRef != nil {
+			*record.Source.RequestedRef = "changed"
+		}
+		record.Selection.ResolvedBundles[0] = "changed"
+		record.Selection.ResolvedAssets[0] = "changed"
+		record.Packages[0].ID = "changed"
+		record.NativeResources[0] = "changed"
+		record.History[0] = "changed"
+		for componentIndex := range record.Components {
+			component := &record.Components[componentIndex]
+			*component.Source.RequestedRef = "changed"
+			component.Selection.ResolvedBundles[0] = "changed"
+			component.Selection.ResolvedAssets[0] = "changed"
+			component.Packages[0] = "changed"
+		}
+	}
+
+	if !reflect.DeepEqual(records, want) {
+		t.Fatalf("changing a snapshot mutated an independent read: %#v", records)
+	}
+	if !reflect.DeepEqual(clones, want) {
+		t.Fatalf("changing a snapshot mutated its cloned records: %#v", clones)
+	}
+	loaded, err := store.LoadAll()
+	if err != nil || !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("changing a snapshot affected persisted records: %#v, %v", loaded, err)
+	}
+}
+
 func TestRecordRejectsContradictorySourceMetadata(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
 		mutate func(*Record)
 	}{
+		{name: "source mode is absent", mutate: func(record *Record) {
+			record.Source.Mode = ""
+		}},
+		{name: "source mode is unsupported", mutate: func(record *Record) {
+			record.Source.Mode = "archive"
+		}},
+		{name: "toolkit version is absent", mutate: func(record *Record) {
+			record.ToolkitVersion = ""
+		}},
 		{name: "built-in repository changed", mutate: func(record *Record) {
 			record.Source.Selection = "built_in_default"
 			record.Source.Repository = "github.com/example/other"
@@ -684,7 +797,7 @@ func TestRecordRejectsContradictorySourceMetadata(t *testing.T) {
 	}
 }
 
-func TestRecordAcceptsEnterpriseGitSourceAndLegacyGitHubState(t *testing.T) {
+func TestRecordValidatesGitSourceTransport(t *testing.T) {
 	t.Parallel()
 
 	enterprise := testRecord()
@@ -699,19 +812,6 @@ func TestRecordAcceptsEnterpriseGitSourceAndLegacyGitHubState(t *testing.T) {
 	missingTransport.Source.Transport = ""
 	if err := missingTransport.Validate(); !errors.Is(err, ErrMalformedState) {
 		t.Fatalf("missing transport = %v", err)
-	}
-
-	legacy := testRecord()
-	legacy.Source.Mode = "github"
-	legacy.Source.Transport = ""
-	if err := legacy.Validate(); err != nil {
-		t.Fatalf("legacy GitHub state = %v", err)
-	}
-
-	legacyCustomHost := legacy
-	legacyCustomHost.Source.Repository = "gitlab.barclays.example/division/team/toolkit"
-	if err := legacyCustomHost.Validate(); !errors.Is(err, ErrMalformedState) {
-		t.Fatalf("legacy custom-host state = %v", err)
 	}
 
 	contradictoryBuiltIn := testRecord()
@@ -729,6 +829,12 @@ func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
 		name   string
 		mutate func(*Record)
 	}{
+		{name: "catalog belongs to another installation", mutate: func(record *Record) {
+			record.Catalog.Path = "state/catalogs/installation-other/.claude-plugin/marketplace.json"
+		}},
+		{name: "rules belong to another installation", mutate: func(record *Record) {
+			record.Rules.Path = "rules/ai4j-installation-other.md"
+		}},
 		{name: "requested bundle is not resolved", mutate: func(record *Record) {
 			record.Selection.ResolvedBundles = []string{"nested"}
 		}},
@@ -747,7 +853,7 @@ func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
 		{name: "native package path escapes", mutate: func(record *Record) {
 			record.Packages[0].Path = "../plugin"
 		}},
-		{name: "legacy native package names a component", mutate: func(record *Record) {
+		{name: "single-source native package names a component", mutate: func(record *Record) {
 			record.Packages[0].Component = "common"
 		}},
 		{name: "active native resources omit a package", mutate: func(record *Record) {
@@ -765,6 +871,49 @@ func TestRecordRejectsNoncanonicalPackageAndSelectionState(t *testing.T) {
 			test.mutate(&record)
 			if err := record.Validate(); !errors.Is(err, ErrMalformedState) {
 				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRecordSameInstallationUsesIdentityFields(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*Record)
+		want   bool
+	}{
+		{name: "same record", mutate: func(*Record) {}, want: true},
+		{name: "changed operational state", mutate: func(record *Record) {
+			record.Lifecycle = "archived"
+			record.Health = "unknown"
+			record.History = []string{"operation-other"}
+		}, want: true},
+		{name: "different installation ID", mutate: func(record *Record) {
+			record.InstallationID = "installation-other"
+		}},
+		{name: "different toolkit", mutate: func(record *Record) {
+			record.ToolkitID = "other-toolkit"
+		}},
+		{name: "different target", mutate: func(record *Record) {
+			record.Target = "codex"
+		}},
+		{name: "different scope", mutate: func(record *Record) {
+			record.Scope = "project-local"
+		}},
+		{name: "different scope root", mutate: func(record *Record) {
+			record.ScopeRoot = filepath.Join(record.ScopeRoot, "other")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			original := testRecord()
+			other := original.Clone()
+			test.mutate(&other)
+
+			if got := original.SameInstallation(other); got != test.want {
+				t.Fatalf("SameInstallation() = %t, want %t", got, test.want)
 			}
 		})
 	}
@@ -800,14 +949,14 @@ func testRecord() Record {
 	requested := "main"
 	scopeRoot, _ := filepath.Abs(".")
 	return Record{
-		SchemaVersion: SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j",
+		SchemaVersion: SchemaVersion, InstallationID: "installation-001", ToolkitID: "ai4j", ToolkitVersion: "1.0.0",
 		Packages: []NativePackage{{ID: "ai4j-default", Path: "plugins/ai4j-default"}}, MarketplaceID: "ai4j",
-		Source: Source{Mode: "github", Selection: "explicit", Repository: "github.com/alx4j/ai4j", RequestedRef: &requested, RefKind: "branch", Commit: strings.Repeat("a", 40), RenderedDigest: strings.Repeat("d", 64)},
+		Source: Source{Mode: "git", Selection: "explicit", Repository: "github.com/alx4j/ai4j", Transport: "https", RequestedRef: &requested, RefKind: "branch", Commit: strings.Repeat("a", 40), RenderedDigest: strings.Repeat("d", 64)},
 		Target: "claude", Host: "darwin-arm64", Scope: "user", ScopeRoot: scopeRoot, Lifecycle: "active",
 		Selection:       Selection{RequestedBundle: "default", ResolvedBundles: []string{"default"}, ResolvedAssets: []string{"ai4j-rules"}},
 		NativeResources: []string{"claude:ai4j-default@ai4j", "claude:marketplace:ai4j"}, Health: "healthy", AI4JVersion: "0.0.0-dev",
-		Catalog:       OwnedFile{Path: "state/catalog/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
-		Rules:         OwnedFile{Path: ".claude/rules/ai4j.md", Checksum: strings.Repeat("c", 64)},
+		Catalog:       OwnedFile{Path: "state/catalogs/installation-001/.claude-plugin/marketplace.json", Checksum: strings.Repeat("b", 64)},
+		Rules:         OwnedFile{Path: "rules/ai4j-installation-001.md", Checksum: strings.Repeat("c", 64)},
 		LastOperation: LastOperation{ID: "operation-001", Timestamp: "2026-08-24T12:00:00Z"},
 	}
 }

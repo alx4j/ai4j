@@ -78,7 +78,7 @@ func (s *lifecycleService) HistoryPurge(ctx context.Context, request cli.History
 	if err != nil || !present {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureConflict, "installation_not_found", "the selected installation does not exist", result.UpdateNotChecked, nil)
 	}
-	originalRecord := cloneRecord(record)
+	originalRecord := record.Clone()
 	entries, err := s.state.LoadHistory(record.InstallationID)
 	if err != nil {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureRecovery, "history_invalid", "installation history could not be read", result.UpdateNotChecked, nil)
