@@ -12,10 +12,41 @@ import (
 
 const commitOID = "0123456789abcdef0123456789abcdef01234567"
 
+func TestCommandDeclaresPositionalInstallationGrammar(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		command cli.Command
+		want    bool
+	}{
+		{cli.CommandInit, false},
+		{cli.CommandValidate, false},
+		{cli.CommandBuild, false},
+		{cli.CommandInstall, false},
+		{cli.CommandUpdate, true},
+		{cli.CommandSync, true},
+		{cli.CommandList, false},
+		{cli.CommandStatus, true},
+		{cli.CommandDoctor, true},
+		{cli.CommandRollback, true},
+		{cli.CommandUninstall, true},
+		{cli.CommandHistory, true},
+		{cli.CommandHistoryPurge, true},
+		{cli.CommandVersion, false},
+	}
+	for _, test := range tests {
+		t.Run(test.command.String(), func(t *testing.T) {
+			t.Parallel()
+			if got := test.command.UsesPositionalInstallation(); got != test.want {
+				t.Fatalf("UsesPositionalInstallation() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
 		name    string
 		argv    []string
@@ -38,7 +69,7 @@ func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			request, err := parser.Parse(test.argv)
+			request, err := cli.Parse(test.argv)
 			if err != nil {
 				t.Fatalf("Parse() error = %v", err)
 			}
@@ -51,7 +82,6 @@ func TestParserAcceptsEveryCanonicalCommandAndApplicableOption(t *testing.T) {
 
 func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	tests := []struct {
 		command cli.Command
@@ -77,7 +107,7 @@ func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "installation-001", "--operation", "operation-001", "--yes", "--json"}},
 	}
 	for _, test := range tests {
-		request, err := parser.Parse(test.argv)
+		request, err := cli.Parse(test.argv)
 		if err != nil {
 			t.Fatalf("Parse(%q) error = %v", test.argv, err)
 		}
@@ -89,7 +119,6 @@ func TestParserAcceptsCompleteLifecycleGrammar(t *testing.T) {
 
 func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	tests := [][]string{
 		{"ai4j", "validate", "--repo", "alx4j/ai4j", "--source", ".", "--target", "claude"},
@@ -105,7 +134,7 @@ func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 		{"ai4j", "history", "purge", "installation-001", "--expired", "--all", "--yes"},
 	}
 	for _, argv := range tests {
-		if _, err := parser.Parse(argv); err == nil {
+		if _, err := cli.Parse(argv); err == nil {
 			t.Fatalf("Parse(%q) succeeded", argv)
 		}
 	}
@@ -114,8 +143,7 @@ func TestParserRejectsLifecycleMutualExclusions(t *testing.T) {
 func TestParserPreservesTypedOptions(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
-	request, err := parser.Parse([]string{"ai4j", "install", "--ref", "main", "--repo=alx4j/ai4j", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes", "--expected-commit", commitOID, "--json"})
+	request, err := cli.Parse([]string{"ai4j", "install", "--ref", "main", "--repo=alx4j/ai4j", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes", "--expected-commit", commitOID, "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +153,11 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 		!install.Approved() || install.OutputMode() != cli.OutputJSON || !present || commit.String() != commitOID {
 		t.Fatalf("install request lost options: %#v", install)
 	}
-	statusRequest, err := parser.Parse([]string{"ai4j", "status", "installation-001"})
+	statusRequest, err := cli.Parse([]string{"ai4j", "status", "installation-001"})
 	if err != nil || statusRequest.(cli.StatusRequest).InstallationID().String() != "installation-001" {
 		t.Fatalf("status request = %#v, error = %v", statusRequest, err)
 	}
-	listRequest, err := parser.Parse([]string{"ai4j", "list", "--target", "codex", "--scope", "project-local"})
+	listRequest, err := cli.Parse([]string{"ai4j", "list", "--target", "codex", "--scope", "project-local"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +165,7 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 	if !list.HasTarget() || list.Target() != cli.BuildTargetCodex || !list.HasScope() || list.Scope() != cli.ScopeProjectLocal {
 		t.Fatalf("list request lost filters: %#v", list)
 	}
-	buildRequest, err := parser.Parse([]string{"ai4j", "build", "--repo", "alx4j/ai4j", "--ref", "main", "--target", "codex", "--host", "darwin-arm64", "--output", "dist/codex", "--all", "--json"})
+	buildRequest, err := cli.Parse([]string{"ai4j", "build", "--repo", "alx4j/ai4j", "--ref", "main", "--target", "codex", "--host", "darwin-arm64", "--output", "dist/codex", "--all", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +174,7 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 		build.Host() != cli.BuildHostDarwinARM64 || build.Output() != "dist/codex" || !build.SelectAll() || build.OutputMode() != cli.OutputJSON {
 		t.Fatalf("build request lost options: %#v", build)
 	}
-	selectedRequest, err := parser.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist/selected", "--asset", "review-checklist", "--bundle", "default", "--asset", "check-diff"})
+	selectedRequest, err := cli.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist/selected", "--asset", "review-checklist", "--bundle", "default", "--asset", "check-diff"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +182,7 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 	if selected.SelectAll() || !slices.Equal(selected.Assets(), []string{"review-checklist", "check-diff"}) || !slices.Equal(selected.Bundles(), []string{"default"}) {
 		t.Fatalf("selected build request lost options: %#v", selected)
 	}
-	initRequest, err := parser.Parse([]string{"ai4j", "init", "--output", "new-toolkit", "--target", "codex", "--target", "claude", "--examples", "--json"})
+	initRequest, err := cli.Parse([]string{"ai4j", "init", "--output", "new-toolkit", "--target", "codex", "--target", "claude", "--examples", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +195,6 @@ func TestParserPreservesTypedOptions(t *testing.T) {
 func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	accepted := []struct {
 		argv   []string
 		bundle func(cli.Request) string
@@ -182,7 +209,7 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 		},
 	}
 	for _, test := range accepted {
-		request, err := parser.Parse(test.argv)
+		request, err := cli.Parse(test.argv)
 		if err != nil {
 			t.Fatalf("Parse(%q) error = %v", test.argv, err)
 		}
@@ -206,7 +233,7 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--bundle", "review"}, cli.UsageDuplicateOption, "bundle"},
 	}
 	for _, test := range rejected {
-		_, err := parser.Parse(test.argv)
+		_, err := cli.Parse(test.argv)
 		var usage *cli.UsageError
 		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
 			t.Fatalf("Parse(%q) = %v, want %s for %q", test.argv, err, test.issue, test.option)
@@ -217,8 +244,7 @@ func TestParserRequiresExactlyOneLifecycleBundle(t *testing.T) {
 func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
-	twoRequest, err := parser.Parse([]string{
+	twoRequest, err := cli.Parse([]string{
 		"ai4j", "install", "--git-root", "https://github.com/alx4j", "--target", "claude", "--scope", "user",
 		"--bundle", "common@v1", "--bundle", "company@v2",
 	})
@@ -229,7 +255,7 @@ func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
 		t.Fatalf("two-coordinate composition = %#v", coordinates)
 	}
 
-	request, err := parser.Parse([]string{
+	request, err := cli.Parse([]string{
 		"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user",
 		"--bundle", "common@v1.2.3", "--bundle", "company@release/2026-08", "--bundle", "team@v4",
 	})
@@ -257,7 +283,6 @@ func TestParserAcceptsImmutableMultiSourceCoordinates(t *testing.T) {
 func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	digest := strings.Repeat("a", 64)
 	base := []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@v1", "--bundle", "company@v2"}
 	tests := []struct {
@@ -283,14 +308,14 @@ func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 		{name: "hidden tag component", argv: []string{"ai4j", "install", "--git-root", "git@github.com:alx4j", "--target", "claude", "--scope", "user", "--bundle", "common@release/.hidden", "--bundle", "company@v2"}, issue: cli.UsageInvalidOptionValue, option: "bundle"},
 	}
 	for _, test := range tests {
-		_, err := parser.Parse(test.argv)
+		_, err := cli.Parse(test.argv)
 		var usage *cli.UsageError
 		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
 			t.Fatalf("%s: Parse(%q) = %v, want %s %s", test.name, test.argv, err, test.issue, test.option)
 		}
 	}
 
-	_, err := parser.Parse([]string{"ai4j", "sync", "installation-001", "--git-root", "git@github.com:alx4j", "--bundle", "default"})
+	_, err := cli.Parse([]string{"ai4j", "sync", "installation-001", "--git-root", "git@github.com:alx4j", "--bundle", "default"})
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) || usage.Issue() != cli.UsageInapplicableOption || usage.Option() != "git-root" {
 		t.Fatalf("sync --git-root = %v", err)
@@ -300,8 +325,7 @@ func TestParserRejectsInvalidMultiSourceComposition(t *testing.T) {
 func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
-	request, err := parser.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist", "--asset", "review-skill", "--bundle", "review", "--bundle", "tools"})
+	request, err := cli.Parse([]string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist", "--asset", "review-skill", "--bundle", "review", "--bundle", "tools"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +334,7 @@ func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
 		t.Fatalf("build selection = assets %v bundles %v", build.Assets(), build.Bundles())
 	}
 
-	request, err = parser.Parse([]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"})
+	request, err = cli.Parse([]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +346,6 @@ func TestParserKeepsBuildSelectionAndHistoryPurgeAll(t *testing.T) {
 func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		dryRun func(cli.Request) bool
@@ -335,7 +358,7 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 		{[]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) bool { return request.(cli.HistoryPurgeRequest).DryRun() }},
 	}
 	for _, test := range tests {
-		request, err := parser.Parse(test.argv)
+		request, err := cli.Parse(test.argv)
 		if err != nil {
 			t.Fatalf("Parse(%q) error = %v", test.argv, err)
 		}
@@ -348,21 +371,25 @@ func TestParserPreservesDryRunOnEveryModifyingCommand(t *testing.T) {
 func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
-		argv []string
-		id   func(cli.Request) string
+		command cli.Command
+		argv    []string
+		id      func(cli.Request) string
 	}{
-		{[]string{"ai4j", "update", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UpdateRequest).InstallationID().String() }},
-		{[]string{"ai4j", "sync", "installation-001", "--bundle", "default", "--dry-run"}, func(request cli.Request) string { return request.(cli.SyncRequest).InstallationID().String() }},
-		{[]string{"ai4j", "doctor", "installation-001"}, func(request cli.Request) string { return request.(cli.DoctorRequest).InstallationID().String() }},
-		{[]string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.RollbackRequest).InstallationID().String() }},
-		{[]string{"ai4j", "uninstall", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UninstallRequest).InstallationID().String() }},
-		{[]string{"ai4j", "history", "installation-001"}, func(request cli.Request) string { return request.(cli.HistoryRequest).InstallationID().String() }},
-		{[]string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) string { return request.(cli.HistoryPurgeRequest).InstallationID().String() }},
+		{cli.CommandUpdate, []string{"ai4j", "update", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UpdateRequest).InstallationID().String() }},
+		{cli.CommandSync, []string{"ai4j", "sync", "installation-001", "--bundle", "default", "--dry-run"}, func(request cli.Request) string { return request.(cli.SyncRequest).InstallationID().String() }},
+		{cli.CommandStatus, []string{"ai4j", "status", "installation-001"}, func(request cli.Request) string { return request.(cli.StatusRequest).InstallationID().String() }},
+		{cli.CommandDoctor, []string{"ai4j", "doctor", "installation-001"}, func(request cli.Request) string { return request.(cli.DoctorRequest).InstallationID().String() }},
+		{cli.CommandRollback, []string{"ai4j", "rollback", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.RollbackRequest).InstallationID().String() }},
+		{cli.CommandUninstall, []string{"ai4j", "uninstall", "installation-001", "--dry-run"}, func(request cli.Request) string { return request.(cli.UninstallRequest).InstallationID().String() }},
+		{cli.CommandHistory, []string{"ai4j", "history", "installation-001"}, func(request cli.Request) string { return request.(cli.HistoryRequest).InstallationID().String() }},
+		{cli.CommandHistoryPurge, []string{"ai4j", "history", "purge", "installation-001", "--all", "--dry-run"}, func(request cli.Request) string { return request.(cli.HistoryPurgeRequest).InstallationID().String() }},
 	}
 	for _, test := range tests {
-		request, err := parser.Parse(test.argv)
+		if !test.command.UsesPositionalInstallation() {
+			t.Fatalf("%s is not declared as using a positional installation", test.command)
+		}
+		request, err := cli.Parse(test.argv)
 		if err != nil {
 			t.Fatalf("Parse(%q) error = %v", test.argv, err)
 		}
@@ -375,7 +402,6 @@ func TestParserAcceptsInstallationIDImmediatelyAfterLifecycleCommand(t *testing.
 func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		issue  cli.UsageIssue
@@ -389,7 +415,7 @@ func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 		{[]string{"ai4j", "history", "purge", "--all", "installation-001"}, cli.UsageUnexpectedArgument, ""},
 	}
 	for _, test := range tests {
-		_, err := parser.Parse(test.argv)
+		_, err := cli.Parse(test.argv)
 		var usage *cli.UsageError
 		if !errors.As(err, &usage) || usage.Issue() != test.issue || usage.Option() != test.option {
 			t.Fatalf("Parse(%q) = %v, want %s for %q", test.argv, err, test.issue, test.option)
@@ -400,7 +426,6 @@ func TestParserRejectsNonCanonicalInstallationArgumentForms(t *testing.T) {
 func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := [][]string{
 		{"ai4j", "update"},
 		{"ai4j", "sync", "--bundle", "default"},
@@ -412,7 +437,7 @@ func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 		{"ai4j", "history", "purge", "--all"},
 	}
 	for _, argv := range tests {
-		_, err := parser.Parse(argv)
+		_, err := cli.Parse(argv)
 		var usage *cli.UsageError
 		if !errors.As(err, &usage) || usage.Issue() != cli.UsageMissingOptionValue || usage.Option() != "installation" {
 			t.Fatalf("Parse(%q) = %v, want missing installation", argv, err)
@@ -422,7 +447,6 @@ func TestParserRequiresInstallationArgumentForLifecycleCommands(t *testing.T) {
 
 func TestParserBuildReportsMissingRequiredOptionsInCanonicalOrder(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser()
 	tests := []struct {
 		argv   []string
 		option string
@@ -433,7 +457,7 @@ func TestParserBuildReportsMissingRequiredOptionsInCanonicalOrder(t *testing.T) 
 		{argv: []string{"ai4j", "build", "--target", "claude", "--host", "darwin-arm64", "--output", "dist"}, option: "all"},
 	}
 	for _, test := range tests {
-		_, err := parser.Parse(test.argv)
+		_, err := cli.Parse(test.argv)
 		var usage *cli.UsageError
 		if !errors.As(err, &usage) || usage.Issue() != cli.UsageMissingOptionValue || usage.Option() != test.option {
 			t.Fatalf("Parse(%q) = %v, want missing %s", test.argv, err, test.option)
@@ -443,9 +467,8 @@ func TestParserBuildReportsMissingRequiredOptionsInCanonicalOrder(t *testing.T) 
 
 func TestParserValidateRequiresTarget(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser()
 
-	_, err := parser.Parse([]string{"ai4j", "validate"})
+	_, err := cli.Parse([]string{"ai4j", "validate"})
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) || usage.Issue() != cli.UsageMissingOptionValue || usage.Option() != "target" {
 		t.Fatalf("Parse() = %v, want missing target", err)
@@ -454,9 +477,8 @@ func TestParserValidateRequiresTarget(t *testing.T) {
 
 func TestParserValidateRejectsMultipleTargets(t *testing.T) {
 	t.Parallel()
-	parser := cli.NewParser()
 
-	_, err := parser.Parse([]string{"ai4j", "validate", "--target", "claude", "--target", "codex"})
+	_, err := cli.Parse([]string{"ai4j", "validate", "--target", "claude", "--target", "codex"})
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) || usage.Issue() != cli.UsageInvalidOptionValue || usage.Option() != "target" {
 		t.Fatalf("Parse() = %v, want invalid target", err)
@@ -466,7 +488,6 @@ func TestParserValidateRejectsMultipleTargets(t *testing.T) {
 func TestParserPreservesSourceOptionPresence(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
 		name       string
 		argv       []string
@@ -483,7 +504,7 @@ func TestParserPreservesSourceOptionPresence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			request, err := parser.Parse(test.argv)
+			request, err := cli.Parse(test.argv)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -515,7 +536,6 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 		{name: "uninstall", command: []string{"uninstall", "installation-001"}, options: []option{{[]string{"--yes"}, []string{"--yes"}}, {[]string{"--json"}, []string{"--json"}}}},
 		{name: "version", command: []string{"version"}, options: []option{{[]string{"--json"}, []string{"--json"}}}},
 	}
-	parser := cli.NewParser()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -539,7 +559,7 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 					for _, tokens := range selected {
 						argv = append(argv, tokens...)
 					}
-					if _, err := parser.Parse(argv); err != nil {
+					if _, err := cli.Parse(argv); err != nil {
 						t.Fatalf("Parse(%q) error = %v", argv, err)
 					}
 				}
@@ -551,7 +571,6 @@ func TestParserAcceptsEveryApplicableOptionCombination(t *testing.T) {
 func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 	t.Parallel()
 
-	parser := cli.NewParser()
 	tests := []struct {
 		name  string
 		argv  []string
@@ -589,7 +608,7 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := parser.Parse(test.argv)
+			_, err := cli.Parse(test.argv)
 			var usage *cli.UsageError
 			if !errors.As(err, &usage) {
 				t.Fatalf("Parse() error = %v, want UsageError", err)
@@ -604,7 +623,7 @@ func TestParserRejectsEveryNonCanonicalGrammarFamily(t *testing.T) {
 func TestUsageErrorPreservesItsValidationCause(t *testing.T) {
 	t.Parallel()
 
-	_, err := cli.NewParser().Parse([]string{"ai4j", "status", "INVALID"})
+	_, err := cli.Parse([]string{"ai4j", "status", "INVALID"})
 	var usage *cli.UsageError
 
 	if !errors.As(err, &usage) || errors.Unwrap(usage) == nil {
@@ -638,7 +657,6 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 		{name: "history purge", command: []string{"history", "purge", "installation-001"}, options: []option{{name: "operation", value: "operation-001"}, {name: "expired", boolean: true}, {name: "all", boolean: true}, {name: "dry-run", boolean: true}, {name: "yes", boolean: true}, {name: "json", boolean: true}}},
 		{name: "version", command: []string{"version"}, options: []option{{name: "json", boolean: true}}},
 	}
-	parser := cli.NewParser()
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -653,21 +671,21 @@ func TestParserRejectsInvalidFormsForEveryCommandOption(t *testing.T) {
 				if (test.name == "build" || test.name == "install") && candidate.name == "bundle" || test.name == "build" && candidate.name == "asset" || test.name == "validate" && candidate.name == "target" {
 					duplicateIssue = cli.UsageInvalidOptionValue
 				}
-				assertUsageIssue(t, parser, appendCommand(test.command, token, token), duplicateIssue)
+				assertUsageIssue(t, appendCommand(test.command, token, token), duplicateIssue)
 				if candidate.boolean {
-					assertUsageIssue(t, parser, appendCommand(test.command, token+"=true"), cli.UsageUnexpectedOptionValue)
+					assertUsageIssue(t, appendCommand(test.command, token+"=true"), cli.UsageUnexpectedOptionValue)
 				} else {
-					assertUsageIssue(t, parser, appendCommand(test.command, "--"+candidate.name), cli.UsageMissingOptionValue)
-					assertUsageIssue(t, parser, appendCommand(test.command, "--"+candidate.name+"="), cli.UsageEmptyOptionValue)
+					assertUsageIssue(t, appendCommand(test.command, "--"+candidate.name), cli.UsageMissingOptionValue)
+					assertUsageIssue(t, appendCommand(test.command, "--"+candidate.name+"="), cli.UsageEmptyOptionValue)
 				}
 			}
 			for _, name := range []string{"repo", "ref", "source", "git-root", "expected-commit", "expected-source-digest", "yes", "json", "allow-dirty", "target", "host", "output", "all", "asset", "bundle", "examples", "scope", "project", "installation", "conflict-policy", "operation", "test-mcp", "expired", "selection", "force", "dry-run"} {
 				if _, ok := allowed[name]; ok {
 					continue
 				}
-				assertUsageIssue(t, parser, appendCommand(test.command, "--"+name), cli.UsageInapplicableOption)
+				assertUsageIssue(t, appendCommand(test.command, "--"+name), cli.UsageInapplicableOption)
 			}
-			assertUsageIssue(t, parser, appendCommand(test.command, "--future-option"), cli.UsageUnknownOption)
+			assertUsageIssue(t, appendCommand(test.command, "--future-option"), cli.UsageUnknownOption)
 		})
 	}
 }
@@ -677,9 +695,9 @@ func appendCommand(command []string, arguments ...string) []string {
 	return append(argv, arguments...)
 }
 
-func assertUsageIssue(t *testing.T, parser cli.Parser, argv []string, want cli.UsageIssue) {
+func assertUsageIssue(t *testing.T, argv []string, want cli.UsageIssue) {
 	t.Helper()
-	_, err := parser.Parse(argv)
+	_, err := cli.Parse(argv)
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("Parse(%q) error = %v, want UsageError", argv, err)
@@ -697,7 +715,7 @@ func TestParserAcceptsRuntimeExecutableName(t *testing.T) {
 		{`C:\bin\renamed-tool.exe`, "version"},
 		{"/usr/local/bin/renamed-tool", "version"},
 	} {
-		if _, err := cli.NewParser().Parse(argv); err != nil {
+		if _, err := cli.Parse(argv); err != nil {
 			t.Fatalf("Parse(%q) error = %v", argv, err)
 		}
 	}
@@ -708,7 +726,7 @@ func TestUsageErrorsDoNotRetainOrRenderUnknownArguments(t *testing.T) {
 
 	const canary = "secret-canary"
 	unknown := "--" + canary + strings.Repeat("x", 4096)
-	_, err := cli.NewParser().Parse([]string{"ai4j", "version", unknown})
+	_, err := cli.Parse([]string{"ai4j", "version", unknown})
 	var usage *cli.UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("Parse() error = %v, want UsageError", err)

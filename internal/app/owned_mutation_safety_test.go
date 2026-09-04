@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,6 +140,42 @@ func TestReplaceOwnedRepairsPostApprovalRegularOrMissingOwnedFile(t *testing.T) 
 				t.Fatalf("repaired rules = %q, %v", contents, readErr)
 			}
 		})
+	}
+}
+
+func TestLifecycleStateCommitDoesNotOverwriteAStalePreparedRecord(t *testing.T) {
+	harness := newLifecycleHarness(t)
+	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	response, err := harness.service.Install(context.Background(), install, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("install = %#v, %v", response.Result(), err)
+	}
+	before, _, _ := harness.store.Load()
+	changed := cloneRecord(before)
+	changed.Health = "drifted"
+	harness.validator.update = true
+	request := parseRequest[cli.UpdateRequest](t, "update", before.InstallationID)
+	commandsBefore := len(harness.native.commands)
+	input := &ownedApprovalHookReader{
+		reader: strings.NewReader("yes\n"),
+		hook:   func() error { return harness.store.Replace(before, changed) },
+	}
+
+	response, err = harness.service.Update(context.Background(), request, CommandIO{Input: input, Output: io.Discard, Interactive: true})
+
+	problems := response.Result().Errors()
+	if err != nil || input.err != nil || !input.ran || response.Result().Failure() != result.FailureRecovery || len(problems) != 1 || problems[0].Code() != "state_commit_failed" {
+		t.Fatalf("stale state commit = %#v, problems=%v, commandErr=%v hookErr=%v ran=%t", response.Result(), problems, err, input.err, input.ran)
+	}
+	stored, present, loadErr := harness.store.LoadByID(before.InstallationID)
+	if loadErr != nil || !present || stored.Health != changed.Health || stored.LastOperation != changed.LastOperation || !slices.Equal(stored.History, changed.History) || stored.Source.Commit != changed.Source.Commit {
+		t.Fatalf("externally changed state was overwritten: %#v, present=%t, err=%v", stored, present, loadErr)
+	}
+	if len(harness.native.commands) <= commandsBefore {
+		t.Fatal("stale state was detected before the prepared target transition")
+	}
+	if _, present, markerErr := harness.store.LoadMarker(); markerErr != nil || !present {
+		t.Fatalf("recovery marker = present:%t err=%v", present, markerErr)
 	}
 }
 

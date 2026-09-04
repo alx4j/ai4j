@@ -35,14 +35,6 @@ type bundleExpansion struct {
 	assets   []string
 }
 
-func resolveSelection(model validatedManifest, request selection) ([]resolvedAsset, error) {
-	resolved, err := resolveCanonicalSelection(model, request)
-	if err != nil {
-		return nil, err
-	}
-	return resolved.assets, nil
-}
-
 func resolveCanonicalSelection(model validatedManifest, request selection) (resolvedSelection, error) {
 	target := string(request.target)
 	host := string(request.host)
@@ -177,6 +169,16 @@ func resolveCanonicalSelection(model validatedManifest, request selection) (reso
 	resolvedAssets := make([]resolvedAsset, len(assetIDs))
 	for index, id := range assetIDs {
 		resolvedAssets[index] = selected[id]
+	}
+	activation := ""
+	for _, selectedAsset := range resolvedAssets {
+		if selectedAsset.asset.Type != "agent_activation" {
+			continue
+		}
+		if activation != "" {
+			return resolvedSelection{}, validationError("conflicting_agent_activation", "selection contains more than one Claude main-agent activation")
+		}
+		activation = selectedAsset.asset.ID
 	}
 	packageIDs := make([]string, 0, len(selectedPackages))
 	for id := range selectedPackages {

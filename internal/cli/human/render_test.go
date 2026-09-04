@@ -119,6 +119,63 @@ func TestRenderLifecycleUsageRequiresOneBundle(t *testing.T) {
 	}
 }
 
+func TestRenderUsageMatchesDeclaredPositionalInstallationGrammar(t *testing.T) {
+	t.Parallel()
+
+	commands := []cli.Command{
+		cli.CommandInit,
+		cli.CommandValidate,
+		cli.CommandBuild,
+		cli.CommandInstall,
+		cli.CommandUpdate,
+		cli.CommandSync,
+		cli.CommandList,
+		cli.CommandStatus,
+		cli.CommandDoctor,
+		cli.CommandRollback,
+		cli.CommandUninstall,
+		cli.CommandHistory,
+		cli.CommandHistoryPurge,
+		cli.CommandVersion,
+	}
+	for _, command := range commands {
+		t.Run(command.String(), func(t *testing.T) {
+			t.Parallel()
+
+			data, err := cli.NewDetailedUsageData(cli.UsageMissingOptionValue, "installation", command)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := cli.NewResponse("", failedResult(t, result.FailureUsage), nil, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if _, err := human.Render(&output, response); err != nil {
+				t.Fatal(err)
+			}
+
+			usage := ""
+			for line := range strings.SplitSeq(output.String(), "\n") {
+				if strings.HasPrefix(line, "Usage: ") {
+					usage = line
+					break
+				}
+			}
+			if usage == "" {
+				t.Fatalf("Render(%s) emitted no usage line: %q", command, output.String())
+			}
+			wantPositional := command.UsesPositionalInstallation()
+			if got := strings.Contains(usage, "<INSTALLATION_ID>"); got != wantPositional {
+				t.Fatalf("Render(%s) positional installation = %v, want %v: %q", command, got, wantPositional, usage)
+			}
+			if got := strings.Contains(output.String(), "Argument: <INSTALLATION_ID>\n"); got != wantPositional {
+				t.Fatalf("Render(%s) installation label = %v, want %v: %q", command, got, wantPositional, output.String())
+			}
+		})
+	}
+}
+
 func TestRenderExplainsFlattenedBundleForListAndStatus(t *testing.T) {
 	t.Parallel()
 
@@ -548,7 +605,7 @@ func testSource(t *testing.T) cli.Source {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution, err := gitsource.ResolveReference(request, advertisement)
+	resolution, err := gitsource.ResolveReference(advertisement)
 	if err != nil {
 		t.Fatal(err)
 	}

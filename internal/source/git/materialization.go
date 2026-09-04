@@ -1,8 +1,6 @@
 package git
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,15 +13,9 @@ import (
 // CommitTreeProof binds one exact commit to the tree observed through the
 // closed commit^{tree} command. Commit and tree identities remain distinct.
 type CommitTreeProof struct {
-	commit  ProvenCommit
-	tree    domain.TreeOID
-	binding [sha256.Size]byte
-	seal    *commitTreeProofSeal
+	commit ProvenCommit
+	tree   domain.TreeOID
 }
-
-type commitTreeProofSeal struct{ marker byte }
-
-var issuedCommitTreeProofSeal = &commitTreeProofSeal{marker: 1}
 
 func NewCommitTreeProof(commit ProvenCommit, data []byte) (CommitTreeProof, error) {
 	if !commit.Valid() {
@@ -37,8 +29,7 @@ func NewCommitTreeProof(commit ProvenCommit, data []byte) (CommitTreeProof, erro
 	if err != nil {
 		return CommitTreeProof{}, NewExecutorError(OperationCommitTree, FailureMalformedProtocol)
 	}
-	proof := CommitTreeProof{commit: commit, tree: tree, seal: issuedCommitTreeProofSeal}
-	proof.binding = commitTreeProofBinding(commit, tree)
+	proof := CommitTreeProof{commit: commit, tree: tree}
 	if !proof.Valid() {
 		return CommitTreeProof{}, NewExecutorError(OperationCommitTree, FailureMalformedProtocol)
 	}
@@ -49,8 +40,7 @@ func (p CommitTreeProof) CommitProof() ProvenCommit { return p.commit }
 func (p CommitTreeProof) Commit() domain.CommitOID  { return p.commit.Commit() }
 func (p CommitTreeProof) Tree() domain.TreeOID      { return p.tree }
 func (p CommitTreeProof) Valid() bool {
-	return p.seal == issuedCommitTreeProofSeal && p.commit.Valid() && p.tree.Valid() &&
-		p.binding == commitTreeProofBinding(p.commit, p.tree)
+	return p.commit.Valid() && p.tree.Valid()
 }
 
 // Matches re-parses a final commit^{tree} observation and proves it has not
@@ -63,18 +53,10 @@ func (p CommitTreeProof) Matches(data []byte) error {
 	if err != nil {
 		return err
 	}
-	if repeated != p {
+	if repeated.Commit() != p.Commit() || repeated.Tree() != p.Tree() {
 		return NewExecutorError(OperationCommitTree, FailureRepositoryConflict)
 	}
 	return nil
-}
-
-func commitTreeProofBinding(commit ProvenCommit, tree domain.TreeOID) [sha256.Size]byte {
-	value := make([]byte, 0, len(commit.binding)+1+len(tree.String()))
-	value = append(value, commit.binding[:]...)
-	value = append(value, 0)
-	value = append(value, tree.String()...)
-	return sha256.Sum256(value)
 }
 
 func (CommitTreeProof) String() string   { return "<git-commit-tree-proof:redacted>" }
@@ -92,15 +74,10 @@ func (CommitTreeProof) MarshalJSON() ([]byte, error) {
 type MaterializationPlan struct {
 	proof     CommitTreeProof
 	inventory TreeInventory
-	issuer    *materializationPlanIssuer
 }
 
-type materializationPlanIssuer struct{ marker byte }
-
 func NewMaterializationPlan(proof CommitTreeProof, inventory TreeInventory) (MaterializationPlan, error) {
-	plan := MaterializationPlan{
-		proof: proof, inventory: cloneTreeInventory(inventory), issuer: &materializationPlanIssuer{marker: 1},
-	}
+	plan := MaterializationPlan{proof: proof, inventory: cloneTreeInventory(inventory)}
 	if !plan.Valid() {
 		return MaterializationPlan{}, ErrExecutorContract
 	}
@@ -109,11 +86,9 @@ func NewMaterializationPlan(proof CommitTreeProof, inventory TreeInventory) (Mat
 
 func (p MaterializationPlan) Commit() domain.CommitOID { return p.proof.Commit() }
 func (p MaterializationPlan) Tree() domain.TreeOID     { return p.proof.tree }
-func (p MaterializationPlan) Proof() CommitTreeProof   { return p.proof }
 func (p MaterializationPlan) Inventory() TreeInventory { return cloneTreeInventory(p.inventory) }
 func (p MaterializationPlan) Valid() bool {
-	return p.issuer != nil && p.issuer.marker == 1 && p.proof.Valid() && p.inventory.Valid() &&
-		p.proof.tree == p.inventory.tree
+	return p.proof.Valid() && p.inventory.Valid() && p.proof.tree == p.inventory.tree
 }
 
 func (MaterializationPlan) String() string   { return "<git-materialization-plan:redacted>" }
@@ -126,27 +101,14 @@ func (MaterializationPlan) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"git_materialization_plan": "redacted"})
 }
 
-type checkoutAttributeBatchSeal struct{ marker byte }
-type checkoutAttributeProofSeal struct{ marker byte }
-type checkoutApprovalSeal struct{ marker byte }
-
-var (
-	issuedCheckoutAttributeBatchSeal = &checkoutAttributeBatchSeal{marker: 1}
-	issuedCheckoutAttributeProofSeal = &checkoutAttributeProofSeal{marker: 1}
-	issuedCheckoutApprovalSeal       = &checkoutApprovalSeal{marker: 1}
-)
-
 // CheckoutAttributeBatch is one deterministic, bounded slice of the exact
-// inventory bound to a materialization plan. Callers cannot choose a subset of
-// paths or combine paths from different plans.
+// tree inventory in a materialization plan.
 type CheckoutAttributeBatch struct {
-	planIssuer *materializationPlanIssuer
-	index      int
-	start      int
-	end        int
-	paths      []pathsafe.RelativePath
-	pathDigest [sha256.Size]byte
-	seal       *checkoutAttributeBatchSeal
+	planTree domain.TreeOID
+	index    int
+	start    int
+	end      int
+	paths    []pathsafe.RelativePath
 }
 
 func (b CheckoutAttributeBatch) Paths() []pathsafe.RelativePath {
@@ -154,12 +116,11 @@ func (b CheckoutAttributeBatch) Paths() []pathsafe.RelativePath {
 }
 
 func (b CheckoutAttributeBatch) Valid() bool {
-	if b.seal != issuedCheckoutAttributeBatchSeal || b.planIssuer == nil || b.planIssuer.marker != 1 ||
-		b.index < 0 || b.start < 0 || b.end <= b.start || b.end-b.start != len(b.paths) {
+	if !b.planTree.Valid() || b.index < 0 || b.start < 0 || b.end <= b.start || b.end-b.start != len(b.paths) {
 		return false
 	}
 	validated, err := validateAttributeBatch(b.paths)
-	return err == nil && samePaths(b.paths, validated) && b.pathDigest == checkoutAttributePathDigest(b.paths)
+	return err == nil && samePaths(b.paths, validated)
 }
 
 // PlanCheckoutAttributeBatches partitions every inventory path exactly once
@@ -174,8 +135,7 @@ func PlanCheckoutAttributeBatches(plan MaterializationPlan) ([]CheckoutAttribute
 	for index := range ranges {
 		paths := append([]pathsafe.RelativePath(nil), ranges[index].paths...)
 		batches[index] = CheckoutAttributeBatch{
-			planIssuer: plan.issuer, index: index, start: ranges[index].start, end: ranges[index].end,
-			paths: paths, pathDigest: checkoutAttributePathDigest(paths), seal: issuedCheckoutAttributeBatchSeal,
+			planTree: plan.Tree(), index: index, start: ranges[index].start, end: ranges[index].end, paths: paths,
 		}
 	}
 	return batches, nil
@@ -185,27 +145,26 @@ func PlanCheckoutAttributeBatches(plan MaterializationPlan) ([]CheckoutAttribute
 // deterministic batch passed the closed attribute policy.
 type CheckoutAttributeBatchProof struct {
 	batch CheckoutAttributeBatch
-	seal  *checkoutAttributeProofSeal
 }
 
 func (p CheckoutAttributeBatchProof) Valid() bool {
-	return p.seal == issuedCheckoutAttributeProofSeal && p.batch.Valid()
+	return p.batch.Valid()
 }
 
 // CheckoutApproval is the only checkout-capable proof. It is issued only
 // after every deterministic batch for one exact plan has passed exactly once.
 type CheckoutApproval struct {
 	plan MaterializationPlan
-	seal *checkoutApprovalSeal
 }
 
 func (a CheckoutApproval) Plan() MaterializationPlan { return cloneMaterializationPlan(a.plan) }
 func (a CheckoutApproval) Valid() bool {
-	return a.seal == issuedCheckoutApprovalSeal && a.plan.Valid()
+	return a.plan.Valid()
 }
 
-// CompleteCheckoutAttributeCoverage proves complete, ordered, plan-bound
-// coverage. Omissions, duplicates, reordering, and mixed-plan proofs fail.
+// CompleteCheckoutAttributeCoverage proves complete, ordered coverage of the
+// plan's exact tree and paths. Omissions, duplicates, reordering, and batches
+// from another tree fail.
 func CompleteCheckoutAttributeCoverage(
 	plan MaterializationPlan,
 	proofs []CheckoutAttributeBatchProof,
@@ -216,13 +175,13 @@ func CompleteCheckoutAttributeCoverage(
 	}
 	for index := range expected {
 		actualBatch, expectedBatch := proofs[index].batch, expected[index]
-		if !proofs[index].Valid() || actualBatch.planIssuer != plan.issuer || actualBatch.index != index ||
+		if !proofs[index].Valid() || actualBatch.planTree != expectedBatch.planTree || actualBatch.index != index ||
 			actualBatch.start != expectedBatch.start || actualBatch.end != expectedBatch.end ||
-			actualBatch.pathDigest != expectedBatch.pathDigest || !samePaths(actualBatch.paths, expectedBatch.paths) {
+			!samePaths(actualBatch.paths, expectedBatch.paths) {
 			return CheckoutApproval{}, ErrExecutorContract
 		}
 	}
-	approval := CheckoutApproval{plan: cloneMaterializationPlan(plan), seal: issuedCheckoutApprovalSeal}
+	approval := CheckoutApproval{plan: cloneMaterializationPlan(plan)}
 	if !approval.Valid() {
 		return CheckoutApproval{}, ErrExecutorContract
 	}
@@ -316,20 +275,6 @@ func samePaths(left, right []pathsafe.RelativePath) bool {
 		}
 	}
 	return true
-}
-
-func checkoutAttributePathDigest(paths []pathsafe.RelativePath) [sha256.Size]byte {
-	hash := sha256.New()
-	var size [4]byte
-	for _, path := range paths {
-		value := path.String()
-		binary.BigEndian.PutUint32(size[:], uint32(len(value)))
-		_, _ = hash.Write(size[:])
-		_, _ = hash.Write([]byte(value))
-	}
-	var result [sha256.Size]byte
-	copy(result[:], hash.Sum(nil))
-	return result
 }
 
 func cloneTreeInventory(inventory TreeInventory) TreeInventory {

@@ -74,7 +74,6 @@ func (s *lifecycleService) HistoryPurge(ctx context.Context, request cli.History
 	if approval != approvalGranted {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureApproval, "approval_required", "history purge requires explicit approval", result.UpdateNotChecked, nil)
 	}
-	reportProgress(commandIO, "history_cleanup", "removing the approved history entries...")
 	record, present, err := s.state.LoadByID(installationID.String())
 	if err != nil || !present {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureConflict, "installation_not_found", "the selected installation does not exist", result.UpdateNotChecked, nil)
@@ -112,16 +111,17 @@ func (s *lifecycleService) HistoryPurge(ctx context.Context, request cli.History
 	if err != nil || s.state.SaveMarker(marker) != nil {
 		return lifecycleFailure(cli.CommandHistoryPurge, result.FailureInternal, "operation_marker_failed", "history purge could not be prepared", result.UpdateNotChecked, nil)
 	}
-	if err := s.state.DeleteHistory(record.InstallationID, ids); err != nil {
-		return s.recovery(cli.CommandHistoryPurge, cli.OperationHistoryPurge, operationID, installationID, data.ExpectedFinalState(), data.Actions(), "history_purge_failed")
-	}
 	if record.Lifecycle == "archived" && len(remaining) == 0 {
 		err = s.state.Delete(originalRecord)
 	} else {
-		err = s.state.Save(record)
+		err = s.state.Replace(originalRecord, record)
 	}
 	if err != nil {
 		return s.recovery(cli.CommandHistoryPurge, cli.OperationHistoryPurge, operationID, installationID, data.ExpectedFinalState(), data.Actions(), "history_state_commit_failed")
+	}
+	reportProgress(commandIO, "history_cleanup", "removing the approved history entries...")
+	if err := s.state.DeleteHistory(record.InstallationID, ids); err != nil {
+		return s.recovery(cli.CommandHistoryPurge, cli.OperationHistoryPurge, operationID, installationID, data.ExpectedFinalState(), data.Actions(), "history_purge_failed")
 	}
 	if err := s.state.DeleteMarker(); err != nil {
 		return s.recovery(cli.CommandHistoryPurge, cli.OperationHistoryPurge, operationID, installationID, data.ExpectedFinalState(), data.Actions(), "operation_cleanup_failed")
@@ -149,7 +149,7 @@ func (s *lifecycleService) planHistoryPurge(installationID domain.InstallationID
 	}
 	var actions []cli.Action
 	if len(ids) != 0 {
-		actions, err = makeActions([]planActionSpec{{cli.ActionOwnerAI4J, cli.ActionPrepareRecovery, "history purge journal", absentCondition, presentCondition, cli.RecoveryStructuralInverse}, {cli.ActionOwnerAI4J, cli.ActionRemoveState, "retained history: " + strings.Join(ids, ","), presentCondition, absentCondition, cli.RecoveryNone}, {cli.ActionOwnerAI4J, cli.ActionCommitState, "AI4J history references", presentCondition, presentCondition, cli.RecoveryStructuralInverse}, {cli.ActionOwnerAI4J, cli.ActionCleanup, "history purge journal", presentCondition, absentCondition, cli.RecoveryNone}})
+		actions, err = makeActions([]planActionSpec{{cli.ActionOwnerAI4J, cli.ActionPrepareRecovery, "history purge journal", absentCondition, presentCondition, cli.RecoveryStructuralInverse}, {cli.ActionOwnerAI4J, cli.ActionCommitState, "AI4J history references", presentCondition, presentCondition, cli.RecoveryStructuralInverse}, {cli.ActionOwnerAI4J, cli.ActionRemoveState, "retained history: " + strings.Join(ids, ","), presentCondition, absentCondition, cli.RecoveryNone}, {cli.ActionOwnerAI4J, cli.ActionCleanup, "history purge journal", presentCondition, absentCondition, cli.RecoveryNone}})
 		if err != nil {
 			return cli.Response{}, err
 		}

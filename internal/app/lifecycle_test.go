@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -35,6 +36,10 @@ func TestPreparedTransitionRejectsUnboundMaterial(t *testing.T) {
 	valid := execution.transition
 	foreign := cloneRecordPtr(valid.desired)
 	foreign.InstallationID = "foreign-installation"
+	foreignToolkit := cloneRecordPtr(valid.desired)
+	foreignToolkit.ToolkitID = "other-toolkit"
+	foreignRoot := cloneRecordPtr(valid.desired)
+	foreignRoot.ScopeRoot = filepath.Join(foreignRoot.ScopeRoot, "other")
 
 	tests := []struct {
 		name     string
@@ -67,6 +72,26 @@ func TestPreparedTransitionRejectsUnboundMaterial(t *testing.T) {
 			},
 		},
 		{
+			name:   "endpoint toolkit identities differ",
+			before: foreignToolkit,
+			material: preparedTransitionMaterial{
+				desiredTarget:    valid.desiredTarget,
+				desiredRules:     valid.desiredRules,
+				retainedBefore:   valid.desiredArtifacts,
+				desiredArtifacts: valid.desiredArtifacts,
+			},
+		},
+		{
+			name:   "endpoint canonical roots differ",
+			before: foreignRoot,
+			material: preparedTransitionMaterial{
+				desiredTarget:    valid.desiredTarget,
+				desiredRules:     valid.desiredRules,
+				retainedBefore:   valid.desiredArtifacts,
+				desiredArtifacts: valid.desiredArtifacts,
+			},
+		},
+		{
 			name: "ordinary scope carries project settings preimage",
 			material: preparedTransitionMaterial{
 				projectSettingsBefore: []byte("{}"),
@@ -89,6 +114,70 @@ func TestPreparedTransitionRejectsUnboundMaterial(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := newPreparedTransition(test.before, valid.desired, test.material); err == nil {
 				t.Fatal("transition preparation succeeded")
+			}
+		})
+	}
+}
+
+func TestInstallReusesCanonicalScopeRootAcrossEquivalentSpellings(t *testing.T) {
+	home := t.TempDir()
+	scopeRoot := filepath.Join(home, ".claude")
+	alias := strings.ToUpper(scopeRoot)
+	if alias == scopeRoot || !installstate.SameScopeRoot(alias, scopeRoot) {
+		t.Skip("host filesystem has no equivalent case alias")
+	}
+	harness := newLifecycleHarnessAt(t, home, alias)
+	request := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	response, err := harness.service.Install(context.Background(), request, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("initial install = %#v, %v", response.Result(), err)
+	}
+	before, present, err := harness.store.Load()
+	if err != nil || !present || before.ScopeRoot != alias {
+		t.Fatalf("initial record = %#v, present=%t, err=%v", before, present, err)
+	}
+	commandsBefore := len(harness.native.commands)
+
+	harness.service.claudeRoot = scopeRoot
+	response, err = harness.service.Install(context.Background(), request, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Result().Changed() {
+		t.Fatalf("alias reinstall = %#v, %v", response.Result(), err)
+	}
+	after, present, err := harness.store.LoadByID(before.InstallationID)
+	if err != nil || !present || !reflect.DeepEqual(after, before) || len(harness.native.commands) != commandsBefore {
+		t.Fatalf("alias reinstall changed state: after=%#v commands=%d, present=%t, err=%v", after, len(harness.native.commands), present, err)
+	}
+}
+
+func TestInstallationIdentityIncludesStableCoordinates(t *testing.T) {
+	identity := installstate.Record{
+		InstallationID: "installation-001",
+		ToolkitID:      "ai4j",
+		Target:         "claude",
+		Scope:          "user",
+		ScopeRoot:      filepath.Join(t.TempDir(), "scope"),
+	}
+	equivalent := identity
+	equivalent.ScopeRoot = filepath.Join(identity.ScopeRoot, ".")
+	if !sameInstallationIdentity(identity, equivalent) {
+		t.Fatal("equivalent canonical scope roots changed the installation identity")
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*installstate.Record)
+	}{
+		{name: "installation ID", mutate: func(record *installstate.Record) { record.InstallationID = "installation-002" }},
+		{name: "toolkit ID", mutate: func(record *installstate.Record) { record.ToolkitID = "other-toolkit" }},
+		{name: "target", mutate: func(record *installstate.Record) { record.Target = "codex" }},
+		{name: "scope", mutate: func(record *installstate.Record) { record.Scope = "project-local" }},
+		{name: "canonical scope root", mutate: func(record *installstate.Record) { record.ScopeRoot = filepath.Join(record.ScopeRoot, "other") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := identity
+			test.mutate(&changed)
+			if sameInstallationIdentity(identity, changed) {
+				t.Fatal("changed installation identity was accepted")
 			}
 		})
 	}
@@ -1413,6 +1502,78 @@ func TestLifecycleUpdateChangesExplicitRemoteGitSourceWithoutChangingInstallatio
 	}
 }
 
+func TestLifecycleRejectsToolkitIdentityChangesAcrossExistingTransitions(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		operation string
+		local     bool
+	}{
+		{name: "remote update", operation: "update"},
+		{name: "local update", operation: "update", local: true},
+		{name: "sync", operation: "sync"},
+		{name: "archived reactivation", operation: "reactivate"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newLifecycleHarness(t)
+			installArguments := []string{"install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes"}
+			if test.local {
+				harness.validator.localDigest = strings.Repeat("e", 64)
+				installArguments = []string{"install", "--source", filepath.Join(harness.service.home, "checkout"), "--target", "claude", "--scope", "user", "--bundle", "default", "--expected-source-digest", harness.validator.localDigest, "--yes"}
+			}
+			install := parseRequest[cli.InstallRequest](t, installArguments...)
+			response, err := harness.service.Install(context.Background(), install, CommandIO{})
+			if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+				t.Fatalf("install = %#v, %v", response.Result(), err)
+			}
+			record, _, _ := harness.store.Load()
+			if test.operation == "reactivate" {
+				uninstall := parseRequest[cli.UninstallRequest](t, "uninstall", record.InstallationID, "--yes")
+				response, err = harness.service.Uninstall(context.Background(), uninstall, CommandIO{})
+				if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+					t.Fatalf("uninstall = %#v, %v", response.Result(), err)
+				}
+			}
+			stateBefore, err := os.ReadFile(harness.store.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			commandsBefore := len(harness.native.commands)
+			harness.validator.toolkitIDOverride = "other-toolkit"
+
+			switch test.operation {
+			case "update":
+				arguments := []string{"update", record.InstallationID, "--yes"}
+				if test.local {
+					harness.validator.localDigest = strings.Repeat("f", 64)
+					arguments = []string{"update", record.InstallationID, "--allow-dirty", "--expected-source-digest", harness.validator.localDigest, "--yes"}
+				} else {
+					harness.validator.update = true
+				}
+				request := parseRequest[cli.UpdateRequest](t, arguments...)
+				response, err = harness.service.Update(context.Background(), request, CommandIO{})
+			case "sync":
+				request := parseRequest[cli.SyncRequest](t, "sync", record.InstallationID, "--bundle", "default", "--yes")
+				response, err = harness.service.Sync(context.Background(), request, CommandIO{})
+			case "reactivate":
+				request := parseRequest[cli.InstallRequest](t, "install", "--installation", record.InstallationID, "--yes")
+				response, err = harness.service.Install(context.Background(), request, CommandIO{})
+			}
+
+			problems := response.Result().Errors()
+			if err != nil || response.Result().ExitCode() != result.ExitConflict || response.Result().Mutation() != result.MutationNotStarted || len(problems) != 1 || problems[0].Code() != "toolkit_identity_changed" {
+				t.Fatalf("identity change = %#v, problems=%v, err=%v", response.Result(), problems, err)
+			}
+			stateAfter, readErr := os.ReadFile(harness.store.Path())
+			if readErr != nil || !bytes.Equal(stateAfter, stateBefore) {
+				t.Fatalf("state changed after rejected identity change: %v", readErr)
+			}
+			if len(harness.native.commands) != commandsBefore {
+				t.Fatalf("identity change ran native commands: before=%d after=%d", commandsBefore, len(harness.native.commands))
+			}
+		})
+	}
+}
+
 func TestLifecycleLocalDevelopmentInstallUpdateAndSyncUseImmutableBackingBundle(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	checkout := filepath.Join(harness.service.home, "checkout")
@@ -1475,7 +1636,7 @@ func TestLifecycleAutomaticallyReconcilesUnambiguousInterruptedOperations(t *tes
 			if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
 				t.Fatal(err)
 			}
-			if err := harness.store.Save(*desired); err != nil {
+			if err := harness.store.Replace(*execution.transition.before, *desired); err != nil {
 				t.Fatal(err)
 			}
 			if err := harness.store.CommitHistory(entry); err != nil {
@@ -1510,6 +1671,51 @@ func TestLifecycleAutomaticallyReconcilesUnambiguousInterruptedOperations(t *tes
 				t.Fatalf("marker after recovery = present:%t err:%v marker:%#v", present, err, marker)
 			}
 		})
+	}
+}
+
+func TestLifecycleRecoveryDoesNotOverwriteStateChangedAfterItsSnapshot(t *testing.T) {
+	harness := newLifecycleHarness(t)
+	install := parseRequest[cli.InstallRequest](t, "install", "--target", "claude", "--scope", "user", "--bundle", "default", "--yes")
+	if response, err := harness.service.Install(context.Background(), install, CommandIO{}); err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("install = %#v, %v", response.Result(), err)
+	}
+	before, _, _ := harness.store.Load()
+	harness.validator.update = true
+	request := parseRequest[cli.UpdateRequest](t, "update", before.InstallationID, "--yes")
+	execution, _, stop, err := harness.service.prepareUpdate(context.Background(), request.InstallationID(), request.Source(), cli.ConflictFail)
+	if err != nil || stop {
+		t.Fatalf("update preparation stopped: %v", err)
+	}
+	desired, _, _ := stageInterrupted(t, harness, execution, "operation-recovery-cas")
+	if err := harness.service.applyTransition(context.Background(), execution.transition.withDesired(desired), cli.ConflictFail); err != nil {
+		t.Fatal(err)
+	}
+	changed := cloneRecord(before)
+	changed.Health = "drifted"
+	inspections := 0
+	var hookErr error
+	harness.service.validation = &inspectionHookValidation{
+		lifecycleValidation: harness.validator,
+		hook: func() {
+			inspections++
+			if inspections == 3 {
+				hookErr = harness.store.Replace(before, changed)
+			}
+		},
+	}
+
+	recovered, err := harness.service.reconcileInterrupted(context.Background())
+
+	if recovered || !errors.Is(err, installstate.ErrStateChanged) || hookErr != nil || inspections < 3 {
+		t.Fatalf("stale recovery = recovered:%t err:%v hookErr:%v inspections:%d", recovered, err, hookErr, inspections)
+	}
+	stored, present, loadErr := harness.store.LoadByID(before.InstallationID)
+	if loadErr != nil || !present || stored.Health != changed.Health || stored.LastOperation != changed.LastOperation || !slices.Equal(stored.History, changed.History) || stored.Source.Commit != changed.Source.Commit {
+		t.Fatalf("externally changed state was overwritten: %#v, present=%t, err=%v", stored, present, loadErr)
+	}
+	if _, present, markerErr := harness.store.LoadMarker(); markerErr != nil || !present {
+		t.Fatalf("recovery marker = present:%t err=%v", present, markerErr)
 	}
 }
 
@@ -1879,7 +2085,7 @@ func newLifecycleHarnessAt(t *testing.T, home, claudeRoot string) lifecycleHarne
 
 func parseRequest[T cli.Request](t *testing.T, arguments ...string) T {
 	t.Helper()
-	request, err := cli.NewParser().Parse(append([]string{"ai4j"}, arguments...))
+	request, err := cli.Parse(append([]string{"ai4j"}, arguments...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1891,16 +2097,28 @@ func parseRequest[T cli.Request](t *testing.T, arguments ...string) T {
 }
 
 type lifecycleValidator struct {
-	native                *lifecycleNativeRunner
-	update                bool
-	failBundle            string
-	failUpdateBundle      string
-	failNativePlugin      string
-	selectionCalls        int
-	updateCalls           int
-	source                func(cli.SourceOptions, string) cli.Source
-	localDigest           string
-	inspectionDirectories []string
+	native                 *lifecycleNativeRunner
+	agentActivationBundles map[string]bool
+	toolkitIDOverride      string
+	update                 bool
+	failBundle             string
+	failUpdateBundle       string
+	failNativePlugin       string
+	selectionCalls         int
+	updateCalls            int
+	source                 func(cli.SourceOptions, string) cli.Source
+	localDigest            string
+	inspectionDirectories  []string
+}
+
+type inspectionHookValidation struct {
+	lifecycleValidation
+	hook func()
+}
+
+func (v *inspectionHookValidation) InspectNativeStatusAt(ctx context.Context, directory, marketplaceID, pluginID string) (validation.NativeStatus, *result.Problem) {
+	v.hook()
+	return v.lifecycleValidation.InspectNativeStatusAt(ctx, directory, marketplaceID, pluginID)
 }
 
 func (v *lifecycleValidator) SelectLifecycle(_ context.Context, options cli.SourceOptions, bundle string) validation.LifecycleSelection {
@@ -1956,6 +2174,9 @@ func (v *lifecycleValidator) SelectLifecycle(_ context.Context, options cli.Sour
 		rules = []byte("company policy\n")
 		resolvedAssets = []string{"policy-rules"}
 	}
+	if v.toolkitIDOverride != "" {
+		toolkitID = v.toolkitIDOverride
+	}
 	resolvedBundles := []string{bundle}
 	var packages []validation.LifecyclePackage
 	var resolvedPackages []string
@@ -1976,11 +2197,18 @@ func (v *lifecycleValidator) SelectLifecycle(_ context.Context, options cli.Sour
 		item, _ := cli.NewContentItem(cli.ComponentSharedInstruction, resolvedAssets[0], "toolkit/rules/ai4j.md", digest, cli.ContentAdded, nil)
 		content = []cli.ContentItem{item}
 	}
+	if v.agentActivationBundles[bundle] && packageID != "" {
+		resolvedAssets = append(resolvedAssets, "root-orchestrator")
+		slices.Sort(resolvedAssets)
+		item, _ := cli.NewContentItem(cli.ComponentExtension, "root-orchestrator", packagePath+"/settings.json", strings.Repeat("9", 64), cli.ContentAdded, nil)
+		content = append(content, item)
+	}
 	return validation.LifecycleSelection{
 		Source: v.source(options, commit), ToolkitID: toolkitID, DeclarationID: toolkitID, ToolkitVersion: "1.0.0",
 		RequestedBundle: bundle, ResolvedBundles: resolvedBundles, ResolvedPackages: resolvedPackages, ResolvedAssets: resolvedAssets,
 		Packages: packages,
 		Content:  content, Rules: rules, RulesChecksum: digest,
+		AgentActivation: v.agentActivationBundles[bundle] && packageID != "",
 	}
 }
 
@@ -2016,17 +2244,13 @@ func (v *lifecycleValidator) ValidateUpdate(_ context.Context, options cli.Sourc
 	return validation.UpdateReport{Report: validation.Report{Source: v.source(options, strings.Repeat("b", 40))}, Disposition: gitsource.UpdateAvailable}
 }
 
-func (v *lifecycleValidator) InspectNativeStatusFor(_ context.Context, marketplaceID, pluginID string) (validation.NativeStatus, *result.Problem) {
-	return validation.NativeStatus{MarketplaceRegistered: v.native.marketplaces[marketplaceID], PluginInstalled: v.native.plugins[pluginID], PluginEnabled: v.native.enabled[pluginID]}, nil
-}
-
-func (v *lifecycleValidator) InspectNativeStatusAt(ctx context.Context, directory, marketplaceID, pluginID string) (validation.NativeStatus, *result.Problem) {
+func (v *lifecycleValidator) InspectNativeStatusAt(_ context.Context, directory, marketplaceID, pluginID string) (validation.NativeStatus, *result.Problem) {
 	v.inspectionDirectories = append(v.inspectionDirectories, directory)
 	if v.failNativePlugin != "" && strings.HasPrefix(pluginID, v.failNativePlugin+"@") {
 		problem, _ := result.NewProblem("native_status_failed", "component plugin status could not be inspected", nil)
 		return validation.NativeStatus{}, &problem
 	}
-	return v.InspectNativeStatusFor(ctx, marketplaceID, pluginID)
+	return validation.NativeStatus{MarketplaceRegistered: v.native.marketplaces[marketplaceID], PluginInstalled: v.native.plugins[pluginID], PluginEnabled: v.native.enabled[pluginID]}, nil
 }
 
 func (v *lifecycleValidator) InspectNativeStatus(context.Context) (validation.NativeStatus, *result.Problem) {

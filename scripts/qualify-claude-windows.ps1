@@ -145,10 +145,10 @@ function Assert-JSONContainsString {
 function Assert-DefaultBundleStatus {
     param([Parameter(Mandatory)]$Status)
 
-    if ([string]::Join(',', @($Status.data.installation.nativePluginIds)) -ne 'ai4j-review,ai4j-tools' -or
+    if ([string]::Join(',', @($Status.data.installation.nativePluginIds)) -ne 'ai4j-review,ai4j-reviewer,ai4j-tools' -or
         $Status.data.summary.requestedBundle -ne 'default' -or
         [string]::Join(',', @($Status.data.summary.resolvedBundles)) -ne 'default,review,tools' -or
-        [string]::Join(',', @($Status.data.summary.packages)) -ne 'ai4j-review,ai4j-tools') {
+        [string]::Join(',', @($Status.data.summary.packages)) -ne 'ai4j-review,ai4j-reviewer,ai4j-tools') {
         throw 'status did not report the flattened default bundle'
     }
 }
@@ -201,12 +201,17 @@ function Invoke-ProjectJourney {
         $settings = $settingsText | ConvertFrom-Json -Depth 100
         $marketplace = $settings.extraKnownMarketplaces.PSObject.Properties[$marketplaceId].Value
         $plugins = @($marketplace.source.plugins)
+        $expectedPluginPaths = @{
+            'ai4j-review' = 'plugins/ai4j-review'
+            'ai4j-reviewer' = 'plugins/ai4j-reviewer-claude'
+            'ai4j-tools' = 'plugins/ai4j-tools'
+        }
         if ($marketplace.source.source -ne 'settings' -or
-            [string]::Join(',', @($plugins.name)) -ne 'ai4j-review,ai4j-tools' -or
+            [string]::Join(',', @($plugins.name)) -ne 'ai4j-review,ai4j-reviewer,ai4j-tools' -or
             @($plugins | Where-Object {
                     $_.source.source -ne 'git-subdir' -or
                     $_.source.sha -ne $script:QualificationRef -or
-                    $_.source.path -ne "plugins/$($_.name)"
+                    $_.source.path -ne $expectedPluginPaths[$_.name]
                 }).Count -ne 0) {
             throw 'project-shared settings do not retain the exact Git source declaration'
         }
@@ -277,8 +282,79 @@ try {
     Assert-NativeSuccess 'Windows lock tests'
     Write-Evidence -Name 'windows-lock-tests.txt' -Text ($lockLines -join [Environment]::NewLine)
 
-    foreach ($package in @('ai4j-review', 'ai4j-tools')) {
-        Invoke-ClaudeText -EvidenceName "native-plugin-validate-$package.txt" -Arguments @('plugin', 'validate', '.') -WorkingDirectory (Join-Path $script:RepoRoot "plugins\$package")
+    $activationPlugin = Join-Path $script:WorkRoot 'agent-activation-plugin'
+    $activationConfig = Join-Path $script:WorkRoot 'agent-activation-config'
+    $activationMetadata = Join-Path $activationPlugin '.claude-plugin'
+    $activationAgents = Join-Path $activationPlugin 'agents'
+    $activationHooks = Join-Path $activationPlugin 'hooks'
+    New-Item -ItemType Directory -Force -Path $activationMetadata, $activationAgents, $activationHooks, $activationConfig | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $activationMetadata 'plugin.json'),
+        "{`n  `"name`": `"agent-activation-fixture`",`n  `"version`": `"1.0.0`",`n  `"description`": `"Validates Claude main-agent activation`",`n  `"author`": {`n    `"name`": `"AI4J`"`n  }`n}`n"
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $activationAgents 'root-orchestrator.md'),
+        "---`nname: root-orchestrator`ndescription: Coordinates the requested work.`ntools: Read, Grep, Glob`n---`n`nCoordinate the requested work.`n"
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $activationPlugin 'settings.json'),
+        "{`n  `"agent`": `"root-orchestrator`"`n}`n"
+    )
+    [IO.File]::WriteAllText(
+        (Join-Path $activationPlugin 'capture-session-start.ps1'),
+        "`$payload = [Console]::In.ReadToEnd()`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot 'session-start.json'), `$payload)`n"
+    )
+    $activationHooksDocument = [ordered]@{
+        hooks = [ordered]@{
+            SessionStart = @(
+                [ordered]@{
+                    matcher = 'startup'
+                    hooks = @(
+                        [ordered]@{
+                            type = 'command'
+                            command = 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/capture-session-start.ps1"'
+                        }
+                    )
+                }
+            )
+        }
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $activationHooks 'hooks.json'),
+        (ConvertTo-Json -InputObject $activationHooksDocument -Depth 8) + [Environment]::NewLine
+    )
+    Invoke-ClaudeText -EvidenceName 'native-agent-activation-validate.txt' -Arguments @('plugin', 'validate', '.', '--strict') -WorkingDirectory $activationPlugin
+
+    $previousClaudeConfig = [Environment]::GetEnvironmentVariable('CLAUDE_CONFIG_DIR', 'Process')
+    try {
+        $env:CLAUDE_CONFIG_DIR = $activationConfig
+        Invoke-ClaudeText -EvidenceName 'native-agent-activation-load.txt' -Arguments @('--plugin-dir', $activationPlugin, '--init-only') -WorkingDirectory $activationPlugin
+    }
+    finally {
+        if ($null -eq $previousClaudeConfig) {
+            Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:CLAUDE_CONFIG_DIR = $previousClaudeConfig
+        }
+    }
+    $activationReceiptPath = Join-Path $activationPlugin 'session-start.json'
+    if (-not (Test-Path -LiteralPath $activationReceiptPath -PathType Leaf)) {
+        throw 'Claude main-agent activation did not produce a SessionStart receipt'
+    }
+    $activationReceiptText = Get-Content -Raw -LiteralPath $activationReceiptPath
+    Write-Evidence -Name 'native-agent-activation-receipt.json' -Text ($activationReceiptText.TrimEnd())
+    $activationReceipt = $activationReceiptText | ConvertFrom-Json -Depth 100
+    $activationAgentType = $activationReceipt.PSObject.Properties['agent_type']
+    if ($activationReceipt.hook_event_name -ne 'SessionStart' -or
+        $activationReceipt.source -ne 'startup' -or
+        $null -eq $activationAgentType -or
+        $activationAgentType.Value -ne 'agent-activation-fixture:root-orchestrator') {
+        throw 'Claude did not activate the configured plugin agent as the main agent'
+    }
+
+    foreach ($package in @('ai4j-review', 'ai4j-reviewer-claude', 'ai4j-tools')) {
+        Invoke-ClaudeText -EvidenceName "native-plugin-validate-$package.txt" -Arguments @('plugin', 'validate', '.', '--strict') -WorkingDirectory (Join-Path $script:RepoRoot "plugins\$package")
     }
 
     & go build -mod=readonly -trimpath -buildvcs=true -o $script:AI4J ./cmd/ai4j

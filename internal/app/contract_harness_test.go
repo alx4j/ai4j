@@ -519,7 +519,7 @@ func newContractFixture(t *testing.T, reverse bool) contractFixture {
 	advertisement := mustFixture(gitsource.ParseRemoteAdvertisement(request, []byte(
 		"ref: refs/heads/main\tHEAD\n"+commitOID+"\tHEAD\n"+commitOID+"\trefs/heads/main\n",
 	)))
-	resolution := mustFixture(gitsource.ResolveReference(request, advertisement))
+	resolution := mustFixture(gitsource.ResolveReference(advertisement))
 	selected := mustFixture(gitsource.NewSelectedObjectProof(resolution, []byte("commit\n")))
 	commit := mustFixture(gitsource.NewDirectProvenCommit(selected))
 	proof := mustFixture(gitsource.NewCommitTreeProof(commit, []byte(strings.Repeat("b", 40)+"\n")))

@@ -32,6 +32,7 @@ func combineComposition(components []selectedCompositionComponent) validation.Li
 	}
 	packageOwners := make(map[string]string)
 	assetOwners := make(map[string]string)
+	agentActivationOwner := ""
 	totalArtifactBytes := 0
 	for index, item := range items {
 		name, tag, report := item.coordinate.Name(), item.coordinate.Tag(), item.report
@@ -75,6 +76,13 @@ func combineComposition(components []selectedCompositionComponent) validation.Li
 			}
 			combined.Rules = slices.Clone(report.Rules)
 			combined.RulesChecksum = report.RulesChecksum
+		}
+		if report.AgentActivation {
+			if agentActivationOwner != "" {
+				return compositionFailure("composition_collision", "Claude main-agent activation is selected by both "+agentActivationOwner+" and "+name)
+			}
+			agentActivationOwner = name
+			combined.AgentActivation = true
 		}
 		combined.Components = append(combined.Components, validation.LifecycleComponent{
 			Name: name, Tag: tag, Source: report.Source, ToolkitVersion: report.ToolkitVersion,

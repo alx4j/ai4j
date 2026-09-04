@@ -98,7 +98,7 @@ func (s *lifecycleService) reconcileInterrupted(ctx context.Context) (bool, erro
 		if entry.Before == nil {
 			err = s.state.SaveNew(*entry.After)
 		} else {
-			err = s.state.Save(*entry.After)
+			err = s.state.Replace(*entry.Before, *entry.After)
 		}
 		if err != nil {
 			return false, err
@@ -155,20 +155,6 @@ func (s *lifecycleService) reconcileHistoryPurge(marker installstate.Marker) (bo
 	if !validPartialHistoryPurge(before.History, desiredHistory, marker.HistoryPurge.OperationIDs, historyEntryIDs(entries)) {
 		return false, nil
 	}
-	if err := s.state.DeleteHistory(marker.InstallationID, marker.HistoryPurge.OperationIDs); err != nil {
-		return false, err
-	}
-	entries, err = s.state.LoadHistory(marker.InstallationID)
-	if err != nil {
-		return false, err
-	}
-	if !slices.Equal(historyEntryIDs(entries), desiredHistory) {
-		return false, nil
-	}
-	current, present, err = s.state.LoadByID(marker.InstallationID)
-	if err != nil {
-		return false, err
-	}
 	switch {
 	case present && reflect.DeepEqual(current, before):
 		if desired == nil {
@@ -185,6 +171,16 @@ func (s *lifecycleService) reconcileHistoryPurge(marker installstate.Marker) (bo
 	case desired != nil && present && reflect.DeepEqual(current, *desired):
 	case desired == nil && !present:
 	default:
+		return false, nil
+	}
+	if err := s.state.DeleteHistory(marker.InstallationID, marker.HistoryPurge.OperationIDs); err != nil {
+		return false, err
+	}
+	entries, err = s.state.LoadHistory(marker.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	if !slices.Equal(historyEntryIDs(entries), desiredHistory) {
 		return false, nil
 	}
 	current, present, err = s.state.LoadByID(marker.InstallationID)

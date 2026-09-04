@@ -51,14 +51,25 @@ func (s *lifecycleService) prepareCompositionInstall(ctx context.Context, rootVa
 	for _, record := range records {
 		if record.InstallationID == desired.InstallationID {
 			before = cloneRecordPtr(&record)
-			continue
+			break
 		}
-		if record.Lifecycle == "active" && record.ToolkitID == "composition" && record.Target == desired.Target && record.Scope == desired.Scope && filepath.Clean(record.ScopeRoot) == filepath.Clean(desired.ScopeRoot) {
-			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "composition_exists", "a different composition already owns this target scope")
+		if record.ToolkitID == "composition" && record.Target == desired.Target && record.Scope == desired.Scope && installstate.SameScopeRoot(record.ScopeRoot, desired.ScopeRoot) {
+			before = cloneRecordPtr(&record)
+			desired, document, err = s.recordForComposition(report, mustInstallation(record.InstallationID), scope, record.ScopeRoot)
+			if err != nil {
+				return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "composition plan could not be created")
+			}
+			break
 		}
 	}
 	if before != nil {
 		desired.History = slices.Clone(before.History)
+		if !sameInstallationIdentity(*before, desired) {
+			return stopLifecycle(cli.CommandInstall, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
+		}
+	}
+	if hasAgentActivationConflict(records, desired) {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "agent_activation_conflict", "another active installation already owns the Claude main-agent activation in this target scope")
 	}
 	if err := s.inspectProjectLocal(ctx, before, desired); err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
@@ -213,7 +224,7 @@ func (s *lifecycleService) prepareCompositionUpdate(ctx context.Context, record 
 		return stopSelection(cli.CommandUpdate, report)
 	}
 	selection, _ := cli.NewBundleSelection("composition")
-	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, cli.SourceOptions{}, selection, policy, result.UpdatePinned)
+	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdatePinned)
 }
 
 func installationIDForComposition(scope cli.Scope, scopeRoot string) domain.InstallationID {

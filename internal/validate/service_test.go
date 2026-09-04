@@ -6,6 +6,8 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,7 +72,7 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, err := cli.NewParser().Parse(test.arguments)
+			request, err := cli.Parse(test.arguments)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,12 +91,13 @@ func TestValidateCompletesBuiltInAndExplicitSourcesWithoutPersistentState(t *tes
 			if !bytes.Equal(report.Rules, files["toolkit/rules/ai4j.md"]) || report.RulesChecksum != fmt.Sprintf("%x", rulesDigest) {
 				t.Fatalf("validated rules bytes/checksum do not match the tracked rules file")
 			}
-			if runner.claudeValidations != 2 || runner.toolkitExecutions != 0 {
+			if runner.claudeValidations != 3 || runner.toolkitExecutions != 0 {
 				t.Fatalf("claude validations=%d toolkit executions=%d", runner.claudeValidations, runner.toolkitExecutions)
 			}
-			if len(runner.claudeValidationDirectories) != 2 ||
-				!strings.HasSuffix(runner.claudeValidationDirectories[0], filepath.Join("plugins", "ai4j-review")) ||
-				!strings.HasSuffix(runner.claudeValidationDirectories[1], filepath.Join("plugins", "ai4j-tools")) {
+			if len(runner.claudeValidationDirectories) != 3 ||
+				filepath.Base(runner.claudeValidationDirectories[0]) != "ai4j-review" ||
+				filepath.Base(runner.claudeValidationDirectories[1]) != "ai4j-reviewer" ||
+				filepath.Base(runner.claudeValidationDirectories[2]) != "ai4j-tools" {
 				t.Fatalf("Claude validation directories = %v", runner.claudeValidationDirectories)
 			}
 			for _, item := range report.Content {
@@ -119,7 +122,7 @@ func TestValidateRunsOnWindowsAMD64(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser().Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
+	request, err := cli.Parse([]string{"ai4j.exe", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +145,7 @@ func TestValidateCleansWorkspaceAfterNativeValidationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 || report.Problems[0].Code() != "native_validation_failed" {
 		t.Fatalf("failure=%s problems=%v", report.Failure, report.Problems)
@@ -220,7 +223,7 @@ func TestValidateUpdateClassifiesFastForwardNoChangeAndRewrite(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+			request, _ := cli.Parse([]string{"ai4j", "validate", "--target", "claude"})
 			installed, _ := domain.NewCommitOID(test.installed)
 			update := service.ValidateUpdate(context.Background(), request.(cli.ValidateRequest).Source(), installed)
 			if update.Report.Failure != test.wantFailure || update.Disposition != test.want || runner.ancestorChecks != test.wantChecks {
@@ -247,7 +250,7 @@ func TestValidateUpdateInspectsAncestryBeforePackageValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, err := cli.Parse([]string{"ai4j", "validate", "--target", "claude"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +279,7 @@ func TestValidateRejectsLiteralSecretWithoutStartingNativeContent(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+	request, _ := cli.Parse([]string{"ai4j", "validate", "--target", "claude"})
 	report := service.Validate(context.Background(), request.(cli.ValidateRequest).Source())
 	if report.Failure != FailureValidation || !report.HasSource() || len(report.Problems) != 1 ||
 		report.Problems[0].Code() != "literal_secret" || strings.Contains(report.Problems[0].Message(), "secret-canary") {
@@ -296,6 +299,13 @@ type fixtureRunner struct {
 	nativeExitCode              int
 	claudeValidations           int
 	claudeValidationDirectories []string
+	inspectClaudeValidation     func(string) error
+	codexValidations            int
+	codexValidationHomes        []string
+	codexConfigLoadStatus       string
+	codexStartupWarning         string
+	codexValidationErr          error
+	missingExecutables          map[string]bool
 	toolkitExecutions           int
 	ancestorExit                int
 	ancestorChecks              int
@@ -304,38 +314,80 @@ type fixtureRunner struct {
 }
 
 func (r *fixtureRunner) LookPath(name string) (string, error) {
-	if name == "git" || name == "claude" {
+	if r.missingExecutables[name] {
+		return "", fmt.Errorf("not found")
+	}
+	if name == "git" || name == "claude" || name == "codex" {
 		return "/usr/bin/" + name, nil
 	}
 	return "", fmt.Errorf("not found")
 }
 
-func (r *fixtureRunner) Run(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
-	if !strings.HasSuffix(executable, "/claude") {
-		return hostprocess.Result{}, fmt.Errorf("non-Claude process was not isolated: %s", executable)
+func (r *fixtureRunner) Run(_ context.Context, directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/claude") && !strings.HasSuffix(executable, "/codex") {
+		return hostprocess.Result{}, fmt.Errorf("unexpected inherited process: %s", executable)
 	}
-	return r.run(directory, executable, arguments)
+	return r.run(directory, executable, arguments, environment)
 }
 
-func (r *fixtureRunner) RunIsolated(_ context.Context, directory, executable string, arguments, _ []string) (hostprocess.Result, error) {
-	if !strings.HasSuffix(executable, "/git") {
-		return hostprocess.Result{}, fmt.Errorf("non-Git process was isolated: %s", executable)
+func (r *fixtureRunner) RunIsolated(_ context.Context, directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
+	if !strings.HasSuffix(executable, "/git") && !strings.HasSuffix(executable, "/codex") {
+		return hostprocess.Result{}, fmt.Errorf("unexpected isolated process: %s", executable)
 	}
-	return r.run(directory, executable, arguments)
+	return r.run(directory, executable, arguments, environment)
 }
 
-func (r *fixtureRunner) run(directory, executable string, arguments []string) (hostprocess.Result, error) {
+func (r *fixtureRunner) run(directory, executable string, arguments, environment []string) (hostprocess.Result, error) {
 	if strings.HasSuffix(executable, "/claude") {
 		if slices.Equal(arguments, []string{"--version"}) {
 			return hostprocess.Result{Stdout: []byte("2.1.211 (Claude Code)\n")}, nil
 		}
-		if slices.Equal(arguments, []string{"plugin", "validate", "."}) {
+		if slices.Equal(arguments, []string{"plugin", "validate", ".", "--strict"}) {
 			r.claudeValidations++
 			r.claudeValidationDirectories = append(r.claudeValidationDirectories, directory)
+			if r.inspectClaudeValidation != nil {
+				if err := r.inspectClaudeValidation(directory); err != nil {
+					return hostprocess.Result{}, err
+				}
+			}
 			return hostprocess.Result{ExitCode: r.nativeExitCode}, nil
 		}
 		r.toolkitExecutions++
 		return hostprocess.Result{ExitCode: 1}, nil
+	}
+	if strings.HasSuffix(executable, "/codex") {
+		if slices.Equal(arguments, []string{"--version"}) {
+			return hostprocess.Result{Stdout: []byte("codex-cli 0.149.1\n")}, nil
+		}
+		if slices.Equal(arguments, []string{"--strict-config", "doctor", "--json"}) {
+			home := ""
+			for _, value := range environment {
+				if strings.HasPrefix(value, "CODEX_HOME=") {
+					home = strings.TrimPrefix(value, "CODEX_HOME=")
+				}
+			}
+			entries, readErr := os.ReadDir(filepath.Join(home, "agents"))
+			if home == "" || readErr != nil || len(entries) == 0 || inside(directory, home) || !slices.Equal(environment, codexValidationEnvironment(home, executable, "")) {
+				return hostprocess.Result{}, errors.New("Codex agents were not staged in an isolated home")
+			}
+			r.codexValidationHomes = append(r.codexValidationHomes, home)
+			r.codexValidations++
+			if r.codexValidationErr != nil {
+				return hostprocess.Result{}, r.codexValidationErr
+			}
+			status := r.codexConfigLoadStatus
+			if status == "" {
+				status = "ok"
+			}
+			details := map[string]any{}
+			if r.codexStartupWarning != "" {
+				status = "warning"
+				details["startup warning"] = r.codexStartupWarning
+			}
+			output, _ := json.Marshal(map[string]any{"checks": map[string]any{"config.load": map[string]any{"status": status, "details": details}}})
+			return hostprocess.Result{Stdout: output, ExitCode: 1}, nil
+		}
+		return hostprocess.Result{}, fmt.Errorf("unexpected Codex process: %v", arguments)
 	}
 	if strings.HasSuffix(executable, "/git") && slices.Equal(arguments, []string{"--version"}) {
 		return hostprocess.Result{Stdout: []byte("git version 2.39.5\n")}, nil

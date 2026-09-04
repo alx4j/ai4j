@@ -34,7 +34,7 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	}
 	validator := &statusValidationStub{t: t, native: validation.NativeStatus{MarketplaceRegistered: true, PluginInstalled: true, PluginEnabled: true}}
 	service := statusService{validation: validator, state: store, home: home}
-	request, err := cli.NewParser().Parse([]string{"ai4j", "list", "--target", "claude", "--scope", "user", "--json"})
+	request, err := cli.Parse([]string{"ai4j", "list", "--target", "claude", "--scope", "user", "--json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestListAndSelectedStatusInspectMultipleInstallations(t *testing.T) {
 	if exit, err := jsonout.Render(&output, response); err != nil || exit != result.ExitSuccess || !strings.Contains(output.String(), `"installationId":"installation-002"`) {
 		t.Fatalf("list JSON exit=%d error=%v output=%s", exit, err, output.String())
 	}
-	selectedRequest, err := cli.NewParser().Parse([]string{"ai4j", "status", "installation-002"})
+	selectedRequest, err := cli.Parse([]string{"ai4j", "status", "installation-002"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,12 +214,13 @@ func TestStatusReportsPinnedSourceAndCurrentDriftTogether(t *testing.T) {
 func TestStatusTreatsArchivedInstallationAsIntentionallyInactive(t *testing.T) {
 	t.Parallel()
 	home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+	before := record
 	record.Lifecycle = "archived"
 	record.Health = "healthy"
 	record.Catalog = installstate.OwnedFile{}
 	record.Rules = installstate.OwnedFile{}
 	record.NativeResources = nil
-	if err := store.Save(record); err != nil {
+	if err := store.Replace(before, record); err != nil {
 		t.Fatal(err)
 	}
 	validator := &statusValidationStub{t: t}
@@ -411,12 +412,13 @@ func TestStatusChecksLocalDevelopmentSourceDigest(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home, store, record := prepareStatusInstallation(t, "branch", strings.Repeat("a", 40))
+			before := record
 			checkout := t.TempDir()
 			record.Source = installstate.Source{
 				Mode: "development_source", Selection: domain.ExplicitSource().String(), Checkout: checkout,
 				SourceDigest: strings.Repeat("a", 64), RenderedDigest: strings.Repeat("b", 64), BundleDigest: strings.Repeat("c", 64),
 			}
-			if err := store.Save(record); err != nil {
+			if err := store.Replace(before, record); err != nil {
 				t.Fatal(err)
 			}
 			digest, _ := domain.NewRenderedDigest(test.current)
@@ -502,7 +504,7 @@ func (s *statusValidationStub) SelectLifecycle(context.Context, cli.SourceOption
 
 func statusRequest(t *testing.T) cli.StatusRequest {
 	t.Helper()
-	request, err := cli.NewParser().Parse([]string{"ai4j", "status", "installation-001"})
+	request, err := cli.Parse([]string{"ai4j", "status", "installation-001"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +542,7 @@ func prepareStatusInstallation(t *testing.T, refKind, commit string) (string, in
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(record); err != nil {
+	if err := store.SaveNew(record); err != nil {
 		t.Fatal(err)
 	}
 	return home, store, record

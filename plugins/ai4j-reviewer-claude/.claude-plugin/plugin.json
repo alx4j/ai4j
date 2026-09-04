@@ -1,0 +1,8 @@
+{
+  "name": "ai4j-reviewer",
+  "version": "1.0.0",
+  "description": "A focused repository review agent",
+  "author": {
+    "name": "AI4J"
+  }
+}

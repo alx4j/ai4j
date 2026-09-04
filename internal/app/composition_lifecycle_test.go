@@ -91,6 +91,36 @@ func TestCompositionInstallStatusSyncUninstallAndRollback(t *testing.T) {
 	}
 }
 
+func TestCompositionReusesCanonicalScopeRootAcrossEquivalentSpellings(t *testing.T) {
+	home := t.TempDir()
+	scopeRoot := filepath.Join(home, ".claude")
+	alias := strings.ToUpper(scopeRoot)
+	if alias == scopeRoot || !installstate.SameScopeRoot(alias, scopeRoot) {
+		t.Skip("host filesystem has no equivalent case alias")
+	}
+	harness := newLifecycleHarnessAt(t, home, alias)
+	request := parseRequest[cli.InstallRequest](t, "install", "--git-root", "https://github.com/oleksii", "--bundle", "common@v1", "--bundle", "everpure@v2", "--target", "claude", "--scope", "user", "--yes")
+	response, err := harness.service.Install(context.Background(), request, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess {
+		t.Fatalf("initial composition = %#v, %v", response.Result(), err)
+	}
+	before, present, err := harness.store.Load()
+	if err != nil || !present || before.ScopeRoot != alias {
+		t.Fatalf("initial record = %#v, present=%t, err=%v", before, present, err)
+	}
+	commandsBefore := len(harness.native.commands)
+
+	harness.service.claudeRoot = scopeRoot
+	response, err = harness.service.Install(context.Background(), request, CommandIO{})
+	if err != nil || response.Result().ExitCode() != result.ExitSuccess || response.Result().Changed() {
+		t.Fatalf("alias composition = %#v, %v", response.Result(), err)
+	}
+	after, present, err := harness.store.LoadByID(before.InstallationID)
+	if err != nil || !present || !reflect.DeepEqual(after, before) || len(harness.native.commands) != commandsBefore {
+		t.Fatalf("alias composition changed state: after=%#v commands=%d, present=%t, err=%v", after, len(harness.native.commands), present, err)
+	}
+}
+
 func TestCompositionSupportsThreeComponentsDeterministically(t *testing.T) {
 	harness := newLifecycleHarness(t)
 	first := parseRequest[cli.InstallRequest](t, "install", "--git-root", "https://github.com/oleksii", "--bundle", "team@v3", "--bundle", "common@v1", "--bundle", "everpure@v2", "--target", "claude", "--scope", "user", "--yes")

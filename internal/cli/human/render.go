@@ -177,7 +177,7 @@ func renderUsage(output *boundedBuffer, data cli.UsageData) {
 	output.line("Issue code: " + string(data.Issue()))
 	command, hasCommand := data.Command()
 	if data.Option() != "" {
-		if hasCommand && data.Option() == "installation" && usesPositionalInstallation(command) {
+		if hasCommand && data.Option() == "installation" && command.UsesPositionalInstallation() {
 			output.line("Argument: <INSTALLATION_ID>")
 		} else {
 			output.line("Option: --" + data.Option())
@@ -187,15 +187,6 @@ func renderUsage(output *boundedBuffer, data cli.UsageData) {
 		output.line("Usage: " + commandUsage(command))
 	} else {
 		output.line("Available commands: init, validate, build, install, list, status, update, sync, doctor, history, rollback, uninstall, version")
-	}
-}
-
-func usesPositionalInstallation(command cli.Command) bool {
-	switch command {
-	case cli.CommandUpdate, cli.CommandSync, cli.CommandStatus, cli.CommandDoctor, cli.CommandRollback, cli.CommandUninstall, cli.CommandHistory, cli.CommandHistoryPurge:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -626,35 +617,42 @@ func usageMessage(data cli.UsageData) string {
 }
 
 func commandUsage(command cli.Command) string {
+	if !command.Valid() {
+		return "ai4j <COMMAND> [options]"
+	}
+	invocation := "ai4j " + strings.ReplaceAll(command.String(), ".", " ")
+	if command.UsesPositionalInstallation() {
+		invocation += " <INSTALLATION_ID>"
+	}
 	switch command {
 	case cli.CommandInit:
-		return "ai4j init --target <claude|codex> --output <DIRECTORY> [--examples]"
+		return invocation + " --target <claude|codex> --output <DIRECTORY> [--examples]"
 	case cli.CommandValidate:
-		return "ai4j validate [--repo <OWNER/REPO> | --source <PATH>] --target <claude|codex>"
+		return invocation + " [--repo <OWNER/REPO> | --source <PATH>] --target <claude|codex>"
 	case cli.CommandBuild:
-		return "ai4j build [--repo <OWNER/REPO> | --source <PATH>] --target <TARGET> --host <HOST> --output <DIRECTORY> (--all | --asset <ID> | --bundle <ID>)"
+		return invocation + " [--repo <OWNER/REPO> | --source <PATH>] --target <TARGET> --host <HOST> --output <DIRECTORY> (--all | --asset <ID> | --bundle <ID>)"
 	case cli.CommandInstall:
-		return "ai4j install --target claude --scope <SCOPE> ([source options] --bundle <ID> | --git-root <ROOT> --bundle <NAME@TAG> --bundle <NAME@TAG> [--bundle <NAME@TAG>])"
+		return invocation + " --target claude --scope <SCOPE> ([source options] --bundle <ID> | --git-root <ROOT> --bundle <NAME@TAG> --bundle <NAME@TAG> [--bundle <NAME@TAG>])"
 	case cli.CommandUpdate:
-		return "ai4j update <INSTALLATION_ID> [options]"
+		return invocation + " [options]"
 	case cli.CommandSync:
-		return "ai4j sync <INSTALLATION_ID> --bundle <ID> [options]"
+		return invocation + " --bundle <ID> [options]"
 	case cli.CommandList:
-		return "ai4j list [--target claude] [--scope <SCOPE>]"
+		return invocation + " [--target claude] [--scope <SCOPE>]"
 	case cli.CommandStatus:
-		return "ai4j status <INSTALLATION_ID>"
+		return invocation
 	case cli.CommandDoctor:
-		return "ai4j doctor <INSTALLATION_ID> [--test-mcp <SERVER_ID>]"
+		return invocation + " [--test-mcp <SERVER_ID>]"
 	case cli.CommandRollback:
-		return "ai4j rollback <INSTALLATION_ID> [--operation <OPERATION_ID>] [options]"
+		return invocation + " [--operation <OPERATION_ID>] [options]"
 	case cli.CommandUninstall:
-		return "ai4j uninstall <INSTALLATION_ID> [options]"
+		return invocation + " [options]"
 	case cli.CommandHistory:
-		return "ai4j history <INSTALLATION_ID>"
+		return invocation
 	case cli.CommandHistoryPurge:
-		return "ai4j history purge <INSTALLATION_ID> (--operation <OPERATION_ID> | --expired | --all) [options]"
+		return invocation + " (--operation <OPERATION_ID> | --expired | --all) [options]"
 	case cli.CommandVersion:
-		return "ai4j version"
+		return invocation
 	default:
 		return "ai4j <COMMAND> [options]"
 	}

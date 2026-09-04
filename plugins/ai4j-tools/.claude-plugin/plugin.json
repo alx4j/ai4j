@@ -1,5 +1,6 @@
 {
   "name": "ai4j-tools",
+  "version": "1.0.0",
   "description": "Claude-backed tools for AI4J workflows",
   "author": {
     "name": "AI4J"

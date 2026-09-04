@@ -100,10 +100,10 @@ func TestResolveReferenceProvesDefaultQualifiedCommitAndShortNameSemantics(t *te
 	for _, test := range tests {
 		request := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", test.requested, test.provided)
 		advertisement := mustRemoteAdvertisement(t, request, data)
-		selection, err := ResolveReference(request, advertisement)
+		selection, err := ResolveReference(advertisement)
 		resolved := selection.Resolved()
 		if err != nil || !selection.Valid() || resolved.Kind() != test.kind || resolved.Name() != test.resolved ||
-			selection.SelectedObject().String() != test.object || !sameResolutionRequest(selection.Request(), request) {
+			selection.SelectedObject().String() != test.object || selection.Request() != request {
 			t.Errorf("%s resolved = %#v, %v", test.name, selection, err)
 		}
 		value, provided := request.RequestedReference().Value()
@@ -113,15 +113,15 @@ func TestResolveReferenceProvesDefaultQualifiedCommitAndShortNameSemantics(t *te
 	}
 
 	ambiguousRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "shared", true)
-	if _, err := ResolveReference(ambiguousRequest, mustRemoteAdvertisement(t, ambiguousRequest, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceAmbiguous)) {
+	if _, err := ResolveReference(mustRemoteAdvertisement(t, ambiguousRequest, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceAmbiguous)) {
 		t.Fatalf("ambiguous error = %v", err)
 	}
 	missingRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "missing", true)
-	if _, err := ResolveReference(missingRequest, mustRemoteAdvertisement(t, missingRequest, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceNotFound)) {
+	if _, err := ResolveReference(mustRemoteAdvertisement(t, missingRequest, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceNotFound)) {
 		t.Fatalf("missing error = %v", err)
 	}
 	qualifiedMissing := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "refs/heads/v1", true)
-	if _, err := ResolveReference(qualifiedMissing, mustRemoteAdvertisement(t, qualifiedMissing, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceNotFound)) {
+	if _, err := ResolveReference(mustRemoteAdvertisement(t, qualifiedMissing, data)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureReferenceNotFound)) {
 		t.Fatalf("qualified kind confusion error = %v", err)
 	}
 	omitted := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "", false)
@@ -129,22 +129,30 @@ func TestResolveReferenceProvesDefaultQualifiedCommitAndShortNameSemantics(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveReference(omitted, withoutDefault); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureDefaultBranchUnavailable)) {
+	if _, err := ResolveReference(withoutDefault); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureDefaultBranchUnavailable)) {
 		t.Fatalf("default error = %v", err)
 	}
 }
 
-func TestReferenceResolutionBindsRequestAdvertisementAndSelectedObject(t *testing.T) {
+func TestResolveReferenceRejectsInvalidAdvertisement(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ResolveReference(RemoteAdvertisement{}); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureInvalidOperation)) {
+		t.Fatalf("invalid advertisement error = %v", err)
+	}
+}
+
+func TestReferenceResolutionSelectsExactAdvertisedObject(t *testing.T) {
 	t.Parallel()
 
 	request := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "main", true)
 	firstData := testObjectA + "\trefs/heads/main\n"
 	secondData := testObjectB + "\trefs/heads/main\n"
-	first, err := ResolveReference(request, mustRemoteAdvertisement(t, request, firstData))
+	first, err := ResolveReference(mustRemoteAdvertisement(t, request, firstData))
 	if err != nil || !first.Valid() || first.SelectedObject().String() != testObjectA {
 		t.Fatalf("first selection = %#v, %v", first, err)
 	}
-	second, err := ResolveReference(request, mustRemoteAdvertisement(t, request, secondData))
+	second, err := ResolveReference(mustRemoteAdvertisement(t, request, secondData))
 	if err != nil || !second.Valid() || second.SelectedObject().String() != testObjectB {
 		t.Fatalf("second selection = %#v, %v", second, err)
 	}
@@ -164,33 +172,13 @@ func TestReferenceResolutionBindsRequestAdvertisementAndSelectedObject(t *testin
 		t.Fatalf("second refspec = %q", got)
 	}
 
-	otherRepository := mustResolutionRequest(t, "https://github.com/other/repository.git", "main", true)
-	if _, err := ResolveReference(otherRepository, mustRemoteAdvertisement(t, request, firstData)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureInvalidOperation)) {
-		t.Fatalf("cross-repository advertisement error = %v", err)
+	changed := first
+	changed.resolved, _ = NewResolvedReference(ResolvedBranch, "other")
+	if changed.Valid() {
+		t.Fatalf("inconsistent selection is valid: %#v", changed)
 	}
-	otherTransport := mustResolutionRequest(t, "git@github.com:alx4j/ai4j.git", "main", true)
-	if _, err := ResolveReference(otherTransport, mustRemoteAdvertisement(t, request, firstData)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureInvalidOperation)) {
-		t.Fatalf("cross-transport advertisement error = %v", err)
-	}
-	otherReference := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "other", true)
-	if _, err := ResolveReference(otherReference, mustRemoteAdvertisement(t, request, firstData)); !errors.Is(err, NewExecutorError(OperationEnumerateRefs, FailureInvalidOperation)) {
-		t.Fatalf("cross-reference advertisement error = %v", err)
-	}
-
-	for _, mutate := range []func(*ReferenceResolution){
-		func(value *ReferenceResolution) { value.request = otherRepository },
-		func(value *ReferenceResolution) { value.resolved, _ = NewResolvedReference(ResolvedBranch, "other") },
-		func(value *ReferenceResolution) { value.object, _ = NewGitObjectOID(testObjectB) },
-		func(value *ReferenceResolution) { value.seal = nil },
-	} {
-		changed := first
-		mutate(&changed)
-		if changed.Valid() {
-			t.Fatalf("tampered selection is valid: %#v", changed)
-		}
-		if _, err := NewFetchCommand(changed, auth); !errors.Is(err, ErrExecutorContract) {
-			t.Fatalf("tampered fetch error = %v", err)
-		}
+	if _, err := NewFetchCommand(changed, auth); !errors.Is(err, ErrExecutorContract) {
+		t.Fatalf("inconsistent fetch error = %v", err)
 	}
 	copyValue := first
 	if !copyValue.Valid() || copyValue.SelectedObject() != first.SelectedObject() {
@@ -207,19 +195,17 @@ func TestReferenceResolutionBindsRequestAdvertisementAndSelectedObject(t *testin
 	}
 }
 
-func TestSelectedObjectCommitTreeAndProvenanceFormOneSealedChain(t *testing.T) {
+func TestSelectedObjectCommitTreeAndProvenancePreserveExactRelationships(t *testing.T) {
 	t.Parallel()
 
 	branchRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "main", true)
 	selectionA, err := ResolveReference(
-		branchRequest,
 		mustRemoteAdvertisement(t, branchRequest, testObjectA+"\trefs/heads/main\n"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	selectionB, err := ResolveReference(
-		branchRequest,
 		mustRemoteAdvertisement(t, branchRequest, testObjectB+"\trefs/heads/main\n"),
 	)
 	if err != nil {
@@ -259,7 +245,6 @@ func TestSelectedObjectCommitTreeAndProvenanceFormOneSealedChain(t *testing.T) {
 
 	tagRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "refs/tags/v1", true)
 	tagResolution, err := ResolveReference(
-		tagRequest,
 		mustRemoteAdvertisement(t, tagRequest, testObjectA+"\trefs/tags/v1\n"),
 	)
 	if err != nil {
@@ -324,11 +309,6 @@ func TestSelectedObjectCommitTreeAndProvenanceFormOneSealedChain(t *testing.T) {
 		t.Fatalf("provenance = %#v, %v", provenance, err)
 	}
 
-	changedSelected := selectedA
-	changedSelected.resolution = selectionB
-	if changedSelected.Valid() {
-		t.Fatal("selected-object A/B substitution is valid")
-	}
 	changedCommit := commitA
 	changedCommit.selected = selectedB
 	if changedCommit.Valid() {
@@ -339,13 +319,12 @@ func TestSelectedObjectCommitTreeAndProvenanceFormOneSealedChain(t *testing.T) {
 	if changedCommit.Valid() {
 		t.Fatal("proven-commit OID substitution is valid")
 	}
-	changedTree := treeProof
-	changedTree.commit = commitB
-	if changedTree.Valid() {
-		t.Fatal("commit-tree A/B substitution is valid")
+	treeProofB, err := NewCommitTreeProof(commitB, []byte(testObjectB+"\n"))
+	if err != nil || !treeProofB.Valid() {
+		t.Fatalf("tree proof B = %#v, %v", treeProofB, err)
 	}
 	changedProvenance := provenance
-	changedProvenance.proof = changedTree
+	changedProvenance.proof = treeProofB
 	if changedProvenance.Valid() {
 		t.Fatal("provenance A/B substitution is valid")
 	}
@@ -453,7 +432,7 @@ func TestMaterializationPlanBindsCommitTreeAndInventory(t *testing.T) {
 	}
 }
 
-func TestCheckoutRequiresCompleteExactPlanBoundAttributeCoverage(t *testing.T) {
+func TestCheckoutRequiresCompleteExactAttributeCoverage(t *testing.T) {
 	t.Parallel()
 
 	tree := mustTreeOID(t, testObjectB)
@@ -501,8 +480,70 @@ func TestCheckoutRequiresCompleteExactPlanBoundAttributeCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CompleteCheckoutAttributeCoverage(plan, []CheckoutAttributeBatchProof{proofs[0], otherProof}); !errors.Is(err, ErrExecutorContract) {
-		t.Fatalf("mixed-plan batch error = %v", err)
+	if _, err := CompleteCheckoutAttributeCoverage(plan, []CheckoutAttributeBatchProof{proofs[0], otherProof}); err != nil {
+		t.Fatalf("equivalent-plan batch error = %v", err)
+	}
+
+	otherTree := mustTreeOID(t, testObjectA)
+	var otherTreeRecords strings.Builder
+	for index := 0; index < MaximumAttributeBatchPaths+1; index++ {
+		oid := testObjectA
+		if index%2 != 0 || index == MaximumAttributeBatchPaths {
+			oid = testObjectB
+		}
+		otherTreeRecords.WriteString(treeRecord("100644", "blob", oid, 1, fmt.Sprintf("file-%03d", index)))
+	}
+	otherTreeInventory, err := ParseTreeInventory(otherTree, []byte(otherTreeRecords.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTreePlan := mustMaterializationPlan(t, otherTreeInventory, testObjectA)
+	otherTreeBatches, err := PlanCheckoutAttributeBatches(otherTreePlan)
+	if err != nil || len(otherTreeBatches) != 2 {
+		t.Fatalf("other-tree batches = %#v, %v", otherTreeBatches, err)
+	}
+	if !samePaths(batches[1].Paths(), otherTreeBatches[1].Paths()) {
+		t.Fatal("different-tree regression does not use identical paths")
+	}
+	otherTreeProof, err := ValidateCheckoutAttributes(
+		otherTreeBatches[1], checkoutAttributeOutput(otherTreeBatches[1], "", "", ""),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CompleteCheckoutAttributeCoverage(plan, []CheckoutAttributeBatchProof{proofs[0], otherTreeProof}); !errors.Is(err, ErrExecutorContract) {
+		t.Fatalf("different-tree batch error = %v", err)
+	}
+
+	var differentRecords strings.Builder
+	for index := 0; index < MaximumAttributeBatchPaths+1; index++ {
+		oid := testObjectA
+		if index%2 != 0 {
+			oid = testObjectB
+		}
+		path := fmt.Sprintf("file-%03d", index)
+		if index == MaximumAttributeBatchPaths {
+			path = "other-file"
+		}
+		differentRecords.WriteString(treeRecord("100644", "blob", oid, 1, path))
+	}
+	differentInventory, err := ParseTreeInventory(tree, []byte(differentRecords.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	differentPlan := mustMaterializationPlan(t, differentInventory, testObjectA)
+	differentBatches, err := PlanCheckoutAttributeBatches(differentPlan)
+	if err != nil || len(differentBatches) != 2 {
+		t.Fatalf("different batches = %#v, %v", differentBatches, err)
+	}
+	differentProof, err := ValidateCheckoutAttributes(
+		differentBatches[1], checkoutAttributeOutput(differentBatches[1], "", "", ""),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CompleteCheckoutAttributeCoverage(plan, []CheckoutAttributeBatchProof{proofs[0], differentProof}); !errors.Is(err, ErrExecutorContract) {
+		t.Fatalf("different-path batch error = %v", err)
 	}
 
 	uncovered := batches[1].Paths()[0].String()

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -100,8 +99,8 @@ func (t preparedTransition) validate() error {
 		if t.before.Validate() != nil {
 			return errors.New("current transition state is invalid")
 		}
-		if t.before.InstallationID != t.desired.InstallationID {
-			return errors.New("transition installation identity does not match")
+		if !sameInstallationIdentity(*t.before, *t.desired) {
+			return errors.New("transition installation identity changed")
 		}
 	}
 	if t.rollback && t.nonRestorable {
@@ -141,6 +140,14 @@ func (t preparedTransition) validate() error {
 		}
 	}
 	return nil
+}
+
+func sameInstallationIdentity(current, desired installstate.Record) bool {
+	return current.InstallationID == desired.InstallationID &&
+		current.ToolkitID == desired.ToolkitID &&
+		current.Target == desired.Target &&
+		current.Scope == desired.Scope &&
+		installstate.SameScopeRoot(current.ScopeRoot, desired.ScopeRoot)
 }
 
 func (t preparedTransition) withDesired(desired *installstate.Record) preparedTransition {
@@ -407,14 +414,24 @@ func (s *lifecycleService) prepareInstall(ctx context.Context, source cli.Source
 	}
 	if !reactivation {
 		for _, record := range records {
-			if record.Target == desired.Target && record.Scope == desired.Scope && filepath.Clean(record.ScopeRoot) == filepath.Clean(desired.ScopeRoot) && record.ToolkitID == desired.ToolkitID {
+			if record.Target == desired.Target && record.Scope == desired.Scope && installstate.SameScopeRoot(record.ScopeRoot, desired.ScopeRoot) && record.ToolkitID == desired.ToolkitID {
 				if record.Lifecycle == "archived" {
 					return stopLifecycle(cli.CommandInstall, result.FailureConflict, "archived_installation_exists", "reactivate the archived installation by its installation ID")
 				}
 				before = cloneRecordPtr(&record)
-				desired.InstallationID = record.InstallationID
+				desired, document, err = s.recordForSelection(report, selection, mustInstallation(record.InstallationID), scope, record.ScopeRoot)
+				if err != nil {
+					return stopLifecycle(cli.CommandInstall, result.FailureInternal, "plan_failed", "installation plan could not be created")
+				}
+				break
 			}
 		}
+	}
+	if before != nil && !sameInstallationIdentity(*before, desired) {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
+	}
+	if hasAgentActivationConflict(records, desired) {
+		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "agent_activation_conflict", "another active installation already owns the Claude main-agent activation in this target scope")
 	}
 	if err := s.inspectProjectLocal(ctx, before, desired); err != nil {
 		return stopLifecycle(cli.CommandInstall, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
@@ -480,7 +497,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if report.Source.SourceDigest().String() != record.Source.SourceDigest {
 			disposition = result.UpdateAvailable
 		}
-		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
 	}
 	if requested.AllowDirty() || requested.HasCheckout() {
 		return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "source_mode_mismatch", "local source options are invalid for a remote Git installation")
@@ -516,10 +533,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 		if len(report.Problems) != 0 || !report.HasSource() {
 			return stopSelection(cli.CommandUpdate, report)
 		}
-		if report.ToolkitID != record.ToolkitID {
-			return stopLifecycle(cli.CommandUpdate, result.FailureConflict, "toolkit_identity_changed", "source changes must retain the toolkit identifier")
-		}
-		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, result.UpdateAvailable)
+		return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, result.UpdateAvailable)
 	}
 	update := s.validation.ValidateUpdate(ctx, options, installed)
 	if len(update.Report.Problems) != 0 {
@@ -540,7 +554,7 @@ func (s *lifecycleService) prepareUpdate(ctx context.Context, installationID dom
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandUpdate, report)
 	}
-	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, options, selection, policy, disposition)
+	return s.prepareExisting(ctx, cli.CommandUpdate, cli.OperationUpdate, record, report, selection, policy, disposition)
 }
 
 func (s *lifecycleService) prepareSync(ctx context.Context, installationID domain.InstallationID, selection cli.BundleSelection, allowDirty bool, policy cli.ConflictPolicy) (lifecycleExecution, cli.Response, bool, error) {
@@ -556,7 +570,7 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 		if len(report.Problems) != 0 || len(report.Components) == 0 {
 			return stopSelection(cli.CommandSync, report)
 		}
-		return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, cli.SourceOptions{}, selection, policy, result.UpdateNotChecked)
+		return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
 	}
 	options, err := exactSourceOptions(record)
 	if record.Source.Mode == "development_source" {
@@ -571,15 +585,25 @@ func (s *lifecycleService) prepareSync(ctx context.Context, installationID domai
 	if len(report.Problems) != 0 || !report.HasSource() {
 		return stopSelection(cli.CommandSync, report)
 	}
-	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, options, selection, policy, result.UpdateNotChecked)
+	return s.prepareExisting(ctx, cli.CommandSync, cli.OperationSync, record, report, selection, policy, result.UpdateNotChecked)
 }
 
-func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, sourceOptions cli.SourceOptions, selection cli.BundleSelection, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
+func (s *lifecycleService) prepareExisting(ctx context.Context, command cli.Command, operation cli.Operation, record installstate.Record, report validation.LifecycleSelection, selection cli.BundleSelection, policy cli.ConflictPolicy, disposition result.UpdateDisposition) (lifecycleExecution, cli.Response, bool, error) {
 	desired, document, err := s.recordForSelection(report, selection, mustInstallation(record.InstallationID), cli.Scope(record.Scope), record.ScopeRoot)
 	if err != nil {
 		return stopLifecycle(command, result.FailureInternal, "plan_failed", "lifecycle plan could not be created")
 	}
+	if !sameInstallationIdentity(record, desired) {
+		return stopLifecycle(command, result.FailureConflict, "toolkit_identity_changed", "an existing installation must retain its toolkit, target, scope, and canonical scope root")
+	}
 	desired.History = slices.Clone(record.History)
+	records, err := s.state.LoadAll()
+	if err != nil {
+		return stopLifecycle(command, result.FailureConflict, "installation_state_invalid", "installation state could not be read")
+	}
+	if hasAgentActivationConflict(records, desired) {
+		return stopLifecycle(command, result.FailureConflict, "agent_activation_conflict", "another active installation already owns the Claude main-agent activation in this target scope")
+	}
 	if err := s.inspectProjectLocal(ctx, &record, desired); err != nil {
 		return stopLifecycle(command, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")
 	}
@@ -749,7 +773,17 @@ func (s *lifecycleService) prepareRollback(ctx context.Context, installationID d
 		desired.Rules = installstate.OwnedFile{}
 		desired.NativeResources = []string{}
 	}
+	if !sameInstallationIdentity(record, desired) {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "rollback_conflict", "the rollback point changes the installation identity")
+	}
 	desired.History = slices.Clone(record.History)
+	records, err := s.state.LoadAll()
+	if err != nil {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "installation_state_invalid", "installation state could not be read")
+	}
+	if hasAgentActivationConflict(records, desired) {
+		return stopLifecycle(cli.CommandRollback, result.FailureConflict, "agent_activation_conflict", "another active installation already owns the Claude main-agent activation in this target scope")
+	}
 	if desired.Lifecycle == "active" {
 		if err := s.inspectProjectLocal(ctx, &record, desired); err != nil {
 			return stopLifecycle(cli.CommandRollback, result.FailureConflict, "project_local_conflict", "project-local rules cannot be proven safely untracked")

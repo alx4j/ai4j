@@ -86,7 +86,7 @@ jobs:
         shell: pwsh
         env:
           AI4J_QUALIFICATION_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.ref_name }}
+          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           AI4J_QUALIFICATION_EVIDENCE: ${{ runner.temp }}\ai4j-claude-windows-evidence
           AI4J_QUALIFICATION_GITHUB_TOKEN: ${{ github.token }}
         run: ./scripts/qualify-claude-windows.ps1
@@ -137,7 +137,7 @@ jobs:
         shell: pwsh
         env:
           AI4J_QUALIFICATION_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.ref_name }}
+          AI4J_QUALIFICATION_SOURCE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           AI4J_QUALIFICATION_EVIDENCE: ${{ runner.temp }}\ai4j-codex-windows-evidence
           AI4J_QUALIFICATION_GITHUB_TOKEN: ${{ github.token }}
         run: ./scripts/qualify-codex-windows.ps1

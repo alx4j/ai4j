@@ -196,7 +196,7 @@ func TestFetchArgvPinsReferenceAndHardening(t *testing.T) {
 	} {
 		request := mustResolutionRequest(t, "git@github.com:alx4j/ai4j.git", test.requested, test.provided)
 		auth := mustAuthentication(t, request, AuthenticationDefaultKeySSH)
-		selection, err := ResolveReference(request, mustRemoteAdvertisement(t, request, advertised))
+		selection, err := ResolveReference(mustRemoteAdvertisement(t, request, advertised))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -267,7 +267,7 @@ func TestEveryRemainingCommandConstructorHasExactGoldenArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	tagRequest := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", "refs/tags/v1", true)
-	tagResolution, err := ResolveReference(tagRequest, mustRemoteAdvertisement(t, tagRequest, testObjectA+"\trefs/tags/v1\n"))
+	tagResolution, err := ResolveReference(mustRemoteAdvertisement(t, tagRequest, testObjectA+"\trefs/tags/v1\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +447,7 @@ func mustMaterializationPlan(t *testing.T, inventory TreeInventory, commitValue 
 func mustDirectProvenCommit(t *testing.T, value string) ProvenCommit {
 	t.Helper()
 	request := mustResolutionRequest(t, "https://github.com/alx4j/ai4j.git", value, true)
-	selection, err := ResolveReference(request, mustRemoteAdvertisement(t, request, ""))
+	selection, err := ResolveReference(mustRemoteAdvertisement(t, request, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

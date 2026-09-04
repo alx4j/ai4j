@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -72,33 +74,34 @@ func validatePackage(root string, inventory gitsource.TreeInventory) (packageRes
 		rulesChecksum = hex.EncodeToString(hash[:])
 		break
 	}
-	var nativePackagePaths []string
-	for _, unit := range manifest.Targets["claude"].Packages {
-		nativePackagePaths = append(nativePackagePaths, unit.Path)
-	}
-	slices.Sort(nativePackagePaths)
-	nativePackagePaths = slices.Compact(nativePackagePaths)
 	return packageResult{
 		content: content, rules: rules, rulesChecksum: rulesChecksum, digest: digest,
-		nativePackagePaths: nativePackagePaths, model: model,
+		model: model,
 	}, nil
 }
 
 func validateMCPAssets(root string, model validatedManifest) error {
+	type declaration struct {
+		path       string
+		executable *executable
+	}
 	for _, asset := range model.assets {
 		if asset.Type != "mcp" {
 			continue
 		}
-		paths := []string{asset.Path}
+		declarations := []declaration{{path: asset.Path, executable: asset.Executable}}
 		if asset.Path == "" {
-			paths = paths[:0]
+			declarations = declarations[:0]
 			for _, variant := range asset.Variants {
-				paths = append(paths, variant.Path)
+				declarations = append(declarations, declaration{path: variant.Path, executable: variant.Executable})
 			}
 		}
-		for _, path := range paths {
+		for _, declaration := range declarations {
 			var manifest mcpManifest
-			if err := readStrictJSON(root, path, model.tracked, &manifest); err != nil || len(manifest.Servers) == 0 {
+			if declaration.executable == nil {
+				return validationError("invalid_mcp", "MCP asset must declare canonical executable behavior")
+			}
+			if err := readStrictJSON(root, declaration.path, model.tracked, &manifest); err != nil || len(manifest.Servers) == 0 {
 				return validationError("invalid_mcp", "MCP asset must use a valid command-based declaration")
 			}
 			for _, server := range manifest.Servers {
@@ -106,9 +109,9 @@ func validateMCPAssets(root string, model validatedManifest) error {
 				if err != nil {
 					return err
 				}
-				expected := append([]string(nil), asset.Executable.Environment...)
+				expected := append([]string(nil), declaration.executable.Environment...)
 				slices.Sort(expected)
-				if server.Command != asset.Executable.Command || !slices.Equal(server.Args, asset.Executable.Args) || !slices.Equal(environment, expected) {
+				if server.Command != declaration.executable.Command || !slices.Equal(server.Args, declaration.executable.Args) || !slices.Equal(environment, expected) {
 					return validationError("invalid_mcp", "MCP native declaration does not match its canonical executable and environment references")
 				}
 			}
@@ -134,6 +137,12 @@ func validateManifest(root string, manifest toolkitManifest, tracked map[string]
 	}
 	targetNames, packageIDs, err := validateTargetPackages(&model, assetIDs)
 	if err != nil {
+		return validatedManifest{}, err
+	}
+	if err := validateAgentConfigurations(root, model, assetIDs, targetNames); err != nil {
+		return validatedManifest{}, err
+	}
+	if err := validateAgentActivations(root, model); err != nil {
 		return validatedManifest{}, err
 	}
 	if err := validatePackageDependencies(model, assetIDs, targetNames); err != nil {
@@ -188,6 +197,20 @@ func validateAssetDeclarations(model *validatedManifest) error {
 			return err
 		}
 		model.assets[asset.ID] = asset
+	}
+	return nil
+}
+
+func validateOverlays(overlays map[string]targetOverlay) error {
+	for target, overlay := range overlays {
+		if !validTargetName(target) || len(overlay.Tools) > 128 || len(overlay.Environment) > 128 || len(overlay.HookEvents) > 128 || len(overlay.Model) > 256 {
+			return validationError("invalid_target_overlay", "target overlay is invalid")
+		}
+		for _, name := range overlay.Environment {
+			if !validEnvironmentName(name) {
+				return validationError("invalid_environment_reference", "target overlay environment reference is invalid")
+			}
+		}
 	}
 	return nil
 }
@@ -317,6 +340,117 @@ func validatePackageDependencies(model validatedManifest, assetIDs, targetNames 
 	return nil
 }
 
+func validateAgentConfigurations(root string, model validatedManifest, assetIDs, targetNames []string) error {
+	for _, assetID := range assetIDs {
+		declared := model.assets[assetID]
+		if declared.Type != "agent" {
+			continue
+		}
+		for _, targetName := range targetNames {
+			if !assetSupportsTarget(declared, targetName) {
+				continue
+			}
+			for _, assetPath := range assetPathsForTarget(declared, targetName) {
+				files := assetFiles(assetPath, model.tracked)
+				expectedExtension := ".md"
+				if targetName == "codex" {
+					expectedExtension = ".toml"
+				}
+				if len(files) != 1 || filepath.Ext(files[0]) != expectedExtension {
+					return validationError("invalid_"+targetName+"_agent", targetName+" agent assets must use one target-specific "+strings.ToUpper(strings.TrimPrefix(expectedExtension, "."))+" file")
+				}
+				source, err := readTrackedFile(root, files[0], model.tracked)
+				if err != nil {
+					return validationError("invalid_"+targetName+"_agent", targetName+" agent configuration could not be read")
+				}
+				if targetName == "claude" {
+					_, err = claudeAgentName(source)
+					if errors.Is(err, errUnsupportedClaudeAgentMetadata) {
+						return validationError("unsupported_claude_agent_metadata", "Claude plugin agents cannot declare permissionMode, hooks, mcpServers, or initialPrompt because Claude ignores those fields in plugin agents")
+					}
+				} else {
+					_, err = codexAgentName(source)
+					if errors.Is(err, errUnsupportedCodexAgentMetadata) {
+						return validationError("unsupported_codex_agent_metadata", "Codex agents may declare only metadata that the supported Codex role contract applies")
+					}
+				}
+				if err != nil {
+					return validationError("invalid_"+targetName+"_agent", targetName+" agent configuration is invalid")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+type claudePluginSettings struct {
+	Agent string `json:"agent"`
+}
+
+func validateAgentActivations(root string, model validatedManifest) error {
+	for _, activation := range model.manifest.Assets {
+		if activation.Type != "agent_activation" {
+			continue
+		}
+		if activation.Ownership != "package" || activation.Path != "" || len(activation.Dependencies) != 1 ||
+			!assetSupportsTarget(activation, "claude") || assetSupportsTarget(activation, "codex") {
+			return invalidAgentActivation()
+		}
+		for _, variant := range activation.Variants {
+			if len(variant.Targets) != 1 || variant.Targets[0] != "claude" {
+				return invalidAgentActivation()
+			}
+		}
+		agent, ok := model.assets[activation.Dependencies[0]]
+		if !ok || agent.Type != "agent" || agent.Ownership != "package" || !assetSupportsTarget(agent, "claude") {
+			return invalidAgentActivation()
+		}
+		owner, ok := model.packageOwners["claude"][activation.ID]
+		if !ok || model.packageOwners["claude"][agent.ID] != owner {
+			return invalidAgentActivation()
+		}
+		unit, ok := model.packages["claude"][owner]
+		if !ok {
+			return invalidAgentActivation()
+		}
+		settingsPaths := assetPathsForTarget(activation, "claude")
+		slices.Sort(settingsPaths)
+		settingsPaths = slices.Compact(settingsPaths)
+		if len(settingsPaths) != 1 || settingsPaths[0] != strings.TrimSuffix(unit.Path, "/")+"/settings.json" {
+			return invalidAgentActivation()
+		}
+		var settings claudePluginSettings
+		if err := readStrictJSON(root, settingsPaths[0], model.tracked, &settings); err != nil || !validManifestID(settings.Agent) {
+			return invalidAgentActivation()
+		}
+		agentPaths := assetPathsForTarget(agent, "claude")
+		slices.Sort(agentPaths)
+		agentPaths = slices.Compact(agentPaths)
+		if len(agentPaths) == 0 {
+			return invalidAgentActivation()
+		}
+		for _, agentPath := range agentPaths {
+			files := assetFiles(agentPath, model.tracked)
+			if len(files) != 1 || !strings.HasSuffix(strings.ToLower(files[0]), ".md") {
+				return invalidAgentActivation()
+			}
+			source, err := readTrackedFile(root, files[0], model.tracked)
+			if err != nil {
+				return invalidAgentActivation()
+			}
+			name, err := claudeAgentName(source)
+			if err != nil || name != settings.Agent {
+				return invalidAgentActivation()
+			}
+		}
+	}
+	return nil
+}
+
+func invalidAgentActivation() error {
+	return validationError("invalid_agent_activation", "Claude main-agent activation must reference one package-local agent by its frontmatter name")
+}
+
 func validateBundleDeclarations(model *validatedManifest, packageIDs map[string]struct{}) error {
 	for _, bundle := range model.manifest.Bundles {
 		if !validManifestID(bundle.ID) || len(bundle.Assets)+len(bundle.Packages)+len(bundle.Bundles) == 0 || len(bundle.Assets) > 4096 || len(bundle.Packages) > 256 || len(bundle.Bundles) > 1024 || hasDuplicate(bundle.Assets) || hasDuplicate(bundle.Packages) || hasDuplicate(bundle.Bundles) {
@@ -369,7 +503,7 @@ func validatePackageDisclosure(root string, model validatedManifest, targetNames
 			}
 			for _, file := range filesUnder(model.tracked, unit.Path) {
 				if nativePluginMetadataPath(file, unit.Path) {
-					if err := validateNativePluginMetadata(root, file, model.tracked); err != nil {
+					if err := validateNativePluginMetadata(root, file, unit, model); err != nil {
 						return err
 					}
 					continue
@@ -386,29 +520,121 @@ func validatePackageDisclosure(root string, model validatedManifest, targetNames
 	return nil
 }
 
-type nativePluginMetadata struct {
-	Schema      json.RawMessage `json:"$schema,omitempty"`
-	Name        json.RawMessage `json:"name,omitempty"`
-	DisplayName json.RawMessage `json:"displayName,omitempty"`
-	Version     json.RawMessage `json:"version,omitempty"`
-	Description json.RawMessage `json:"description,omitempty"`
-	Author      json.RawMessage `json:"author,omitempty"`
-	Homepage    json.RawMessage `json:"homepage,omitempty"`
-	Repository  json.RawMessage `json:"repository,omitempty"`
-	License     json.RawMessage `json:"license,omitempty"`
-	Keywords    json.RawMessage `json:"keywords,omitempty"`
-}
-
 func nativePluginMetadataPath(path, packageRoot string) bool {
 	return path == packageRoot+"/.claude-plugin/plugin.json" || path == packageRoot+"/.codex-plugin/plugin.json"
 }
 
-func validateNativePluginMetadata(root, path string, tracked map[string]gitsource.TreeEntry) error {
-	var metadata nativePluginMetadata
-	if err := readStrictJSON(root, path, tracked, &metadata); err != nil {
-		return undeclaredPackageContent()
+func validateNativePluginMetadata(root, path string, unit nativePackage, model validatedManifest) error {
+	var metadata map[string]json.RawMessage
+	if err := readStrictJSON(root, path, model.tracked, &metadata); err != nil {
+		return invalidNativePluginMetadata()
+	}
+	var name string
+	if raw, ok := metadata["name"]; !ok || json.Unmarshal(raw, &name) != nil || name != unit.ID {
+		return invalidNativePluginMetadata()
+	}
+	targetName := "codex"
+	activeFields := map[string]string{"skills": "skill", "commands": "prompt", "mcpServers": "mcp"}
+	if path == unit.Path+"/.claude-plugin/plugin.json" {
+		targetName = "claude"
+		activeFields = map[string]string{
+			"agents": "agent", "commands": "prompt", "hooks": "hook", "mcpServers": "mcp", "skills": "skill",
+		}
+	}
+	allowedFields := map[string]struct{}{
+		"$schema": {}, "name": {}, "displayName": {}, "version": {}, "description": {},
+		"author": {}, "homepage": {}, "repository": {}, "license": {}, "keywords": {},
+	}
+	for field := range activeFields {
+		allowedFields[field] = struct{}{}
+	}
+	for field, assetType := range activeFields {
+		raw, present := metadata[field]
+		if !present {
+			continue
+		}
+		allowMultiple := targetName != "codex" || field != "mcpServers"
+		paths, ok := nativeComponentPaths(raw, allowMultiple)
+		if !ok {
+			return unsupportedNativePluginMetadata()
+		}
+		for _, componentPath := range paths {
+			resolved, ok := resolveNativeComponentPath(unit.Path, componentPath)
+			if !ok || !nativeComponentPathDisclosed(resolved, targetName, assetType, unit, model) {
+				return undeclaredPackageContent()
+			}
+		}
+	}
+	for field := range metadata {
+		if _, allowed := allowedFields[field]; !allowed {
+			return unsupportedNativePluginMetadata()
+		}
 	}
 	return nil
+}
+
+func invalidNativePluginMetadata() error {
+	return validationError("invalid_native_plugin_metadata", "native plugin manifest must be valid JSON with a name matching its package")
+}
+
+func unsupportedNativePluginMetadata() error {
+	return validationError("unsupported_native_plugin_metadata", "native plugin manifest activates behavior that AI4J cannot disclose faithfully")
+}
+
+func nativeComponentPaths(raw json.RawMessage, allowMultiple bool) ([]string, bool) {
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return []string{single}, single != ""
+	}
+	var multiple []string
+	if err := json.Unmarshal(raw, &multiple); err != nil || len(multiple) == 0 || !allowMultiple {
+		return nil, false
+	}
+	for _, value := range multiple {
+		if value == "" {
+			return nil, false
+		}
+	}
+	return multiple, true
+}
+
+func resolveNativeComponentPath(packageRoot, value string) (string, bool) {
+	if value == "." || value == "./" {
+		return packageRoot, true
+	}
+	if !strings.HasPrefix(value, "./") {
+		return "", false
+	}
+	relative := strings.TrimSuffix(strings.TrimPrefix(value, "./"), "/")
+	if !safeRelative(relative) {
+		return "", false
+	}
+	return strings.TrimSuffix(packageRoot, "/") + "/" + relative, true
+}
+
+func nativeComponentPathDisclosed(path, targetName, assetType string, unit nativePackage, model validatedManifest) bool {
+	referenced := assetFiles(path, model.tracked)
+	if len(referenced) == 0 {
+		return false
+	}
+	covered := make(map[string]struct{})
+	for _, assetID := range unit.Assets {
+		declared := model.assets[assetID]
+		if declared.Type != assetType {
+			continue
+		}
+		for _, assetPath := range assetPathsForTarget(declared, targetName) {
+			for _, file := range assetFiles(assetPath, model.tracked) {
+				covered[file] = struct{}{}
+			}
+		}
+	}
+	for _, file := range referenced {
+		if _, ok := covered[file]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func validateNativePathDisclosure(path, packageRoot string, covering []string, assets map[string]asset) error {
@@ -430,10 +656,15 @@ func validateNativePathDisclosure(path, packageRoot string, covering []string, a
 		if !skillDisclosureCovers(covering, assets) {
 			return undeclaredPackageContent()
 		}
-	case relative == ".lsp.json", relative == "settings.json", relative == "settings.local.json",
+	case relative == "settings.json":
+		if !coveringAssetType(covering, assets, "agent_activation") {
+			return undeclaredPackageContent()
+		}
+	case relative == ".lsp.json", relative == "settings.local.json",
 		strings.HasPrefix(relative, "hooks/"), strings.HasPrefix(relative, "bin/"),
 		strings.HasPrefix(relative, "monitors/"), strings.HasPrefix(relative, "output-styles/"),
-		strings.HasPrefix(relative, "outputStyles/"):
+		strings.HasPrefix(relative, "outputStyles/"), strings.HasPrefix(relative, "themes/"),
+		strings.HasPrefix(relative, "workflows/"):
 		return undeclaredPackageContent()
 	}
 	return nil
@@ -557,7 +788,7 @@ func validateExecutable(asset asset) error {
 		if asset.Executable == nil {
 			return validationError("invalid_executable", "executable asset declaration is incomplete")
 		}
-		return validateExecutableDeclaration(asset.Executable)
+		return validateExecutableDeclaration(asset.Type, asset.Executable)
 	}
 	if asset.Executable != nil || len(asset.Variants) == 0 {
 		return validationError("invalid_executable", "executable asset declaration is incomplete")
@@ -566,34 +797,23 @@ func validateExecutable(asset asset) error {
 		if variant.Executable == nil {
 			return validationError("invalid_executable", "executable asset variant declaration is incomplete")
 		}
-		if err := validateExecutableDeclaration(variant.Executable); err != nil {
+		if err := validateExecutableDeclaration(asset.Type, variant.Executable); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateExecutableDeclaration(value *executable) error {
+func validateExecutableDeclaration(assetType string, value *executable) error {
 	if !boundedValue(value.Command, 1024) || (value.Dependency != "required" && value.Dependency != "optional") || len(value.Args) > 128 || len(value.Environment) > 128 {
 		return validationError("invalid_executable", "asset executable declaration is invalid")
+	}
+	if assetType == "mcp" && !validHostCommand(value.Command) {
+		return validationError("invalid_executable", "MCP executable command must be a host-resolved command name")
 	}
 	for _, name := range value.Environment {
 		if !validEnvironmentName(name) {
 			return validationError("invalid_environment_reference", "environment reference name is invalid")
-		}
-	}
-	return nil
-}
-
-func validateOverlays(overlays map[string]targetOverlay) error {
-	for target, overlay := range overlays {
-		if !validTargetName(target) || len(overlay.Tools) > 128 || len(overlay.Environment) > 128 || len(overlay.HookEvents) > 128 || len(overlay.Model) > 256 {
-			return validationError("invalid_target_overlay", "target overlay is invalid")
-		}
-		for _, name := range overlay.Environment {
-			if !validEnvironmentName(name) {
-				return validationError("invalid_environment_reference", "target overlay environment reference is invalid")
-			}
 		}
 	}
 	return nil
@@ -605,6 +825,8 @@ func componentType(value string) (cli.ComponentType, error) {
 		return cli.ComponentSkill, nil
 	case "agent":
 		return cli.ComponentAgent, nil
+	case "agent_activation":
+		return cli.ComponentExtension, nil
 	case "instruction":
 		return cli.ComponentSharedInstruction, nil
 	case "prompt":

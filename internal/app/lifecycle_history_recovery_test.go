@@ -3,12 +3,50 @@ package app
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/alx4j/ai4j/internal/cli"
 	"github.com/alx4j/ai4j/internal/installstate"
 	"github.com/alx4j/ai4j/internal/result"
 )
+
+func TestLifecycleHistoryPurgeDoesNotOverwriteAStalePreparedRecord(t *testing.T) {
+	harness := newLifecycleHarness(t)
+	before := installUpdatedHistory(t, &harness)
+	changed := cloneRecord(before)
+	changed.Health = "drifted"
+	originalNow := harness.service.now
+	nowCalls := 0
+	var hookErr error
+	harness.service.now = func() time.Time {
+		nowCalls++
+		if nowCalls == 2 {
+			hookErr = harness.store.Replace(before, changed)
+		}
+		return originalNow()
+	}
+	purge := parseRequest[cli.HistoryPurgeRequest](t, "history", "purge", before.InstallationID, "--all", "--yes")
+
+	response, err := harness.service.HistoryPurge(context.Background(), purge, CommandIO{})
+
+	problems := response.Result().Errors()
+	if err != nil || hookErr != nil || nowCalls != 2 || response.Result().Failure() != result.FailureRecovery || len(problems) != 1 || problems[0].Code() != "history_state_commit_failed" {
+		t.Fatalf("stale history purge = %#v, problems=%v, nowCalls=%d, commandErr=%v, hookErr=%v", response.Result(), problems, nowCalls, err, hookErr)
+	}
+	stored, present, loadErr := harness.store.LoadByID(before.InstallationID)
+	if loadErr != nil || !present || !reflect.DeepEqual(stored, changed) {
+		t.Fatalf("externally changed state was overwritten: %#v, present=%t, err=%v", stored, present, loadErr)
+	}
+	if _, present, markerErr := harness.store.LoadMarker(); markerErr != nil || !present {
+		t.Fatalf("recovery marker = present:%t err=%v", present, markerErr)
+	}
+	history, historyErr := harness.store.LoadHistory(before.InstallationID)
+	if historyErr != nil || !slices.Equal(historyEntryIDs(history), before.History) {
+		t.Fatalf("history changed before state commit: ids=%v want=%v err=%v", historyEntryIDs(history), before.History, historyErr)
+	}
+}
 
 func TestLifecycleHistoryPurgeRecoveryRollsForwardPartialDeletion(t *testing.T) {
 	harness := newLifecycleHarness(t)

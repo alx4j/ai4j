@@ -30,9 +30,9 @@ func ValidateIndex(inventory TreeInventory, data []byte) error {
 	return nil
 }
 
-// ValidateCheckoutAttributes proves that one issued plan-bound batch has the
-// closed attribute vector. Successful validation returns a sealed batch proof
-// that can contribute to complete checkout coverage.
+// ValidateCheckoutAttributes proves that one planned batch has the closed
+// attribute vector. Successful validation returns an opaque proof that can
+// contribute to complete checkout coverage.
 func ValidateCheckoutAttributes(batch CheckoutAttributeBatch, data []byte) (CheckoutAttributeBatchProof, error) {
 	if !batch.Valid() {
 		return CheckoutAttributeBatchProof{}, ErrExecutorContract
@@ -56,7 +56,7 @@ func ValidateCheckoutAttributes(batch CheckoutAttributeBatch, data []byte) (Chec
 			row++
 		}
 	}
-	proof := CheckoutAttributeBatchProof{batch: cloneCheckoutAttributeBatch(batch), seal: issuedCheckoutAttributeProofSeal}
+	proof := CheckoutAttributeBatchProof{batch: cloneCheckoutAttributeBatch(batch)}
 	if !proof.Valid() {
 		return CheckoutAttributeBatchProof{}, ErrExecutorContract
 	}

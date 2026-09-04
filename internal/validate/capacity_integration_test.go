@@ -26,14 +26,14 @@ func TestCommandsFailBeforeBoundedWritesWhenCapacityIsInsufficient(t *testing.T)
 		t.Fatal(err)
 	}
 
-	validateRequest, _ := cli.NewParser().Parse([]string{"ai4j", "validate", "--target", "claude"})
+	validateRequest, _ := cli.Parse([]string{"ai4j", "validate", "--target", "claude"})
 	validateReport := service.Validate(context.Background(), validateRequest.(cli.ValidateRequest).Source())
 	if validateReport.Failure != FailureEnvironment || len(validateReport.Problems) != 1 || validateReport.Problems[0].Code() != "insufficient_disk_space" {
 		t.Fatalf("validate report = failure:%s problems:%v", validateReport.Failure, validateReport.Problems)
 	}
 
 	output := filepath.Join(t.TempDir(), "build")
-	buildRequest, _ := cli.NewParser().Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
+	buildRequest, _ := cli.Parse([]string{"ai4j", "build", "--target", "codex", "--host", "darwin-arm64", "--output", output, "--all"})
 	buildReport := service.Build(context.Background(), buildRequest.(cli.BuildRequest))
 	if buildReport.Failure != FailureEnvironment || len(buildReport.Problems) != 1 || buildReport.Problems[0].Code() != "insufficient_disk_space" {
 		t.Fatalf("build report = failure:%s problems:%v", buildReport.Failure, buildReport.Problems)
@@ -43,7 +43,7 @@ func TestCommandsFailBeforeBoundedWritesWhenCapacityIsInsufficient(t *testing.T)
 	}
 
 	initOutput := filepath.Join(t.TempDir(), "toolkit")
-	initRequest, _ := cli.NewParser().Parse([]string{"ai4j", "init", "--target", "codex", "--output", initOutput})
+	initRequest, _ := cli.Parse([]string{"ai4j", "init", "--target", "codex", "--output", initOutput})
 	initReport := service.Init(context.Background(), initRequest.(cli.InitRequest))
 	if initReport.Failure != FailureEnvironment || len(initReport.Problems) != 1 || initReport.Problems[0].Code() != "insufficient_disk_space" {
 		t.Fatalf("init report = failure:%s problems:%v", initReport.Failure, initReport.Problems)

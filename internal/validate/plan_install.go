@@ -16,10 +16,6 @@ type NativeStatus struct {
 	PluginEnabled         bool
 }
 
-func (s Service) InspectNativeStatusFor(ctx context.Context, marketplaceID, pluginID string) (NativeStatus, *result.Problem) {
-	return s.InspectNativeStatusAt(ctx, "", marketplaceID, pluginID)
-}
-
 // InspectNativeStatusAt observes project-scoped Claude state from the selected
 // project directory. User scope uses an empty directory.
 func (s Service) InspectNativeStatusAt(ctx context.Context, directory, marketplaceID, pluginID string) (NativeStatus, *result.Problem) {

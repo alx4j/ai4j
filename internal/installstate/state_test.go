@@ -2,11 +2,13 @@ package installstate
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -32,8 +34,8 @@ func TestStoreRejectsUnsupportedSchemaWithoutModifyingIt(t *testing.T) {
 	if !bytes.Equal(before, unsupported) {
 		t.Fatal("unsupported state changed after rejected read")
 	}
-	if err := store.Save(testRecord()); !errors.Is(err, ErrUnsupportedSchema) {
-		t.Fatalf("Save() over unsupported state error = %v", err)
+	if err := store.SaveNew(testRecord()); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("SaveNew() over unsupported state error = %v", err)
 	}
 	after, _ := os.ReadFile(store.Path())
 	if !bytes.Equal(after, before) {
@@ -103,6 +105,208 @@ func TestStoreKeepsMultipleInstallationsIndependentAndOrdered(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsPersistedDuplicateLogicalIdentities(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testRecord()
+	second := cloneRecord(first)
+	second.InstallationID = "installation-002"
+	if err := second.Validate(); err != nil {
+		t.Fatalf("duplicate test record is invalid: %v", err)
+	}
+	contents, err := json.MarshalIndent(stateDocument{
+		SchemaVersion: SchemaVersion,
+		Installations: []Record{first, second},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Snapshot(); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("duplicate logical identities error = %v", err)
+	}
+}
+
+func TestStoreRejectsPersistedDuplicateActiveAgentActivations(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testRecord()
+	first.AgentActivation = true
+	second := cloneRecord(first)
+	second.InstallationID = "installation-002"
+	second.ToolkitID = "other-toolkit"
+	if err := first.Validate(); err != nil {
+		t.Fatalf("first activation record is invalid: %v", err)
+	}
+	if err := second.Validate(); err != nil {
+		t.Fatalf("second activation record is invalid: %v", err)
+	}
+	contents, err := json.MarshalIndent(stateDocument{
+		SchemaVersion: SchemaVersion,
+		Installations: []Record{first, second},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Snapshot(); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("duplicate active agent activations error = %v", err)
+	}
+}
+
+func TestStoreAppliesHostCaseSemanticsToPersistedActivationScopes(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testRecord()
+	first.AgentActivation = true
+	second := cloneRecord(first)
+	second.InstallationID = "installation-002"
+	second.ToolkitID = "other-toolkit"
+	second.ScopeRoot = strings.ToUpper(first.ScopeRoot)
+	if second.ScopeRoot == first.ScopeRoot {
+		t.Fatal("test scope root does not contain a case variant")
+	}
+	contents, err := json.MarshalIndent(stateDocument{
+		SchemaVersion: SchemaVersion,
+		Installations: []Record{first, second},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(store.Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.Path(), append(contents, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, snapshotErr := store.Snapshot()
+	if runtime.GOOS == "windows" && !errors.Is(snapshotErr, ErrMalformedState) {
+		t.Fatalf("Windows-equivalent activation scopes error = %v", snapshotErr)
+	}
+	if runtime.GOOS != "windows" && snapshotErr != nil {
+		t.Fatalf("persisted case-distinct activation scopes error = %v", snapshotErr)
+	}
+}
+
+func TestStoreAppliesHostCaseSemanticsToNewActivationScopes(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := testRecord()
+	first.AgentActivation = true
+	if err := store.SaveNew(first); err != nil {
+		t.Fatal(err)
+	}
+	second := cloneRecord(first)
+	second.InstallationID = "installation-002"
+	second.ToolkitID = "other-toolkit"
+	second.ScopeRoot = strings.ToUpper(first.ScopeRoot)
+	if second.ScopeRoot == first.ScopeRoot {
+		t.Fatal("test scope root does not contain a case variant")
+	}
+	before, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	saveErr := store.SaveNew(second)
+	equivalent := SameScopeRoot(first.ScopeRoot, second.ScopeRoot)
+	if equivalent && !errors.Is(saveErr, ErrStateOccupied) {
+		t.Fatalf("filesystem-equivalent activation write error = %v", saveErr)
+	}
+	if equivalent {
+		after, readErr := os.ReadFile(store.Path())
+		if readErr != nil || !bytes.Equal(after, before) {
+			t.Fatalf("state changed after rejected equivalent activation: err=%v", readErr)
+		}
+	}
+	if !equivalent && saveErr != nil {
+		t.Fatalf("case-distinct activation write error = %v", saveErr)
+	}
+}
+
+func TestScopeRootIdentityCaseSemantics(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(string(filepath.Separator), "Work", "Project")
+	variant := filepath.Join(string(filepath.Separator), "work", "project")
+	if scopeRootIdentity("windows", root) != scopeRootIdentity("windows", variant) {
+		t.Fatal("Windows scope-root identity is case-sensitive")
+	}
+	if scopeRootIdentity("linux", root) == scopeRootIdentity("linux", variant) {
+		t.Fatal("Unix scope-root identity is not case-sensitive")
+	}
+}
+
+func TestStoreRejectsConflictingActiveAgentActivationWritesWithoutMutation(t *testing.T) {
+	t.Parallel()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := testRecord()
+	active.AgentActivation = true
+	if err := store.SaveNew(active); err != nil {
+		t.Fatal(err)
+	}
+	archived := cloneRecord(active)
+	archived.InstallationID = "installation-002"
+	archived.ToolkitID = "archived-toolkit"
+	archived.Lifecycle = "archived"
+	archived.NativeResources = nil
+	archived.Catalog = OwnedFile{}
+	archived.Rules = OwnedFile{}
+	if err := store.SaveNew(archived); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	activated := cloneRecord(archived)
+	activated.Lifecycle = "active"
+	activated.NativeResources = slices.Clone(active.NativeResources)
+	activated.Catalog = active.Catalog
+	activated.Rules = active.Rules
+	if err := store.Replace(archived, activated); !errors.Is(err, ErrStateOccupied) {
+		t.Fatalf("conflicting Replace() error = %v", err)
+	}
+	conflict := cloneRecord(active)
+	conflict.InstallationID = "installation-003"
+	conflict.ToolkitID = "new-toolkit"
+	if err := store.SaveNew(conflict); !errors.Is(err, ErrStateOccupied) {
+		t.Fatalf("conflicting SaveNew() error = %v", err)
+	}
+	after, err := os.ReadFile(store.Path())
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("state changed after rejected activation writes: err=%v", err)
+	}
+}
+
 func TestStoreReplaceRequiresTheCompleteExpectedRecord(t *testing.T) {
 	t.Parallel()
 	store, err := NewStore(t.TempDir())
@@ -128,6 +332,15 @@ func TestStoreReplaceRequiresTheCompleteExpectedRecord(t *testing.T) {
 	if err := store.Replace(before, staleDesired); !errors.Is(err, ErrStateChanged) {
 		t.Fatalf("stale Replace() error = %v", err)
 	}
+	changedIdentity := cloneRecord(desired)
+	changedIdentity.ToolkitID = "other-toolkit"
+	if err := store.Replace(desired, changedIdentity); !errors.Is(err, ErrMalformedState) {
+		t.Fatalf("identity-changing Replace() error = %v", err)
+	}
+	loaded, present, err = store.LoadByID(before.InstallationID)
+	if err != nil || !present || !reflect.DeepEqual(loaded, desired) {
+		t.Fatalf("record after rejected identity change = %#v, %t, %v", loaded, present, err)
+	}
 }
 
 func TestStoreRoundTripsOneAtomicInstallationRecord(t *testing.T) {
@@ -137,7 +350,7 @@ func TestStoreRoundTripsOneAtomicInstallationRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := testRecord()
-	if err := store.Save(want); err != nil {
+	if err := store.SaveNew(want); err != nil {
 		t.Fatal(err)
 	}
 	got, present, err := store.Load()
@@ -172,7 +385,7 @@ func TestStoreCanonicalizesFlattenedSelectionAndNativePackages(t *testing.T) {
 		"claude:marketplace:ai4j",
 		"claude:alpha-plugin@ai4j",
 	}
-	if err := store.Save(record); err != nil {
+	if err := store.SaveNew(record); err != nil {
 		t.Fatal(err)
 	}
 	got, present, err := store.Load()
@@ -198,11 +411,11 @@ func TestStoreRoundTripsCanonicalMultiSourceComposition(t *testing.T) {
 	record.Components[0].Selection.ResolvedAssets[0], record.Components[0].Selection.ResolvedAssets[1] = record.Components[0].Selection.ResolvedAssets[1], record.Components[0].Selection.ResolvedAssets[0]
 	record.Packages[0], record.Packages[1] = record.Packages[1], record.Packages[0]
 
-	if err := store.Save(record); err != nil {
+	if err := store.SaveNew(record); err != nil {
 		t.Fatal(err)
 	}
 	if record.Components[0].Name != "everpure" || record.Packages[0].ID != "everpure-tools" || record.Selection.ResolvedAssets[0] != "everpure-tools" {
-		t.Fatalf("Save() mutated caller-owned slices: %#v", record)
+		t.Fatalf("SaveNew() mutated caller-owned slices: %#v", record)
 	}
 	got, present, err := store.Load()
 	if err != nil || !present {
@@ -384,12 +597,12 @@ func TestDeleteRemovesOnlyTheExpectedInstallationRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := testRecord()
-	if err := store.Save(expected); err != nil {
+	if err := store.SaveNew(expected); err != nil {
 		t.Fatal(err)
 	}
 	changed := expected
 	changed.LastOperation.ID = "operation-002"
-	if err := store.Save(changed); err != nil {
+	if err := store.Replace(expected, changed); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Delete(expected); !errors.Is(err, ErrStateChanged) {

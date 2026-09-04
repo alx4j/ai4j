@@ -55,7 +55,6 @@ type Dependencies struct {
 
 // Application is a value-only composition root for one AI4J process.
 type Application struct {
-	parser        cli.Parser
 	version       versionHandler
 	otherCommands OtherCommandsFactory
 	human         Renderer
@@ -69,7 +68,6 @@ func NewApplication(dependencies Dependencies) (Application, error) {
 		return Application{}, fmt.Errorf("application requires both renderers")
 	}
 	return Application{
-		parser:        cli.NewParser(),
 		version:       versionHandler{build: dependencies.Build, defaultSource: dependencies.DefaultSource},
 		otherCommands: dependencies.OtherCommands,
 		human:         dependencies.Human,
@@ -86,7 +84,7 @@ func (a Application) Run(argv []string, stdin io.Reader, stdout, stderr io.Write
 // RunContext runs one command and propagates cancellation to source, target,
 // and host operations after parsing succeeds.
 func (a Application) RunContext(ctx context.Context, argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	request, err := a.parser.Parse(argv)
+	request, err := cli.Parse(argv)
 	if err != nil {
 		var usageError *cli.UsageError
 		if !errors.As(err, &usageError) {
